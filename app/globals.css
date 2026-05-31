@@ -1,0 +1,92 @@
+@import "tailwindcss";
+@source "../node_modules/@heroui/theme/dist/**/*.{js,ts,jsx,tsx}";
+@plugin "../hero.mjs";
+
+html {
+  overflow-anchor: none;
+  overflow-x: hidden;
+  --page-content-pt-below-header: 1rem;
+}
+
+@media (min-width: 640px) {
+  html {
+    --page-content-pt-below-header: 2.5rem;
+  }
+}
+
+:root {
+  /* HeroUI radius override — alinha ao design system */
+  --heroui-radius-small: 8px;
+  --heroui-radius-medium: 12px;
+  --heroui-radius-large: 12px;
+
+  --background: #f9f9f9;
+  --foreground: #0f172a;
+  --primary: #2e63cd;
+  --primary-hover: #3a71db;
+  --primary-glow: rgba(46, 99, 205, 0.3);
+
+  /* Botão primário (gradiente da Perfecting) */
+  --primary-gradient: linear-gradient(175.88deg, #3d75dd 6.17%, #2e63cd 93.83%);
+
+  /* Link tokens */
+  --link-font-size: 0.8125rem;
+  --link-color-primary: var(--primary);
+  --link-color-primary-hover: #1e4a9e;
+  --link-color-secondary: #1e293b;
+
+  /* Fluid spacing */
+  --space-xs: clamp(0.25rem, 0.2rem + 0.25vw, 0.5rem);
+  --space-sm: clamp(0.5rem, 0.4rem + 0.5vw, 0.75rem);
+  --space-md: clamp(0.75rem, 0.6rem + 0.75vw, 1.25rem);
+  --space-lg: clamp(1rem, 0.8rem + 1vw, 1.5rem);
+  --space-xl: clamp(1.5rem, 1.2rem + 1.5vw, 2.5rem);
+
+  /* Status tints */
+  --color-trend-positive: #0f9f2e;
+  --color-trend-negative: #9f0f0f;
+  --color-trend-flat: #94a3b8;
+
+  /* Elevação */
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
+  --shadow-md: 0 6px 16px -4px rgba(15, 23, 42, 0.12), 0 2px 6px -2px rgba(15, 23, 42, 0.08);
+  --shadow-lg: 0 18px 36px -12px rgba(46, 99, 205, 0.18), 0 6px 14px -6px rgba(15, 23, 42, 0.1);
+
+  /* Bordas estruturais */
+  --border-card: rgba(226, 232, 240, 0.75);
+  --border-table-outer: rgb(226 232 240);
+  --border-table-header: rgb(203 213 225);
+  --border-table-row: rgb(226 232 240);
+
+  /* Layering */
+  --z-shell: 30;
+  --z-header: 40;
+  --z-modal: 70;
+  --z-overlay: 80;
+  --z-tooltip: 90;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-primary: var(--primary);
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  /* Override dos raios do Tailwind: rounded-sm = 8px, etc. (ATENÇÃO) */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+.layer-shell {
+  z-index: var(--z-shell);
+}
+.layer-header {
+  z-index: var(--z-header);
+}
