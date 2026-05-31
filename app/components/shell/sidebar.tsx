@@ -3,15 +3,15 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  ArrowUpTrayIcon,
   RectangleStackIcon,
   LinkIcon,
   Cog6ToothIcon,
 } from "@heroicons/react/24/outline";
+import { RobotIcon } from "@/app/components/icons/robot-icon";
 import { cn } from "@/app/lib/cn";
 
 const ITEMS = [
-  { href: "/importar", label: "Importar", icon: ArrowUpTrayIcon },
+  { href: "/criacao", label: "Criação", icon: RobotIcon },
   { href: "/biblioteca", label: "Biblioteca", icon: RectangleStackIcon },
   { href: "/conexoes", label: "Conexões", icon: LinkIcon },
   { href: "/config", label: "Config", icon: Cog6ToothIcon },

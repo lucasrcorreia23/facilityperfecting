@@ -152,7 +152,7 @@ export async function invokeSyncOrgs() {
   return data;
 }
 
-/** Lista os tipos de call_context da Perfecting (para o seletor da Importar). */
+/** Lista os tipos de call_context da Perfecting (para o seletor da Criação). */
 export async function listCallContexts(): Promise<CallContextType[]> {
   const supabase = createClient();
   const { data, error } = await supabase.functions.invoke("list-call-contexts", { body: {} });

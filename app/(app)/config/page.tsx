@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 import { Select, SelectItem, Input, addToast } from "@heroui/react";
-import { InformationCircleIcon } from "@heroicons/react/24/outline";
 import { Card } from "@/app/components/ui/card";
 import { Button } from "@/app/components/ui/button";
 import { PageHeader } from "@/app/components/ui/page-header";
@@ -106,24 +105,6 @@ export default function ConfigPage() {
           <Button onPress={save} isLoading={saving}>
             Salvar
           </Button>
-        </div>
-      </Card>
-
-      <Card className="flex items-start gap-3 p-4 text-sm text-slate-600">
-        <InformationCircleIcon className="mt-0.5 h-5 w-5 shrink-0 text-slate-400" />
-        <div className="flex flex-col gap-1">
-          <p className="font-medium text-slate-700">Credencial superadmin & ambiente</p>
-          <p>
-            A credencial do superadmin da Perfecting fica em secrets das Edge Functions (nunca no
-            banco). Configure com:
-          </p>
-          <pre className="mt-1 overflow-x-auto rounded-sm bg-slate-50 p-3 text-xs text-slate-700">
-{`supabase secrets set \\
-  PERFECTING_API_BASE=https://api-hml.perfecting.app \\
-  PERFECTING_SUPERADMIN_EMAIL=... \\
-  PERFECTING_SUPERADMIN_PASSWORD=...`}
-          </pre>
-          <p>O v1 opera em HML. Para PROD, aponte a base e a credencial para produção.</p>
         </div>
       </Card>
     </div>

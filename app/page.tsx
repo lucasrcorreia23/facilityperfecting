@@ -22,7 +22,7 @@ export default function LoginPage() {
         addToast({ title: "Não foi possível entrar", description: error.message, color: "danger" });
         return;
       }
-      router.replace("/importar");
+      router.replace("/criacao");
       router.refresh();
     } finally {
       setLoading(false);

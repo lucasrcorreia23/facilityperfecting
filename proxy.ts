@@ -45,7 +45,7 @@ export async function proxy(request: NextRequest) {
 
   if (user && isPublic) {
     const url = request.nextUrl.clone();
-    url.pathname = "/importar";
+    url.pathname = "/criacao";
     return NextResponse.redirect(url);
   }
 

@@ -77,7 +77,7 @@ REGRAS:
 - Escolha o call_context mais adequado entre os disponíveis e a dificuldade (easy/medium/hard) coerente com o cenário.
 - Linguagem comercial B2B. Responda SEMPRE no formato estruturado pedido (JSON).`;
 
-export default function ImportarPage() {
+export default function CriacaoPage() {
   const router = useRouter();
   const [tab, setTab] = useState("texto");
   const [text, setText] = useState("");
@@ -330,8 +330,8 @@ export default function ImportarPage() {
   return (
     <div className="flex flex-col gap-0">
       <PageHeader
-        title="Importar roleplay"
-        description="Cole um texto ou suba um arquivo. A IA da Perfecting gera o resto no export."
+        title="Criação express de roleplay"
+        description="Tenha a criação de um roleplay em segundos."
       />
 
       <Card className="flex flex-col gap-8 p-5">
@@ -425,7 +425,7 @@ export default function ImportarPage() {
         <Textarea
           label="Dados para o Roleplay"
           labelPlacement="outside"
-          placeholder="Cole aqui a descrição da oferta / material do cliente…"
+          placeholder="Insira todas as informações de oferta, cenário, perfil do comprador e demais informações relevantes para o roleplay."
           disableAutosize
           value={text}
           onValueChange={setText}
@@ -434,8 +434,8 @@ export default function ImportarPage() {
           classNames={{ input: "h-72 overflow-y-auto resize-y" }}
         />
 
-        <div className="flex flex-col items-end gap-2 -mt-1 sm:flex-row sm:items-center sm:justify-end">
-          <p className="flex items-start gap-1.5 text-xs text-slate-500 sm:mr-auto">
+        <div className="flex flex-col items-end gap-2 -mt-5 sm:flex-row sm:items-center sm:justify-end">
+          <p className="flex items-center gap-1.5 text-xs text-slate-500 sm:mr-auto">
             <span>
               A IA estrutura o material nos 4 grupos da Perfecting e sugere oferta, tipo de chamada e
               dificuldade.

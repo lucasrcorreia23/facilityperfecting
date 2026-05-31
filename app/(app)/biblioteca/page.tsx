@@ -202,8 +202,8 @@ export default function BibliotecaPage() {
           title="Nenhum rascunho ainda"
           description="Importe um texto ou arquivo para criar seu primeiro roleplay."
           action={
-            <Button as="a" href="/importar">
-              Importar
+            <Button as="a" href="/criacao">
+              Criação
             </Button>
           }
         />
