@@ -158,6 +158,7 @@ export interface RoleplayReadiness {
   status: ReadinessStatus;
   responsavel: string | null;
   observacoes: string | null;
+  roteiro: string | null;
   position: number;
   created_by: string | null;
   created_at: string;

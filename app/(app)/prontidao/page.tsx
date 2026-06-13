@@ -20,6 +20,7 @@ import {
   DocumentTextIcon,
   ArrowTopRightOnSquareIcon,
   ClipboardDocumentIcon,
+  PencilSquareIcon,
 } from "@heroicons/react/24/outline";
 import { Card } from "@/app/components/ui/card";
 import { Button } from "@/app/components/ui/button";
@@ -34,7 +35,7 @@ import {
 import { ScriptView } from "@/app/components/roleplay-script-view";
 import { managerSelectClassNames } from "@/app/lib/select-classnames";
 import { computeScore, computeKpis, formatScorePct } from "@/app/lib/readiness";
-import { getScript, scriptCodeFromName, scriptToText } from "@/app/lib/roleplay-scripts";
+import { resolveRoteiro, scriptToText } from "@/app/lib/roleplay-scripts";
 import {
   createReadiness,
   createTrackingClient,
@@ -106,7 +107,10 @@ export default function ProntidaoPage() {
   });
 
   // modais
-  const [scriptCode, setScriptCode] = useState<string | null>(null);
+  const [scriptRowId, setScriptRowId] = useState<string | null>(null);
+  const [scriptEditing, setScriptEditing] = useState(false);
+  const [scriptDraft, setScriptDraft] = useState("");
+  const [scriptSaving, setScriptSaving] = useState(false);
   const [newClientOpen, setNewClientOpen] = useState(false);
   const [newClientName, setNewClientName] = useState("");
   const [newRpOpen, setNewRpOpen] = useState(false);
@@ -250,6 +254,36 @@ export default function ProntidaoPage() {
     editRow(rowId, { [noteField]: value.trim() || null });
   }
 
+  /** Abre o modal de roteiro de um roleplay (modo leitura). */
+  function openScript(row: RoleplayReadiness) {
+    setScriptRowId(row.id);
+    setScriptEditing(false);
+  }
+
+  /** Salva o roteiro editado direto na linha (fora do lote de edição). */
+  async function saveRoteiro() {
+    if (!scriptRowId) return;
+    const value = scriptDraft.trim() || null;
+    setScriptSaving(true);
+    try {
+      await updateReadiness(scriptRowId, { roteiro: value });
+      const apply = (r: RoleplayReadiness) =>
+        r.id === scriptRowId ? { ...r, roteiro: value } : r;
+      setRows((prev) => prev.map(apply));
+      setBaseline((prev) => prev.map(apply));
+      setScriptEditing(false);
+      addToast({ title: "Roteiro salvo", color: "success" });
+    } catch (err) {
+      addToast({
+        title: "Erro ao salvar roteiro",
+        description: err instanceof Error ? err.message : String(err),
+        color: "danger",
+      });
+    } finally {
+      setScriptSaving(false);
+    }
+  }
+
   async function addClient() {
     const name = newClientName.trim();
     if (!name) return;
@@ -382,17 +416,15 @@ export default function ProntidaoPage() {
                               <div className="text-xs text-slate-500">{r.name}</div>
                             )}
                           </div>
-                          {scriptCodeFromName(r.name) && (
-                            <button
-                              type="button"
-                              aria-label="Ver roteiro"
-                              title="Ver roteiro do roleplay"
-                              className="shrink-0 text-slate-400 opacity-0 transition-opacity hover:text-blue-600 focus-visible:opacity-100 group-hover:opacity-100"
-                              onClick={() => setScriptCode(scriptCodeFromName(r.name))}
-                            >
-                              <DocumentTextIcon className="h-4 w-4" />
-                            </button>
-                          )}
+                          <button
+                            type="button"
+                            aria-label="Ver roteiro"
+                            title="Ver roteiro do roleplay"
+                            className="shrink-0 text-slate-400 opacity-0 transition-opacity hover:text-blue-600 focus-visible:opacity-100 group-hover:opacity-100"
+                            onClick={() => openScript(r)}
+                          >
+                            <DocumentTextIcon className="h-4 w-4" />
+                          </button>
                           <button
                             type="button"
                             aria-label="Excluir roleplay"
@@ -423,20 +455,31 @@ export default function ProntidaoPage() {
                             onChange={(v) => handleScoreChange(r, score, note, label, v)}
                             endContent={
                               r[score] === 0.5 ? (
-                                <button
-                                  type="button"
+                                // <span role="button"> em vez de <button>: o endContent fica
+                                // dentro do <button> do trigger do Select (HTML não permite
+                                // button aninhado).
+                                <span
+                                  role="button"
+                                  tabIndex={0}
                                   aria-label="O que falta"
                                   title={r[note] ?? "Descrever o que falta"}
-                                  className="flex shrink-0 items-center self-center text-blue-500 transition-colors hover:text-blue-700"
+                                  className="flex shrink-0 cursor-pointer items-center self-center text-blue-500 transition-colors hover:text-blue-700"
                                   onPointerDown={(e) => {
                                     // impede o react-aria do Select de abrir o dropdown no pointer-down
                                     e.stopPropagation();
                                     e.preventDefault();
                                     openNote(r, note, label);
                                   }}
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter" || e.key === " ") {
+                                      e.stopPropagation();
+                                      e.preventDefault();
+                                      openNote(r, note, label);
+                                    }
+                                  }}
                                 >
                                   <InformationCircleIcon className="h-5 w-5" />
-                                </button>
+                                </span>
                               ) : undefined
                             }
                           />
@@ -594,9 +637,13 @@ export default function ProntidaoPage() {
 
       {/* Modal: roteiro do roleplay */}
       <Modal
-        isOpen={scriptCode !== null}
+        isOpen={scriptRowId !== null}
         onOpenChange={(open) => {
-          if (!open) setScriptCode(null);
+          if (!open) {
+            setScriptRowId(null);
+            setScriptEditing(false);
+            setScriptDraft("");
+          }
         }}
         radius="sm"
         size="2xl"
@@ -604,49 +651,99 @@ export default function ProntidaoPage() {
       >
         <ModalContent>
           {(() => {
-            const script = scriptCode ? getScript(scriptCode) : null;
-            if (!script) return null;
+            const row = scriptRowId ? rows.find((r) => r.id === scriptRowId) ?? null : null;
+            if (!row) return null;
+            const { title, body } = resolveRoteiro(row.name, row.roteiro);
             return (
               <>
                 <ModalHeader className="flex flex-col items-start gap-0.5">
                   <span className="text-xs font-medium uppercase tracking-wide text-slate-400">
                     Roteiro do vendedor
                   </span>
-                  <span>{script.title}</span>
+                  <span>{title}</span>
                 </ModalHeader>
-                <ModalBody className="gap-4 pb-2">
-                  <p className="text-sm text-slate-500">
-                    Leia na ordem. Os trechos entre colchetes são instruções — não são para
-                    falar.
-                  </p>
-                  <ScriptView script={script} />
-                </ModalBody>
-                <ModalFooter className="justify-between">
-                  <Button
-                    variant="secondary"
-                    startContent={<ClipboardDocumentIcon className="h-4 w-4" />}
-                    onPress={async () => {
-                      try {
-                        await navigator.clipboard.writeText(scriptToText(script));
-                        addToast({ title: "Roteiro copiado", color: "success" });
-                      } catch {
-                        addToast({ title: "Não foi possível copiar", color: "danger" });
-                      }
-                    }}
-                  >
-                    Copiar
-                  </Button>
-                  <div className="flex gap-2">
-                    <Button
-                      variant="secondary"
-                      startContent={<ArrowTopRightOnSquareIcon className="h-4 w-4" />}
-                      onPress={() => window.open(`/roteiro/${script.code}`, "_blank")}
-                    >
-                      Abrir em nova aba
-                    </Button>
-                    <Button onPress={() => setScriptCode(null)}>Fechar</Button>
-                  </div>
-                </ModalFooter>
+                {scriptEditing ? (
+                  <>
+                    <ModalBody className="gap-2 pb-2">
+                      <Textarea
+                        aria-label="Roteiro"
+                        value={scriptDraft}
+                        onValueChange={setScriptDraft}
+                        minRows={16}
+                        radius="sm"
+                        variant="bordered"
+                        autoFocus
+                      />
+                      <p className="text-xs text-slate-400">
+                        Aceita markdown (títulos #, **negrito**, listas). Deixe em branco e
+                        salve para voltar ao roteiro padrão.
+                      </p>
+                    </ModalBody>
+                    <ModalFooter>
+                      <Button
+                        variant="secondary"
+                        onPress={() => setScriptEditing(false)}
+                        isDisabled={scriptSaving}
+                      >
+                        Cancelar
+                      </Button>
+                      <Button onPress={saveRoteiro} isLoading={scriptSaving}>
+                        Salvar
+                      </Button>
+                    </ModalFooter>
+                  </>
+                ) : (
+                  <>
+                    <ModalBody className="gap-4 pb-2">
+                      {body ? (
+                        <ScriptView markdown={body} />
+                      ) : (
+                        <p className="text-sm text-slate-500">
+                          Este roleplay ainda não tem roteiro. Clique em “Editar” para
+                          adicionar.
+                        </p>
+                      )}
+                    </ModalBody>
+                    <ModalFooter className="justify-between">
+                      <Button
+                        variant="secondary"
+                        startContent={<ClipboardDocumentIcon className="h-4 w-4" />}
+                        isDisabled={!body}
+                        onPress={async () => {
+                          try {
+                            await navigator.clipboard.writeText(scriptToText(title, body));
+                            addToast({ title: "Roteiro copiado", color: "success" });
+                          } catch {
+                            addToast({ title: "Não foi possível copiar", color: "danger" });
+                          }
+                        }}
+                      >
+                        Copiar
+                      </Button>
+                      <div className="flex gap-2">
+                        <Button
+                          variant="secondary"
+                          startContent={<PencilSquareIcon className="h-4 w-4" />}
+                          onPress={() => {
+                            setScriptDraft(body);
+                            setScriptEditing(true);
+                          }}
+                        >
+                          Editar
+                        </Button>
+                        <Button
+                          variant="secondary"
+                          startContent={<ArrowTopRightOnSquareIcon className="h-4 w-4" />}
+                          isDisabled={!body}
+                          onPress={() => window.open(`/roteiro/${row.id}`, "_blank")}
+                        >
+                          Abrir em nova aba
+                        </Button>
+                        <Button onPress={() => setScriptRowId(null)}>Fechar</Button>
+                      </div>
+                    </ModalFooter>
+                  </>
+                )}
               </>
             );
           })()}

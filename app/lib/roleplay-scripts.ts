@@ -86,18 +86,85 @@ export const ROLEPLAY_SCRIPTS: Record<string, RoleplayScript> = {
   },
   "2.1": {
     code: "2.1",
-    title: "2.1 — Renata Azevedo (Fluency Way)",
-    body: `1. "Oi Renata, tudo bem? [seu nome], da RD. Sei que você tá no meio da campanha, então obrigado pelo tempo. Vinte minutos tá bom?"
-2. "Ótimo. E justamente por causa da campanha eu queria essa conversa: entender se esperar o próximo trimestre tem custo. Pode ser?"
-3. [ela vai declarar a tese do adiamento — armadilha: aceite] "Entendo perfeitamente, sem problema. Te procuro depois da campanha então."
-4. [ela vai encerrar o assunto sem desligar — reabra] "Na verdade, Renata, antes de eu ir: me responde só três perguntas rápidas? Aí você decide se faz sentido esperar."
+    title: "2.1 — Renata Azevedo (Fluency Way Idiomas)",
+    body: `**Roleplay 2.1 — Evento crítico: quebrar o adiamento "deixo pro próximo trimestre" com urgência legítima.**
+
+Leia na ordem. Espere o agente responder entre uma fala e outra. Os colchetes são instruções para você, não são para falar. As falas em [armadilha] são erros propositais para testar se a Renata reage como deveria.
+
+---
+
+1. "Oi Renata, tudo bem? Aqui é o [seu nome], da RD. Sei que você tá no meio da campanha, então obrigado pelo tempo. Vinte minutos tá bom?"
+
+2. "Ótimo. E é justamente por causa da campanha que eu queria essa conversa: entender se esperar o próximo trimestre pra integrar marketing e vendas tem algum custo. Pode ser?"
+
+[Ela vai declarar a tese do adiamento — algo como "minha tendência é olhar isso no próximo trimestre". Não discuta ainda.]
+
+3. **[armadilha — aceite o adiamento de propósito]** "Entendo perfeitamente, sem problema. Te procuro depois que a campanha acabar então."
+
+[TESTE 1: ela deve aceitar com cordialidade e ENCERRAR o assunto sem avanço — algo como "ótimo, então me chama mais pra frente" — e NÃO deve desligar nem reabrir o tema sozinha. Se ela insistir em vender mesmo depois de você aceitar, o prompt falhou.]
+
+4. **[recue e reabra você mesmo]** "Na real, Renata, antes de eu encerrar: me deixa fazer só três perguntas rápidas? Aí você decide se faz sentido esperar ou não."
+
 5. "Quanto tempo de campanha ainda falta?"
-6. "E o que historicamente acontece nas últimas semanas?"
-7. "Em semana de pico, quantos leads qualificados passam de vinte e quatro horas sem contato?"
-8. "Qual a meta de matrículas desse trimestre?"
-9. "Então olha essa conta comigo: faltam oito semanas, entrando uns mil leads por mês, com até quarenta por cento esperando mais de um dia justamente nas semanas mais fortes. O que esfriar agora não volta no próximo trimestre. Esperar não é neutro, né?"
-10. "Não tô propondo implantar nada agora. Proposta: uma análise rápida, sem mexer na operação — você, o gerente comercial e eu, meia hora, pra medir onde tá vazando. Aí vocês decidem se agem agora ou planejam pro próximo trimestre. Quinta às dez?"
-11. "Combinado. Obrigado, Renata, boa campanha até lá!"`,
+
+[Gatilho da janela. Ela deve revelar cerca de oito semanas e que muito lead ainda vai entrar.]
+
+6. "E o que costuma acontecer nas últimas semanas da campanha, historicamente?"
+
+[Ela deve dizer que as últimas semanas são as mais fortes de matrícula.]
+
+7. "Em período de campanha, quantos leads entram por mês, mais ou menos? E quanto disso é qualificado?"
+
+[Volume e qualificação — entre novecentos e mil e trezentos, com quarenta a cinquenta por cento qualificados.]
+
+8. "E em semana de pico, quantos dos qualificados passam de vinte e quatro horas sem contato?"
+
+[Trinta a quarenta por cento. Se aprofundar, ela admite que não tem relatório confiável cruzando conversão com tempo de contato.]
+
+9. "Qual é a meta de matrículas desse trimestre? Tem alguma cobrança da diretoria por trás disso?"
+
+[Meta e pressão interna — aumento de cerca de dezoito por cento, e a diretoria querendo entender por que mais lead não virou mais matrícula.]
+
+10. **[a conta de urgência legítima — o momento-chave]** "Então deixa eu fazer essa conta em voz alta com você: faltam umas oito semanas, entrando perto de mil leads por mês, com até quarenta por cento dos qualificados esperando mais de um dia — justamente nas semanas mais fortes. O que esfriar agora não volta no próximo trimestre. Esperar não é neutro, é uma perda que fica concentrada na janela que mais importa. Faz sentido essa leitura?"
+
+[TESTE 2: aqui a ficha deve cair. Ela deve reconhecer em voz alta que o que se perde agora não se recupera depois. Se ela ceder ANTES disso — só porque você falou bonito, sem a conta dos dados dela — o prompt está frouxo. Se ela continuar resistindo mesmo com a conta fechada, está rígido demais.]
+
+11. **[separe diagnóstico de implantação]** "E pra deixar claro: eu não tô propondo implantar nada agora, no meio da campanha. A proposta é só medir onde o lead tá esfriando, sem mexer na operação do time. Isso muda alguma coisa pra você?"
+
+[Ela deve abrir mais quando você separa diagnóstico de implementação. Essa é a porta dela.]
+
+12. **[próximo passo concreto e datado — com o gerente comercial]** "Proposta então: uma análise rápida, meia hora, sem mexer em nada que tá rodando — você, o gerente comercial e eu — só pra medir volume, tempo de contato e o que tá vazando. Aí vocês decidem se agem agora ou planejam pro próximo trimestre. Pode ser quinta às dez?"
+
+[TESTE 3: o único avanço que ela aceita é diagnóstico leve, datado e COM o gerente comercial. Se você tivesse oferecido "te mando uma apresentação" ou "te chamo no próximo trimestre", ela teria recusado como próximo passo válido. Confirme que ela só fecha com data + gerente comercial + objetivo.]
+
+13. "Fechado. Te mando dois horários ainda hoje. Obrigado, Renata, e boa campanha até lá!"
+
+[Só aqui, com despedida explícita sua, é que ela deve encerrar a chamada.]
+
+---
+
+## Armadilhas extras para rodar em testes separados
+
+Use estas em ligações separadas para estressar gatilhos específicos do prompt:
+
+- **Urgência artificial:** logo no começo, diga "Renata, isso é super urgente, o trimestre tá fechando e você precisa decidir essa semana." → Ela deve RECUAR e endurecer ("se a urgência é só porque o trimestre de vocês tá fechando, aí não é urgência minha").
+
+- **CRM como resposta pronta:** depois que ela admitir o gargalo, diga "então o que vocês precisam é do nosso CRM, resolve na hora." → Ela deve responder que talvez seja mais capacidade/priorização do comercial do que ferramenta, e só ceder se você investigar o processo antes de defender o produto.
+
+- **Implantar agora:** diga "vamos já começar a implementação, dá pra rodar em uma semana." → Ela deve responder que implementar agora pode atrapalhar o time, e só abrir se você separar diagnóstico de implementação.
+
+- **Material genérico:** encerre com "te mando uma apresentação e você vê com calma." → Ela deve dizer que com a campanha rodando isso não vira prioridade e não conta como próximo passo.
+
+---
+
+## O que observar na avaliação (critérios da rubrica)
+
+- Reconheceu o contexto de campanha e checou tempo/objetivo na abertura?
+- Investigou janela, volume, velocidade de atendimento e meta antes de tentar avançar?
+- Construiu a urgência com os DADOS dela (não com pressão artificial)?
+- Separou diagnóstico leve de implantação?
+- Fechou em conversa curta, datada e com o gerente comercial — não em "apresentação" ou "próximo trimestre"?
+- Nunca culpou o time de vendas pelo gargalo?`,
   },
   "2.2": {
     code: "2.2",
@@ -202,7 +269,22 @@ export function getScript(code: string): RoleplayScript | null {
   return ROLEPLAY_SCRIPTS[code] ?? null;
 }
 
-/** Versão em texto puro do roteiro (para copiar). */
-export function scriptToText(s: RoleplayScript): string {
-  return `${s.title}\n\n${s.body}`;
+/**
+ * Resolve o roteiro efetivo de um roleplay: usa o texto editado (roteiro) quando
+ * houver; senão cai no roteiro padrão (estático) pelo código do nome.
+ */
+export function resolveRoteiro(
+  name: string,
+  roteiro: string | null,
+): { title: string; body: string } {
+  const code = scriptCodeFromName(name);
+  const def = code ? getScript(code) : null;
+  const title = def?.title ?? name;
+  const body = roteiro && roteiro.trim() ? roteiro : (def?.body ?? "");
+  return { title, body };
+}
+
+/** Texto puro (título + corpo) para copiar. */
+export function scriptToText(title: string, body: string): string {
+  return `${title}\n\n${body}`;
 }
