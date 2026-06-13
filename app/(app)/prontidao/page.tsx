@@ -21,6 +21,7 @@ import {
   ClipboardDocumentIcon,
   PencilSquareIcon,
   StarIcon,
+  BookOpenIcon,
 } from "@heroicons/react/24/outline";
 import { Card } from "@/app/components/ui/card";
 import { Button } from "@/app/components/ui/button";
@@ -410,12 +411,18 @@ export default function ProntidaoPage() {
                     <th className="px-3 py-2.5 text-left">Qualidade</th>
                     <th className="px-3 py-2.5 text-left">Avaliações</th>
                     <th className="px-3 py-2.5 text-left">Status</th>
+                    <th className="px-3 py-2.5 text-right">Ações</th>
                   </tr>
                 </thead>
                 <tbody>
                   {rows.map((r) => {
                     const agg = aggregates.get(r.id);
                     const raterCount = agg?.evaluatorCount ?? 0;
+                    const iRated =
+                      !!currentUserId &&
+                      evals.some(
+                        (e) => e.readiness_id === r.id && e.evaluator_id === currentUserId,
+                      );
                     return (
                       <tr
                         key={r.id}
@@ -517,6 +524,26 @@ export default function ProntidaoPage() {
                               </SelectItem>
                             ))}
                           </Select>
+                        </td>
+                        <td className="px-3 py-3 text-right">
+                          {iRated ? (
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              className="border-green-200 text-green-700 data-[hover=true]:bg-green-50"
+                              onPress={() => openEval(r)}
+                            >
+                              Avaliado
+                            </Button>
+                          ) : (
+                            <Button
+                              size="sm"
+                              startContent={<BookOpenIcon className="h-4 w-4" />}
+                              onPress={() => openEval(r)}
+                            >
+                              Avaliar
+                            </Button>
+                          )}
                         </td>
                       </tr>
                     );
