@@ -13,12 +13,13 @@ import {
   Textarea,
   addToast,
 } from "@heroui/react";
-import { PlusIcon, InformationCircleIcon } from "@heroicons/react/24/outline";
+import { PlusIcon, InformationCircleIcon, TrashIcon } from "@heroicons/react/24/outline";
 import { Card } from "@/app/components/ui/card";
 import { Button } from "@/app/components/ui/button";
 import { PageHeader } from "@/app/components/ui/page-header";
 import { LoadingView } from "@/app/components/ui/loading-view";
 import { EmptyState } from "@/app/components/ui/empty-state";
+import { ConfirmDialog, type ConfirmConfig } from "@/app/components/ui/confirm-dialog";
 import {
   ReadinessStatusBadge,
   READINESS_STATUS_META,
@@ -28,6 +29,7 @@ import { computeScore, computeKpis, formatScorePct } from "@/app/lib/readiness";
 import {
   createReadiness,
   createTrackingClient,
+  deleteReadiness,
   listReadiness,
   listTrackingClients,
   updateClientWeights,
@@ -44,13 +46,24 @@ const STATUS_KEYS = Object.keys(READINESS_STATUS_META) as ReadinessStatus[];
 
 // Critérios de análise: campo de nota + campo de observação ("o que falta") + rótulo.
 const CRITERIA = [
-  { score: "score_prompt", note: "note_prompt", label: "Prompt" },
-  { score: "score_roteiro", note: "note_roteiro", label: "Roteiro/Falas" },
-  { score: "score_teste", note: "note_teste", label: "Teste" },
+  { score: "score_prompt", note: "note_prompt", label: "Prompt Contextual" },
+  { score: "score_roteiro", note: "note_roteiro", label: "Realismo da Fala" },
+  { score: "score_teste", note: "note_teste", label: "Testes" },
 ] as const;
 
 type CriterionScore = (typeof CRITERIA)[number]["score"];
 type CriterionNote = (typeof CRITERIA)[number]["note"];
+
+// Campos que entram no lote de edição (Salvar/Descartar alterações).
+const EDITABLE_FIELDS = [
+  "score_prompt",
+  "score_roteiro",
+  "score_teste",
+  "note_prompt",
+  "note_roteiro",
+  "note_teste",
+  "status",
+] as const;
 
 interface NoteModalState {
   rowId: string;
@@ -65,8 +78,11 @@ export default function ProntidaoPage() {
   const [clients, setClients] = useState<TrackingClient[]>([]);
   const [clientId, setClientId] = useState("");
   const [rows, setRows] = useState<RoleplayReadiness[]>([]);
+  const [baseline, setBaseline] = useState<RoleplayReadiness[]>([]);
   const [loading, setLoading] = useState(true);
   const [rowsLoading, setRowsLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [confirm, setConfirm] = useState<ConfirmConfig | null>(null);
 
   // pesos (edição)
   const [wPrompt, setWPrompt] = useState("30");
@@ -95,11 +111,25 @@ export default function ProntidaoPage() {
   const loadRows = useCallback(async (id: string) => {
     setRowsLoading(true);
     try {
-      setRows(await listReadiness(id));
+      const data = await listReadiness(id);
+      setRows(data);
+      setBaseline(data);
     } finally {
       setRowsLoading(false);
     }
   }, []);
+
+  // Linhas com edições pendentes (diferem do baseline nos campos editáveis).
+  const dirtyIds = useMemo(() => {
+    const base = new Map(baseline.map((r) => [r.id, r]));
+    return rows
+      .filter((r) => {
+        const b = base.get(r.id);
+        return !b || EDITABLE_FIELDS.some((f) => r[f] !== b[f]);
+      })
+      .map((r) => r.id);
+  }, [rows, baseline]);
+  const isDirty = dirtyIds.length > 0;
 
   useEffect(() => {
     void (async () => {
@@ -115,22 +145,67 @@ export default function ProntidaoPage() {
   }, [loadRows]);
 
   async function selectClient(id: string) {
-    setClientId(id);
-    await loadRows(id);
+    if (id === clientId) return;
+    const go = async () => {
+      setClientId(id);
+      await loadRows(id);
+    };
+    if (isDirty) {
+      setConfirm({
+        title: "Descartar alterações não salvas?",
+        message: "Você tem alterações não salvas neste cliente. Trocar de cliente vai descartá-las.",
+        confirmLabel: "Descartar e trocar",
+        onConfirm: () => void go(),
+      });
+      return;
+    }
+    await go();
   }
 
-  /** Atualiza uma linha localmente (otimista) e persiste o patch. */
-  async function patchRow(id: string, patch: Partial<RoleplayReadiness>) {
+  /** Edita uma linha apenas localmente (entra no lote de Salvar/Descartar). */
+  function editRow(id: string, patch: Partial<RoleplayReadiness>) {
     setRows((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+  }
+
+  async function saveChanges() {
+    setSaving(true);
     try {
-      await updateReadiness(id, patch);
+      const dirtySet = new Set(dirtyIds);
+      const toSave = rows.filter((r) => dirtySet.has(r.id));
+      for (const r of toSave) {
+        const patch = Object.fromEntries(
+          EDITABLE_FIELDS.map((f) => [f, r[f]]),
+        ) as Partial<RoleplayReadiness>;
+        await updateReadiness(r.id, patch);
+      }
+      setBaseline(rows);
+      addToast({ title: "Alterações salvas", color: "success" });
     } catch (err) {
       addToast({
-        title: "Erro ao salvar",
+        title: "Erro ao salvar alterações",
         description: err instanceof Error ? err.message : String(err),
         color: "danger",
       });
-      void loadRows(clientId);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function discardChanges() {
+    setRows(baseline);
+  }
+
+  async function removeRow(id: string) {
+    try {
+      await deleteReadiness(id);
+      setRows((prev) => prev.filter((r) => r.id !== id));
+      setBaseline((prev) => prev.filter((r) => r.id !== id));
+    } catch (err) {
+      addToast({
+        title: "Erro ao excluir",
+        description: err instanceof Error ? err.message : String(err),
+        color: "danger",
+      });
     }
   }
 
@@ -142,7 +217,7 @@ export default function ProntidaoPage() {
     label: string,
     value: number,
   ) {
-    void patchRow(row.id, { [scoreField]: value });
+    editRow(row.id, { [scoreField]: value });
     if (value === 0.5) {
       setNoteModal({
         rowId: row.id,
@@ -159,11 +234,11 @@ export default function ProntidaoPage() {
     setNoteModal({ rowId: row.id, noteField, label, value: row[noteField] ?? "", fromInfo: true });
   }
 
-  async function saveNote() {
+  function saveNote() {
     if (!noteModal) return;
     const { rowId, noteField, value } = noteModal;
     setNoteModal(null);
-    await patchRow(rowId, { [noteField]: value.trim() || null });
+    editRow(rowId, { [noteField]: value.trim() || null });
   }
 
   async function saveWeights() {
@@ -226,6 +301,7 @@ export default function ProntidaoPage() {
         position,
       });
       setRows((prev) => [...prev, row]);
+      setBaseline((prev) => [...prev, row]);
       setNewRpOpen(false);
       setNewRpName("");
       setNewRpPersona("");
@@ -297,9 +373,9 @@ export default function ProntidaoPage() {
               <span className="text-xs text-slate-500">Devem somar 100%</span>
             </div>
             <div className="flex flex-wrap items-end gap-3">
-              <WeightInput label="Prompt (%)" value={wPrompt} onChange={setWPrompt} />
-              <WeightInput label="Roteiro/Falas (%)" value={wRoteiro} onChange={setWRoteiro} />
-              <WeightInput label="Teste (%)" value={wTeste} onChange={setWTeste} />
+              <WeightInput label="Prompt Contextual (%)" value={wPrompt} onChange={setWPrompt} />
+              <WeightInput label="Realismo da Fala (%)" value={wRoteiro} onChange={setWRoteiro} />
+              <WeightInput label="Testes (%)" value={wTeste} onChange={setWTeste} />
               <Button onPress={saveWeights} isLoading={savingWeights}>
                 Salvar pesos
               </Button>
@@ -319,9 +395,9 @@ export default function ProntidaoPage() {
                 <thead className="bg-slate-50 border-b border-slate-200">
                   <tr className="text-xs font-semibold uppercase tracking-wider text-slate-600">
                     <th className="px-4 py-2.5 text-left">Roleplay</th>
-                    <th className="px-3 py-2.5 text-left">Prompt</th>
-                    <th className="px-3 py-2.5 text-left">Roteiro/Falas</th>
-                    <th className="px-3 py-2.5 text-left">Teste</th>
+                    <th className="px-3 py-2.5 text-left">Prompt Contextual</th>
+                    <th className="px-3 py-2.5 text-left">Realismo da Fala</th>
+                    <th className="px-3 py-2.5 text-left">Testes</th>
                     <th className="px-3 py-2.5 text-left">Score</th>
                     <th className="px-3 py-2.5 text-left">Status</th>
                   </tr>
@@ -330,13 +406,40 @@ export default function ProntidaoPage() {
                   {rows.map((r) => (
                     <tr
                       key={r.id}
-                      className="border-b border-slate-100 align-middle text-sm text-slate-800"
+                      className="group border-b border-slate-100 align-middle text-sm text-slate-800"
                     >
                       <td className="px-4 py-3">
-                        <div className="font-medium" title={r.persona ?? r.name}>
-                          {(r.persona ?? r.name).split("—")[0].trim()}
+                        <div className="flex items-center gap-2">
+                          <div className="min-w-0">
+                            <div className="font-medium" title={r.persona ?? r.name}>
+                              {(r.persona ?? r.name).split("—")[0].trim()}
+                            </div>
+                            {r.persona && (
+                              <div className="text-xs text-slate-500">{r.name}</div>
+                            )}
+                          </div>
+                          <button
+                            type="button"
+                            aria-label="Excluir roleplay"
+                            title="Excluir roleplay"
+                            className="shrink-0 text-slate-400 opacity-0 transition-opacity hover:text-red-600 focus-visible:opacity-100 group-hover:opacity-100"
+                            onClick={() =>
+                              setConfirm({
+                                title: "Excluir roleplay?",
+                                message: (
+                                  <>
+                                    Excluir <b>{r.name}</b> do acompanhamento. Esta ação não pode
+                                    ser desfeita.
+                                  </>
+                                ),
+                                confirmLabel: "Excluir",
+                                onConfirm: () => void removeRow(r.id),
+                              })
+                            }
+                          >
+                            <TrashIcon className="h-4 w-4" />
+                          </button>
                         </div>
-                        {r.persona && <div className="text-xs text-slate-500">{r.name}</div>}
                       </td>
                       {CRITERIA.map(({ score, note, label }) => (
                         <td key={score} className="px-3 py-3">
@@ -350,8 +453,10 @@ export default function ProntidaoPage() {
                                   aria-label="O que falta"
                                   title={r[note] ?? "Descrever o que falta"}
                                   className="flex shrink-0 items-center self-center text-blue-500 transition-colors hover:text-blue-700"
-                                  onClick={(e) => {
+                                  onPointerDown={(e) => {
+                                    // impede o react-aria do Select de abrir o dropdown no pointer-down
                                     e.stopPropagation();
+                                    e.preventDefault();
                                     openNote(r, note, label);
                                   }}
                                 >
@@ -370,7 +475,7 @@ export default function ProntidaoPage() {
                           aria-label="Status"
                           selectedKeys={[r.status]}
                           onSelectionChange={(k) =>
-                            patchRow(r.id, {
+                            editRow(r.id, {
                               status: String(Array.from(k)[0] ?? r.status) as ReadinessStatus,
                             })
                           }
@@ -392,7 +497,7 @@ export default function ProntidaoPage() {
                   ))}
                 </tbody>
               </table>
-              <div className="p-3">
+              <div className="flex items-center justify-between gap-2 p-3">
                 <Button
                   variant="secondary"
                   size="sm"
@@ -401,6 +506,24 @@ export default function ProntidaoPage() {
                 >
                   Adicionar roleplay
                 </Button>
+                <div className="flex gap-2">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    isDisabled={!isDirty || saving}
+                    onPress={discardChanges}
+                  >
+                    Descartar alterações
+                  </Button>
+                  <Button
+                    size="sm"
+                    isDisabled={!isDirty}
+                    isLoading={saving}
+                    onPress={saveChanges}
+                  >
+                    Salvar alterações
+                  </Button>
+                </div>
               </div>
             </Card>
           )}
@@ -493,6 +616,8 @@ export default function ProntidaoPage() {
           </ModalFooter>
         </ModalContent>
       </Modal>
+
+      <ConfirmDialog config={confirm} onClose={() => setConfirm(null)} />
     </div>
   );
 }
