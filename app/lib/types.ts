@@ -119,3 +119,37 @@ export interface AppSettings {
   environment: string;
   default_user_group_id: number | null;
 }
+
+// ── Prontidão (IPR) ────────────────────────────────────────────────────────
+export type ReadinessStatus = "nao_iniciado" | "em_andamento" | "bloqueado" | "pronto";
+
+export interface TrackingClient {
+  id: string;
+  name: string;
+  weight_prompt: number;
+  weight_roteiro: number;
+  weight_teste: number;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RoleplayReadiness {
+  id: string;
+  client_id: string;
+  name: string;
+  persona: string | null;
+  score_prompt: number;
+  score_roteiro: number;
+  score_teste: number;
+  note_prompt: string | null;
+  note_roteiro: string | null;
+  note_teste: string | null;
+  status: ReadinessStatus;
+  responsavel: string | null;
+  observacoes: string | null;
+  position: number;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}

@@ -25,7 +25,7 @@ export function AppShell({
           collapsed ? "sm:pl-[60px]" : "sm:pl-[220px]",
         )}
       >
-        <div className="mx-auto max-w-5xl px-4 pt-[var(--page-content-pt-below-header)] sm:px-6">
+        <div className="mx-auto max-w-6xl px-4 pt-[var(--page-content-pt-below-header)] sm:px-6">
           {children}
         </div>
       </main>

@@ -6,7 +6,9 @@ import type {
   Connection,
   DraftRow,
   ProcessImportResult,
+  RoleplayReadiness,
   ScenarioConfig,
+  TrackingClient,
 } from "@/app/lib/types";
 
 /** Cria source + offer + draft a partir de um texto importado. */
@@ -150,6 +152,85 @@ export async function invokeSyncOrgs() {
   const { data, error } = await supabase.functions.invoke("list-orgs", { body: {} });
   if (error) throw error;
   return data;
+}
+
+// ── Prontidão (IPR) ────────────────────────────────────────────────────────
+
+export async function listTrackingClients(): Promise<TrackingClient[]> {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from("tracking_clients")
+    .select("*")
+    .order("name", { ascending: true });
+  if (error) throw error;
+  return data as TrackingClient[];
+}
+
+export async function createTrackingClient(name: string): Promise<{ id: string }> {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from("tracking_clients")
+    .insert({ name })
+    .select("id")
+    .single();
+  if (error) throw error;
+  return { id: data.id };
+}
+
+export async function updateClientWeights(
+  clientId: string,
+  weights: { weight_prompt: number; weight_roteiro: number; weight_teste: number },
+) {
+  const supabase = createClient();
+  const { error } = await supabase
+    .from("tracking_clients")
+    .update(weights)
+    .eq("id", clientId);
+  if (error) throw error;
+}
+
+export async function listReadiness(clientId: string): Promise<RoleplayReadiness[]> {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from("roleplay_readiness")
+    .select("*")
+    .eq("client_id", clientId)
+    .order("position", { ascending: true });
+  if (error) throw error;
+  return data as RoleplayReadiness[];
+}
+
+export async function createReadiness(params: {
+  clientId: string;
+  name: string;
+  persona?: string | null;
+  position: number;
+}): Promise<RoleplayReadiness> {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from("roleplay_readiness")
+    .insert({
+      client_id: params.clientId,
+      name: params.name,
+      persona: params.persona ?? null,
+      position: params.position,
+    })
+    .select("*")
+    .single();
+  if (error) throw error;
+  return data as RoleplayReadiness;
+}
+
+export async function updateReadiness(id: string, patch: Partial<RoleplayReadiness>) {
+  const supabase = createClient();
+  const { error } = await supabase.from("roleplay_readiness").update(patch).eq("id", id);
+  if (error) throw error;
+}
+
+export async function deleteReadiness(id: string) {
+  const supabase = createClient();
+  const { error } = await supabase.from("roleplay_readiness").delete().eq("id", id);
+  if (error) throw error;
 }
 
 /** Lista os tipos de call_context da Perfecting (para o seletor da Criação). */
