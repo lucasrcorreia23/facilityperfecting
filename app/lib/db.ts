@@ -4,12 +4,19 @@ import { createClient } from "@/app/lib/supabase/client";
 import type {
   CallContextType,
   Connection,
+  CriteriaWeights,
   DraftRow,
   ProcessImportResult,
   RoleplayReadiness,
   ScenarioConfig,
   TrackingClient,
 } from "@/app/lib/types";
+
+const DEFAULT_WEIGHTS: CriteriaWeights = {
+  weight_prompt: 0.3,
+  weight_roteiro: 0.4,
+  weight_teste: 0.3,
+};
 
 /** Cria source + offer + draft a partir de um texto importado. */
 export async function createDraftFromText(params: {
@@ -177,15 +184,31 @@ export async function createTrackingClient(name: string): Promise<{ id: string }
   return { id: data.id };
 }
 
-export async function updateClientWeights(
-  clientId: string,
-  weights: { weight_prompt: number; weight_roteiro: number; weight_teste: number },
-) {
+/** Pesos globais (por usuário) dos critérios do IPR; default 30/40/30. */
+export async function getAppWeights(): Promise<CriteriaWeights> {
   const supabase = createClient();
+  const { data, error } = await supabase
+    .from("app_settings")
+    .select("weight_prompt, weight_roteiro, weight_teste")
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) return { ...DEFAULT_WEIGHTS };
+  return {
+    weight_prompt: Number(data.weight_prompt ?? DEFAULT_WEIGHTS.weight_prompt),
+    weight_roteiro: Number(data.weight_roteiro ?? DEFAULT_WEIGHTS.weight_roteiro),
+    weight_teste: Number(data.weight_teste ?? DEFAULT_WEIGHTS.weight_teste),
+  };
+}
+
+export async function updateAppWeights(weights: CriteriaWeights) {
+  const supabase = createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) throw new Error("Sessão expirada");
   const { error } = await supabase
-    .from("tracking_clients")
-    .update(weights)
-    .eq("id", clientId);
+    .from("app_settings")
+    .upsert({ created_by: user.id, ...weights }, { onConflict: "created_by" });
   if (error) throw error;
 }
 

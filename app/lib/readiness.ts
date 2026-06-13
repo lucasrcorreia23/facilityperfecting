@@ -1,11 +1,11 @@
-import type { RoleplayReadiness, TrackingClient } from "@/app/lib/types";
+import type { CriteriaWeights, RoleplayReadiness } from "@/app/lib/types";
 
-/** Score ponderado (0–1) de um roleplay, usando os pesos do cliente. */
-export function computeScore(row: RoleplayReadiness, client: TrackingClient): number {
+/** Score ponderado (0–1) de um roleplay, usando os pesos globais. */
+export function computeScore(row: RoleplayReadiness, weights: CriteriaWeights): number {
   return (
-    row.score_prompt * client.weight_prompt +
-    row.score_roteiro * client.weight_roteiro +
-    row.score_teste * client.weight_teste
+    row.score_prompt * weights.weight_prompt +
+    row.score_roteiro * weights.weight_roteiro +
+    row.score_teste * weights.weight_teste
   );
 }
 
@@ -23,12 +23,12 @@ export interface ReadinessKpis {
 }
 
 /** KPIs do conjunto, espelhando o rodapé da planilha. */
-export function computeKpis(rows: RoleplayReadiness[], client: TrackingClient): ReadinessKpis {
+export function computeKpis(rows: RoleplayReadiness[], weights: CriteriaWeights): ReadinessKpis {
   const total = rows.length;
   if (total === 0) {
     return { total: 0, scoreMedio: 0, pctProntos: 0, pctTestados: 0, bloqueios: 0 };
   }
-  const somaScore = rows.reduce((acc, r) => acc + computeScore(r, client), 0);
+  const somaScore = rows.reduce((acc, r) => acc + computeScore(r, weights), 0);
   const prontos = rows.filter((r) => r.status === "pronto").length;
   const testados = rows.filter((r) => r.score_teste === 1).length;
   const bloqueios = rows.filter((r) => r.status === "bloqueado").length;

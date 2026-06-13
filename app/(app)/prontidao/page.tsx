@@ -13,7 +13,14 @@ import {
   Textarea,
   addToast,
 } from "@heroui/react";
-import { PlusIcon, InformationCircleIcon, TrashIcon } from "@heroicons/react/24/outline";
+import {
+  PlusIcon,
+  InformationCircleIcon,
+  TrashIcon,
+  DocumentTextIcon,
+  ArrowTopRightOnSquareIcon,
+  ClipboardDocumentIcon,
+} from "@heroicons/react/24/outline";
 import { Card } from "@/app/components/ui/card";
 import { Button } from "@/app/components/ui/button";
 import { PageHeader } from "@/app/components/ui/page-header";
@@ -24,18 +31,25 @@ import {
   ReadinessStatusBadge,
   READINESS_STATUS_META,
 } from "@/app/components/ui/readiness-status-badge";
+import { ScriptView } from "@/app/components/roleplay-script-view";
 import { managerSelectClassNames } from "@/app/lib/select-classnames";
 import { computeScore, computeKpis, formatScorePct } from "@/app/lib/readiness";
+import { getScript, scriptCodeFromName, scriptToText } from "@/app/lib/roleplay-scripts";
 import {
   createReadiness,
   createTrackingClient,
   deleteReadiness,
+  getAppWeights,
   listReadiness,
   listTrackingClients,
-  updateClientWeights,
   updateReadiness,
 } from "@/app/lib/db";
-import type { ReadinessStatus, RoleplayReadiness, TrackingClient } from "@/app/lib/types";
+import type {
+  CriteriaWeights,
+  ReadinessStatus,
+  RoleplayReadiness,
+  TrackingClient,
+} from "@/app/lib/types";
 
 const SCORE_OPTIONS = [
   { key: "0", label: "Não feito" },
@@ -84,13 +98,15 @@ export default function ProntidaoPage() {
   const [saving, setSaving] = useState(false);
   const [confirm, setConfirm] = useState<ConfirmConfig | null>(null);
 
-  // pesos (edição)
-  const [wPrompt, setWPrompt] = useState("30");
-  const [wRoteiro, setWRoteiro] = useState("40");
-  const [wTeste, setWTeste] = useState("30");
-  const [savingWeights, setSavingWeights] = useState(false);
+  // pesos globais dos critérios (editados em Configurações)
+  const [weights, setWeights] = useState<CriteriaWeights>({
+    weight_prompt: 0.3,
+    weight_roteiro: 0.4,
+    weight_teste: 0.3,
+  });
 
   // modais
+  const [scriptCode, setScriptCode] = useState<string | null>(null);
   const [newClientOpen, setNewClientOpen] = useState(false);
   const [newClientName, setNewClientName] = useState("");
   const [newRpOpen, setNewRpOpen] = useState(false);
@@ -99,14 +115,6 @@ export default function ProntidaoPage() {
   const [noteModal, setNoteModal] = useState<NoteModalState | null>(null);
 
   const client = useMemo(() => clients.find((c) => c.id === clientId) ?? null, [clients, clientId]);
-
-  // sincroniza os inputs de peso quando o cliente muda
-  useEffect(() => {
-    if (!client) return;
-    setWPrompt(String(Math.round(client.weight_prompt * 100)));
-    setWRoteiro(String(Math.round(client.weight_roteiro * 100)));
-    setWTeste(String(Math.round(client.weight_teste * 100)));
-  }, [client]);
 
   const loadRows = useCallback(async (id: string) => {
     setRowsLoading(true);
@@ -133,8 +141,9 @@ export default function ProntidaoPage() {
 
   useEffect(() => {
     void (async () => {
-      const cs = await listTrackingClients();
+      const [cs, w] = await Promise.all([listTrackingClients(), getAppWeights()]);
       setClients(cs);
+      setWeights(w);
       const first = cs.find((c) => c.name === "RD") ?? cs[0];
       if (first) {
         setClientId(first.id);
@@ -241,35 +250,6 @@ export default function ProntidaoPage() {
     editRow(rowId, { [noteField]: value.trim() || null });
   }
 
-  async function saveWeights() {
-    const p = Number(wPrompt);
-    const r = Number(wRoteiro);
-    const t = Number(wTeste);
-    if ([p, r, t].some((n) => Number.isNaN(n) || n < 0)) {
-      addToast({ title: "Pesos inválidos", color: "warning" });
-      return;
-    }
-    if (p + r + t !== 100) {
-      addToast({ title: "Os pesos devem somar 100%", color: "warning" });
-      return;
-    }
-    setSavingWeights(true);
-    try {
-      const weights = { weight_prompt: p / 100, weight_roteiro: r / 100, weight_teste: t / 100 };
-      await updateClientWeights(clientId, weights);
-      setClients((prev) => prev.map((c) => (c.id === clientId ? { ...c, ...weights } : c)));
-      addToast({ title: "Pesos salvos", color: "success" });
-    } catch (err) {
-      addToast({
-        title: "Erro ao salvar pesos",
-        description: err instanceof Error ? err.message : String(err),
-        color: "danger",
-      });
-    } finally {
-      setSavingWeights(false);
-    }
-  }
-
   async function addClient() {
     const name = newClientName.trim();
     if (!name) return;
@@ -314,7 +294,7 @@ export default function ProntidaoPage() {
     }
   }
 
-  const kpis = useMemo(() => (client ? computeKpis(rows, client) : null), [rows, client]);
+  const kpis = useMemo(() => (client ? computeKpis(rows, weights) : null), [rows, client, weights]);
 
   if (loading) return <LoadingView label="Carregando prontidão…" />;
 
@@ -366,22 +346,6 @@ export default function ProntidaoPage() {
             <Kpi label="Total" value={String(kpis!.total)} />
           </div>
 
-          {/* Pesos dos critérios */}
-          <Card className="flex flex-col gap-3 p-5">
-            <div className="flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-slate-800">Pesos dos critérios</h2>
-              <span className="text-xs text-slate-500">Devem somar 100%</span>
-            </div>
-            <div className="flex flex-wrap items-end gap-3">
-              <WeightInput label="Prompt Contextual (%)" value={wPrompt} onChange={setWPrompt} />
-              <WeightInput label="Realismo da Fala (%)" value={wRoteiro} onChange={setWRoteiro} />
-              <WeightInput label="Testes (%)" value={wTeste} onChange={setWTeste} />
-              <Button onPress={saveWeights} isLoading={savingWeights}>
-                Salvar pesos
-              </Button>
-            </div>
-          </Card>
-
           {/* Tabela editável */}
           {rows.length === 0 && !rowsLoading ? (
             <EmptyState
@@ -418,6 +382,17 @@ export default function ProntidaoPage() {
                               <div className="text-xs text-slate-500">{r.name}</div>
                             )}
                           </div>
+                          {scriptCodeFromName(r.name) && (
+                            <button
+                              type="button"
+                              aria-label="Ver roteiro"
+                              title="Ver roteiro do roleplay"
+                              className="shrink-0 text-slate-400 opacity-0 transition-opacity hover:text-blue-600 focus-visible:opacity-100 group-hover:opacity-100"
+                              onClick={() => setScriptCode(scriptCodeFromName(r.name))}
+                            >
+                              <DocumentTextIcon className="h-4 w-4" />
+                            </button>
+                          )}
                           <button
                             type="button"
                             aria-label="Excluir roleplay"
@@ -468,7 +443,7 @@ export default function ProntidaoPage() {
                         </td>
                       ))}
                       <td className="px-3 py-3 font-semibold tabular-nums">
-                        {formatScorePct(computeScore(r, client))}
+                        {formatScorePct(computeScore(r, weights))}
                       </td>
                       <td className="px-3 py-3">
                         <Select
@@ -617,6 +592,67 @@ export default function ProntidaoPage() {
         </ModalContent>
       </Modal>
 
+      {/* Modal: roteiro do roleplay */}
+      <Modal
+        isOpen={scriptCode !== null}
+        onOpenChange={(open) => {
+          if (!open) setScriptCode(null);
+        }}
+        radius="sm"
+        size="2xl"
+        scrollBehavior="inside"
+      >
+        <ModalContent>
+          {(() => {
+            const script = scriptCode ? getScript(scriptCode) : null;
+            if (!script) return null;
+            return (
+              <>
+                <ModalHeader className="flex flex-col items-start gap-0.5">
+                  <span className="text-xs font-medium uppercase tracking-wide text-slate-400">
+                    Roteiro do vendedor
+                  </span>
+                  <span>{script.title}</span>
+                </ModalHeader>
+                <ModalBody className="gap-4 pb-2">
+                  <p className="text-sm text-slate-500">
+                    Leia na ordem. Os trechos entre colchetes são instruções — não são para
+                    falar.
+                  </p>
+                  <ScriptView script={script} />
+                </ModalBody>
+                <ModalFooter className="justify-between">
+                  <Button
+                    variant="secondary"
+                    startContent={<ClipboardDocumentIcon className="h-4 w-4" />}
+                    onPress={async () => {
+                      try {
+                        await navigator.clipboard.writeText(scriptToText(script));
+                        addToast({ title: "Roteiro copiado", color: "success" });
+                      } catch {
+                        addToast({ title: "Não foi possível copiar", color: "danger" });
+                      }
+                    }}
+                  >
+                    Copiar
+                  </Button>
+                  <div className="flex gap-2">
+                    <Button
+                      variant="secondary"
+                      startContent={<ArrowTopRightOnSquareIcon className="h-4 w-4" />}
+                      onPress={() => window.open(`/roteiro/${script.code}`, "_blank")}
+                    >
+                      Abrir em nova aba
+                    </Button>
+                    <Button onPress={() => setScriptCode(null)}>Fechar</Button>
+                  </div>
+                </ModalFooter>
+              </>
+            );
+          })()}
+        </ModalContent>
+      </Modal>
+
       <ConfirmDialog config={confirm} onClose={() => setConfirm(null)} />
     </div>
   );
@@ -628,29 +664,6 @@ function Kpi({ label, value }: { label: string; value: string }) {
       <span className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</span>
       <span className="text-xl font-semibold tabular-nums text-slate-800">{value}</span>
     </Card>
-  );
-}
-
-function WeightInput({
-  label,
-  value,
-  onChange,
-}: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-}) {
-  return (
-    <Input
-      label={label}
-      labelPlacement="outside"
-      type="number"
-      value={value}
-      onValueChange={onChange}
-      radius="sm"
-      variant="bordered"
-      className="w-36"
-    />
   );
 }
 

@@ -118,6 +118,16 @@ export interface AppSettings {
   default_call_context_slug: string | null;
   environment: string;
   default_user_group_id: number | null;
+  weight_prompt: number;
+  weight_roteiro: number;
+  weight_teste: number;
+}
+
+/** Pesos dos critérios do IPR (somam 1). */
+export interface CriteriaWeights {
+  weight_prompt: number;
+  weight_roteiro: number;
+  weight_teste: number;
 }
 
 // ── Prontidão (IPR) ────────────────────────────────────────────────────────
