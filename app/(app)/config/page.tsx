@@ -8,7 +8,8 @@ import { PageHeader } from "@/app/components/ui/page-header";
 import { LoadingView } from "@/app/components/ui/loading-view";
 import { managerSelectClassNames } from "@/app/lib/select-classnames";
 import { createClient } from "@/app/lib/supabase/client";
-import { updateAppWeights } from "@/app/lib/db";
+import { getEvalWeights, updateEvalWeights } from "@/app/lib/db";
+import { EVALUATION_CRITERIA, defaultEvalWeights } from "@/app/lib/evaluation-criteria";
 
 export default function ConfigPage() {
   const [loading, setLoading] = useState(true);
@@ -17,48 +18,47 @@ export default function ConfigPage() {
   const [callContext, setCallContext] = useState("");
   const [userGroupId, setUserGroupId] = useState("");
 
-  // Pesos dos critérios da Prontidão (globais).
-  const [wPrompt, setWPrompt] = useState("30");
-  const [wRoteiro, setWRoteiro] = useState("40");
-  const [wTeste, setWTeste] = useState("30");
+  // Pesos dos critérios de avaliação (key → % como string).
+  const [weights, setWeights] = useState<Record<string, string>>({});
   const [savingWeights, setSavingWeights] = useState(false);
 
   useEffect(() => {
     (async () => {
       const supabase = createClient();
-      const { data } = await supabase.from("app_settings").select("*").maybeSingle();
+      const [{ data }, ew] = await Promise.all([
+        supabase.from("app_settings").select("*").maybeSingle(),
+        getEvalWeights(),
+      ]);
       if (data) {
         setDifficulty(data.default_difficulty ?? "medium");
         setCallContext(data.default_call_context_slug ?? "");
         setUserGroupId(data.default_user_group_id ? String(data.default_user_group_id) : "");
-        if (data.weight_prompt != null) setWPrompt(String(Math.round(data.weight_prompt * 100)));
-        if (data.weight_roteiro != null)
-          setWRoteiro(String(Math.round(data.weight_roteiro * 100)));
-        if (data.weight_teste != null) setWTeste(String(Math.round(data.weight_teste * 100)));
       }
+      const base = defaultEvalWeights();
+      setWeights(
+        Object.fromEntries(
+          EVALUATION_CRITERIA.map((c) => [c.key, String(ew[c.key] ?? base[c.key])]),
+        ),
+      );
       setLoading(false);
     })();
   }, []);
 
   async function saveWeights() {
-    const p = Number(wPrompt);
-    const r = Number(wRoteiro);
-    const t = Number(wTeste);
-    if ([p, r, t].some((n) => Number.isNaN(n) || n < 0)) {
+    const nums = EVALUATION_CRITERIA.map((c) => Number(weights[c.key]));
+    if (nums.some((n) => Number.isNaN(n) || n < 0)) {
       addToast({ title: "Pesos inválidos", color: "warning" });
       return;
     }
-    if (p + r + t !== 100) {
+    if (nums.reduce((a, b) => a + b, 0) !== 100) {
       addToast({ title: "Os pesos devem somar 100%", color: "warning" });
       return;
     }
     setSavingWeights(true);
     try {
-      await updateAppWeights({
-        weight_prompt: p / 100,
-        weight_roteiro: r / 100,
-        weight_teste: t / 100,
-      });
+      await updateEvalWeights(
+        Object.fromEntries(EVALUATION_CRITERIA.map((c) => [c.key, Number(weights[c.key])])),
+      );
       addToast({ title: "Pesos salvos", color: "success" });
     } catch (err) {
       addToast({
@@ -153,45 +153,28 @@ export default function ConfigPage() {
       <Card className="flex flex-col gap-4 p-5">
         <div className="flex flex-col gap-1">
           <h2 className="text-sm font-semibold text-slate-800">
-            Pesos dos critérios da Prontidão
+            Pesos dos critérios de avaliação
           </h2>
           <p className="text-sm text-slate-500">
-            Definem quanto cada critério (Prompt Contextual, Realismo da Fala e Testes) pesa no
-            score de prontidão de cada roleplay, na tela de Prontidão. Valem para todos os
-            roleplays e devem somar 100%.
+            Definem quanto cada critério pesa na qualidade média de cada roleplay, na tela de
+            Prontidão. Valem para todos os roleplays e devem somar 100%.
           </p>
         </div>
         <div className="flex flex-wrap items-start gap-4">
-          <Input
-            label="Prompt Contextual (%)"
-            labelPlacement="outside"
-            type="number"
-            value={wPrompt}
-            onValueChange={setWPrompt}
-            radius="sm"
-            variant="bordered"
-            className="w-40"
-          />
-          <Input
-            label="Realismo da Fala (%)"
-            labelPlacement="outside"
-            type="number"
-            value={wRoteiro}
-            onValueChange={setWRoteiro}
-            radius="sm"
-            variant="bordered"
-            className="w-40"
-          />
-          <Input
-            label="Testes (%)"
-            labelPlacement="outside"
-            type="number"
-            value={wTeste}
-            onValueChange={setWTeste}
-            radius="sm"
-            variant="bordered"
-            className="w-40"
-          />
+          {EVALUATION_CRITERIA.map((c) => (
+            <Input
+              key={c.key}
+              label={`${c.label} (%)`}
+              labelPlacement="outside"
+              type="number"
+              description={c.description}
+              value={weights[c.key] ?? ""}
+              onValueChange={(v) => setWeights((prev) => ({ ...prev, [c.key]: v }))}
+              radius="sm"
+              variant="bordered"
+              className="w-52"
+            />
+          ))}
         </div>
         <div className="flex justify-end">
           <Button onPress={saveWeights} isLoading={savingWeights}>

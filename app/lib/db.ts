@@ -6,11 +6,15 @@ import type {
   Connection,
   CriteriaWeights,
   DraftRow,
+  EvalWeights,
   ProcessImportResult,
+  Profile,
+  RoleplayEvaluation,
   RoleplayReadiness,
   ScenarioConfig,
   TrackingClient,
 } from "@/app/lib/types";
+import { defaultEvalWeights } from "@/app/lib/evaluation-criteria";
 
 const DEFAULT_WEIGHTS: CriteriaWeights = {
   weight_prompt: 0.3,
@@ -253,6 +257,106 @@ export async function updateReadiness(id: string, patch: Partial<RoleplayReadine
 export async function deleteReadiness(id: string) {
   const supabase = createClient();
   const { error } = await supabase.from("roleplay_readiness").delete().eq("id", id);
+  if (error) throw error;
+}
+
+// ── Avaliação de qualidade (profiles, evaluations, pesos) ───────────────────
+
+/** Roster de avaliadores (todos os usuários do app). */
+export async function listProfiles(): Promise<Profile[]> {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from("profiles")
+    .select("id, email, display_name")
+    .order("email", { ascending: true });
+  if (error) throw error;
+  return data as Profile[];
+}
+
+/** Rede de segurança: garante que o usuário logado exista no roster. */
+export async function upsertOwnProfile(): Promise<void> {
+  const supabase = createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) throw new Error("Sessão expirada");
+  const { error } = await supabase
+    .from("profiles")
+    .upsert({ id: user.id, email: user.email ?? null }, { onConflict: "id" });
+  if (error) throw error;
+}
+
+export async function listEvaluations(readinessIds: string[]): Promise<RoleplayEvaluation[]> {
+  if (readinessIds.length === 0) return [];
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from("roleplay_evaluations")
+    .select("*")
+    .in("readiness_id", readinessIds);
+  if (error) throw error;
+  return data as RoleplayEvaluation[];
+}
+
+export async function upsertEvaluation(params: {
+  readinessId: string;
+  scores: Record<string, number>;
+  comments: Record<string, string>;
+  overallComment: string | null;
+}): Promise<RoleplayEvaluation> {
+  const supabase = createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) throw new Error("Sessão expirada");
+  const { data, error } = await supabase
+    .from("roleplay_evaluations")
+    .upsert(
+      {
+        readiness_id: params.readinessId,
+        evaluator_id: user.id,
+        scores: params.scores,
+        comments: params.comments,
+        overall_comment: params.overallComment,
+      },
+      { onConflict: "readiness_id,evaluator_id" },
+    )
+    .select("*")
+    .single();
+  if (error) throw error;
+  return data as RoleplayEvaluation;
+}
+
+export async function deleteOwnEvaluation(readinessId: string): Promise<void> {
+  const supabase = createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) throw new Error("Sessão expirada");
+  const { error } = await supabase
+    .from("roleplay_evaluations")
+    .delete()
+    .eq("readiness_id", readinessId)
+    .eq("evaluator_id", user.id);
+  if (error) throw error;
+}
+
+export async function getEvalWeights(): Promise<EvalWeights> {
+  const supabase = createClient();
+  const { data, error } = await supabase.from("app_settings").select("eval_weights").maybeSingle();
+  if (error) throw error;
+  const w = (data?.eval_weights ?? null) as EvalWeights | null;
+  return w && Object.keys(w).length ? w : defaultEvalWeights();
+}
+
+export async function updateEvalWeights(weights: EvalWeights): Promise<void> {
+  const supabase = createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) throw new Error("Sessão expirada");
+  const { error } = await supabase
+    .from("app_settings")
+    .upsert({ created_by: user.id, eval_weights: weights }, { onConflict: "created_by" });
   if (error) throw error;
 }
 

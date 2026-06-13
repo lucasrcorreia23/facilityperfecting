@@ -15,12 +15,12 @@ import {
 } from "@heroui/react";
 import {
   PlusIcon,
-  InformationCircleIcon,
   TrashIcon,
   DocumentTextIcon,
   ArrowTopRightOnSquareIcon,
   ClipboardDocumentIcon,
   PencilSquareIcon,
+  StarIcon,
 } from "@heroicons/react/24/outline";
 import { Card } from "@/app/components/ui/card";
 import { Button } from "@/app/components/ui/button";
@@ -34,77 +34,57 @@ import {
 } from "@/app/components/ui/readiness-status-badge";
 import { ScriptView } from "@/app/components/roleplay-script-view";
 import { managerSelectClassNames } from "@/app/lib/select-classnames";
-import { computeScore, computeKpis, formatScorePct } from "@/app/lib/readiness";
+import { cn } from "@/app/lib/cn";
+import {
+  aggregateRoleplay,
+  computeEvaluationKpis,
+  displayNameFor,
+  formatPct,
+  formatScore5,
+  initialsFor,
+  type RoleplayAggregate,
+} from "@/app/lib/evaluation";
+import { EVALUATION_CRITERIA, SCORE_MAX, SCORE_MIN } from "@/app/lib/evaluation-criteria";
 import { resolveRoteiro, scriptToText } from "@/app/lib/roleplay-scripts";
+import { createClient } from "@/app/lib/supabase/client";
 import {
   createReadiness,
   createTrackingClient,
+  deleteOwnEvaluation,
   deleteReadiness,
-  getAppWeights,
+  getEvalWeights,
+  listEvaluations,
+  listProfiles,
   listReadiness,
   listTrackingClients,
   updateReadiness,
+  upsertEvaluation,
+  upsertOwnProfile,
 } from "@/app/lib/db";
 import type {
-  CriteriaWeights,
+  EvalWeights,
+  Profile,
   ReadinessStatus,
+  RoleplayEvaluation,
   RoleplayReadiness,
   TrackingClient,
 } from "@/app/lib/types";
 
-const SCORE_OPTIONS = [
-  { key: "0", label: "Não feito" },
-  { key: "0.5", label: "Parcial" },
-  { key: "1", label: "OK" },
-];
 const STATUS_KEYS = Object.keys(READINESS_STATUS_META) as ReadinessStatus[];
-
-// Critérios de análise: campo de nota + campo de observação ("o que falta") + rótulo.
-const CRITERIA = [
-  { score: "score_prompt", note: "note_prompt", label: "Prompt Contextual" },
-  { score: "score_roteiro", note: "note_roteiro", label: "Realismo da Fala" },
-  { score: "score_teste", note: "note_teste", label: "Testes" },
-] as const;
-
-type CriterionScore = (typeof CRITERIA)[number]["score"];
-type CriterionNote = (typeof CRITERIA)[number]["note"];
-
-// Campos que entram no lote de edição (Salvar/Descartar alterações).
-const EDITABLE_FIELDS = [
-  "score_prompt",
-  "score_roteiro",
-  "score_teste",
-  "note_prompt",
-  "note_roteiro",
-  "note_teste",
-  "status",
-] as const;
-
-interface NoteModalState {
-  rowId: string;
-  noteField: CriterionNote;
-  label: string;
-  value: string;
-  /** true = abriu pelo ícone de info (só consulta/edição); false = veio do select Parcial. */
-  fromInfo: boolean;
-}
 
 export default function ProntidaoPage() {
   const [clients, setClients] = useState<TrackingClient[]>([]);
   const [clientId, setClientId] = useState("");
   const [rows, setRows] = useState<RoleplayReadiness[]>([]);
-  const [baseline, setBaseline] = useState<RoleplayReadiness[]>([]);
   const [loading, setLoading] = useState(true);
   const [rowsLoading, setRowsLoading] = useState(false);
-  const [saving, setSaving] = useState(false);
   const [confirm, setConfirm] = useState<ConfirmConfig | null>(null);
 
-  // pesos globais dos critérios (editados em Configurações)
-  const [weights, setWeights] = useState<CriteriaWeights>({
-    weight_prompt: 0.3,
-    weight_roteiro: 0.4,
-    weight_teste: 0.3,
-  });
+  // avaliação
+  const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [evals, setEvals] = useState<RoleplayEvaluation[]>([]);
+  const [evalWeights, setEvalWeights] = useState<EvalWeights>({});
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
 
   // modais
   const [scriptRowId, setScriptRowId] = useState<string | null>(null);
@@ -116,38 +96,45 @@ export default function ProntidaoPage() {
   const [newRpOpen, setNewRpOpen] = useState(false);
   const [newRpName, setNewRpName] = useState("");
   const [newRpPersona, setNewRpPersona] = useState("");
-  const [noteModal, setNoteModal] = useState<NoteModalState | null>(null);
+
+  // modal de avaliação
+  const [evalRowId, setEvalRowId] = useState<string | null>(null);
+  const [evalTab, setEvalTab] = useState<"minha" | "consolidado">("minha");
+  const [myScores, setMyScores] = useState<Record<string, number>>({});
+  const [myComments, setMyComments] = useState<Record<string, string>>({});
+  const [myOverall, setMyOverall] = useState("");
+  const [evalSaving, setEvalSaving] = useState(false);
 
   const client = useMemo(() => clients.find((c) => c.id === clientId) ?? null, [clients, clientId]);
+  const profileById = useMemo(() => new Map(profiles.map((p) => [p.id, p])), [profiles]);
 
   const loadRows = useCallback(async (id: string) => {
     setRowsLoading(true);
     try {
       const data = await listReadiness(id);
       setRows(data);
-      setBaseline(data);
+      setEvals(await listEvaluations(data.map((r) => r.id)));
     } finally {
       setRowsLoading(false);
     }
   }, []);
 
-  // Linhas com edições pendentes (diferem do baseline nos campos editáveis).
-  const dirtyIds = useMemo(() => {
-    const base = new Map(baseline.map((r) => [r.id, r]));
-    return rows
-      .filter((r) => {
-        const b = base.get(r.id);
-        return !b || EDITABLE_FIELDS.some((f) => r[f] !== b[f]);
-      })
-      .map((r) => r.id);
-  }, [rows, baseline]);
-  const isDirty = dirtyIds.length > 0;
-
   useEffect(() => {
     void (async () => {
-      const [cs, w] = await Promise.all([listTrackingClients(), getAppWeights()]);
+      const supabase = createClient();
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      setCurrentUserId(user?.id ?? null);
+      await upsertOwnProfile().catch(() => {});
+      const [cs, w, ps] = await Promise.all([
+        listTrackingClients(),
+        getEvalWeights(),
+        listProfiles(),
+      ]);
       setClients(cs);
-      setWeights(w);
+      setEvalWeights(w);
+      setProfiles(ps);
       const first = cs.find((c) => c.name === "RD") ?? cs[0];
       if (first) {
         setClientId(first.id);
@@ -159,60 +146,47 @@ export default function ProntidaoPage() {
 
   async function selectClient(id: string) {
     if (id === clientId) return;
-    const go = async () => {
-      setClientId(id);
-      await loadRows(id);
-    };
-    if (isDirty) {
-      setConfirm({
-        title: "Descartar alterações não salvas?",
-        message: "Você tem alterações não salvas neste cliente. Trocar de cliente vai descartá-las.",
-        confirmLabel: "Descartar e trocar",
-        onConfirm: () => void go(),
-      });
-      return;
+    setClientId(id);
+    await loadRows(id);
+  }
+
+  // Agregados por roleplay e KPIs do conjunto.
+  const aggregates = useMemo(() => {
+    const byRow = new Map<string, RoleplayEvaluation[]>();
+    for (const e of evals) {
+      const arr = byRow.get(e.readiness_id);
+      if (arr) arr.push(e);
+      else byRow.set(e.readiness_id, [e]);
     }
-    await go();
-  }
+    const m = new Map<string, RoleplayAggregate>();
+    for (const r of rows) m.set(r.id, aggregateRoleplay(r.id, byRow.get(r.id) ?? [], evalWeights));
+    return m;
+  }, [rows, evals, evalWeights]);
 
-  /** Edita uma linha apenas localmente (entra no lote de Salvar/Descartar). */
-  function editRow(id: string, patch: Partial<RoleplayReadiness>) {
-    setRows((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)));
-  }
+  const kpis = useMemo(() => computeEvaluationKpis(rows, aggregates), [rows, aggregates]);
 
-  async function saveChanges() {
-    setSaving(true);
+  /** Salva o status direto (sem lote), com update otimista. */
+  async function changeStatus(row: RoleplayReadiness, status: ReadinessStatus) {
+    if (status === row.status) return;
+    const prev = row.status;
+    setRows((rs) => rs.map((r) => (r.id === row.id ? { ...r, status } : r)));
     try {
-      const dirtySet = new Set(dirtyIds);
-      const toSave = rows.filter((r) => dirtySet.has(r.id));
-      for (const r of toSave) {
-        const patch = Object.fromEntries(
-          EDITABLE_FIELDS.map((f) => [f, r[f]]),
-        ) as Partial<RoleplayReadiness>;
-        await updateReadiness(r.id, patch);
-      }
-      setBaseline(rows);
-      addToast({ title: "Alterações salvas", color: "success" });
+      await updateReadiness(row.id, { status });
     } catch (err) {
+      setRows((rs) => rs.map((r) => (r.id === row.id ? { ...r, status: prev } : r)));
       addToast({
-        title: "Erro ao salvar alterações",
+        title: "Erro ao salvar status",
         description: err instanceof Error ? err.message : String(err),
         color: "danger",
       });
-    } finally {
-      setSaving(false);
     }
-  }
-
-  function discardChanges() {
-    setRows(baseline);
   }
 
   async function removeRow(id: string) {
     try {
       await deleteReadiness(id);
       setRows((prev) => prev.filter((r) => r.id !== id));
-      setBaseline((prev) => prev.filter((r) => r.id !== id));
+      setEvals((prev) => prev.filter((e) => e.readiness_id !== id));
     } catch (err) {
       addToast({
         title: "Erro ao excluir",
@@ -222,55 +196,19 @@ export default function ProntidaoPage() {
     }
   }
 
-  /** Mudança de nota num critério; ao escolher "Parcial" abre o modal de "o que falta". */
-  function handleScoreChange(
-    row: RoleplayReadiness,
-    scoreField: CriterionScore,
-    noteField: CriterionNote,
-    label: string,
-    value: number,
-  ) {
-    editRow(row.id, { [scoreField]: value });
-    if (value === 0.5) {
-      setNoteModal({
-        rowId: row.id,
-        noteField,
-        label,
-        value: row[noteField] ?? "",
-        fromInfo: false,
-      });
-    }
-  }
-
-  /** Abre o modal a partir do ícone de info (consulta/edição do que falta). */
-  function openNote(row: RoleplayReadiness, noteField: CriterionNote, label: string) {
-    setNoteModal({ rowId: row.id, noteField, label, value: row[noteField] ?? "", fromInfo: true });
-  }
-
-  function saveNote() {
-    if (!noteModal) return;
-    const { rowId, noteField, value } = noteModal;
-    setNoteModal(null);
-    editRow(rowId, { [noteField]: value.trim() || null });
-  }
-
   /** Abre o modal de roteiro de um roleplay (modo leitura). */
   function openScript(row: RoleplayReadiness) {
     setScriptRowId(row.id);
     setScriptEditing(false);
   }
 
-  /** Salva o roteiro editado direto na linha (fora do lote de edição). */
   async function saveRoteiro() {
     if (!scriptRowId) return;
     const value = scriptDraft.trim() || null;
     setScriptSaving(true);
     try {
       await updateReadiness(scriptRowId, { roteiro: value });
-      const apply = (r: RoleplayReadiness) =>
-        r.id === scriptRowId ? { ...r, roteiro: value } : r;
-      setRows((prev) => prev.map(apply));
-      setBaseline((prev) => prev.map(apply));
+      setRows((prev) => prev.map((r) => (r.id === scriptRowId ? { ...r, roteiro: value } : r)));
       setScriptEditing(false);
       addToast({ title: "Roteiro salvo", color: "success" });
     } catch (err) {
@@ -281,6 +219,81 @@ export default function ProntidaoPage() {
       });
     } finally {
       setScriptSaving(false);
+    }
+  }
+
+  /** Abre o modal de avaliação, pré-preenchendo a avaliação do usuário atual. */
+  function openEval(row: RoleplayReadiness) {
+    const mine = evals.find((e) => e.readiness_id === row.id && e.evaluator_id === currentUserId);
+    setMyScores(mine?.scores ?? {});
+    setMyComments(mine?.comments ?? {});
+    setMyOverall(mine?.overall_comment ?? "");
+    setEvalTab("minha");
+    setEvalRowId(row.id);
+  }
+
+  function setScore(key: string, n: number) {
+    setMyScores((prev) => {
+      const next = { ...prev };
+      if (next[key] === n) delete next[key];
+      else next[key] = n;
+      return next;
+    });
+  }
+
+  async function saveEval() {
+    if (!evalRowId) return;
+    const scores: Record<string, number> = {};
+    const comments: Record<string, string> = {};
+    for (const c of EVALUATION_CRITERIA) {
+      const v = myScores[c.key];
+      if (typeof v === "number" && v >= SCORE_MIN && v <= SCORE_MAX) scores[c.key] = v;
+      const note = (myComments[c.key] ?? "").trim();
+      if (note) comments[c.key] = note;
+    }
+    setEvalSaving(true);
+    try {
+      const saved = await upsertEvaluation({
+        readinessId: evalRowId,
+        scores,
+        comments,
+        overallComment: myOverall.trim() || null,
+      });
+      setEvals((prev) => [
+        ...prev.filter(
+          (e) => !(e.readiness_id === saved.readiness_id && e.evaluator_id === saved.evaluator_id),
+        ),
+        saved,
+      ]);
+      addToast({ title: "Avaliação salva", color: "success" });
+    } catch (err) {
+      addToast({
+        title: "Erro ao salvar avaliação",
+        description: err instanceof Error ? err.message : String(err),
+        color: "danger",
+      });
+    } finally {
+      setEvalSaving(false);
+    }
+  }
+
+  async function removeMyEval() {
+    if (!evalRowId) return;
+    try {
+      await deleteOwnEvaluation(evalRowId);
+      setEvals((prev) =>
+        prev.filter((e) => !(e.readiness_id === evalRowId && e.evaluator_id === currentUserId)),
+      );
+      setMyScores({});
+      setMyComments({});
+      setMyOverall("");
+      addToast({ title: "Avaliação removida", color: "success" });
+    } catch (err) {
+      addToast({
+        title: "Erro ao remover avaliação",
+        description: err instanceof Error ? err.message : String(err),
+        color: "danger",
+      });
     }
   }
 
@@ -315,7 +328,6 @@ export default function ProntidaoPage() {
         position,
       });
       setRows((prev) => [...prev, row]);
-      setBaseline((prev) => [...prev, row]);
       setNewRpOpen(false);
       setNewRpName("");
       setNewRpPersona("");
@@ -328,15 +340,17 @@ export default function ProntidaoPage() {
     }
   }
 
-  const kpis = useMemo(() => (client ? computeKpis(rows, weights) : null), [rows, client, weights]);
-
   if (loading) return <LoadingView label="Carregando prontidão…" />;
+
+  const evalRow = evalRowId ? rows.find((r) => r.id === evalRowId) ?? null : null;
+  const evalAgg = evalRowId ? aggregates.get(evalRowId) ?? null : null;
+  const evalRowEvals = evalRowId ? evals.filter((e) => e.readiness_id === evalRowId) : [];
 
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
         title="Prontidão dos Roleplays"
-        description="Acompanhe o quanto cada roleplay já está pronto para ir ao ar — avalie cada etapa e veja a evolução por cliente."
+        description="Cada pessoa avalia a qualidade de cada roleplay em vários critérios; o score é a média ponderada das avaliações."
         action={
           <div className="flex items-end gap-2">
             <Select
@@ -373,14 +387,14 @@ export default function ProntidaoPage() {
         <>
           {/* KPIs do conjunto */}
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
-            <Kpi label="Score médio" value={formatScorePct(kpis!.scoreMedio)} />
-            <Kpi label="% prontos" value={formatScorePct(kpis!.pctProntos)} />
-            <Kpi label="% testados" value={formatScorePct(kpis!.pctTestados)} />
-            <Kpi label="Bloqueios" value={String(kpis!.bloqueios)} />
-            <Kpi label="Total" value={String(kpis!.total)} />
+            <Kpi label="Score médio" value={formatScore5(kpis.scoreMedio)} />
+            <Kpi label="% avaliados" value={formatPct(kpis.pctAvaliados)} />
+            <Kpi label="Pendências" value={String(kpis.pendencias)} />
+            <Kpi label="Bloqueios" value={String(kpis.bloqueios)} />
+            <Kpi label="Total" value={String(kpis.total)} />
           </div>
 
-          {/* Tabela editável */}
+          {/* Tabela */}
           {rows.length === 0 && !rowsLoading ? (
             <EmptyState
               title="Nenhum roleplay neste cliente"
@@ -393,126 +407,120 @@ export default function ProntidaoPage() {
                 <thead className="bg-slate-50 border-b border-slate-200">
                   <tr className="text-xs font-semibold uppercase tracking-wider text-slate-600">
                     <th className="px-4 py-2.5 text-left">Roleplay</th>
-                    <th className="px-3 py-2.5 text-left">Prompt Contextual</th>
-                    <th className="px-3 py-2.5 text-left">Realismo da Fala</th>
-                    <th className="px-3 py-2.5 text-left">Testes</th>
-                    <th className="px-3 py-2.5 text-left">Score</th>
+                    <th className="px-3 py-2.5 text-left">Qualidade</th>
+                    <th className="px-3 py-2.5 text-left">Avaliações</th>
                     <th className="px-3 py-2.5 text-left">Status</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.map((r) => (
-                    <tr
-                      key={r.id}
-                      className="group border-b border-slate-100 align-middle text-sm text-slate-800"
-                    >
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-2">
-                          <div className="min-w-0">
-                            <div className="font-medium" title={r.persona ?? r.name}>
-                              {(r.persona ?? r.name).split("—")[0].trim()}
+                  {rows.map((r) => {
+                    const agg = aggregates.get(r.id);
+                    const raterCount = agg?.evaluatorCount ?? 0;
+                    return (
+                      <tr
+                        key={r.id}
+                        className="group border-b border-slate-100 align-middle text-sm text-slate-800"
+                      >
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-2">
+                            <div className="min-w-0">
+                              <div className="font-medium" title={r.persona ?? r.name}>
+                                {(r.persona ?? r.name).split("—")[0].trim()}
+                              </div>
+                              {r.persona && <div className="text-xs text-slate-500">{r.name}</div>}
                             </div>
-                            {r.persona && (
-                              <div className="text-xs text-slate-500">{r.name}</div>
-                            )}
+                            <button
+                              type="button"
+                              aria-label="Ver roteiro"
+                              title="Ver roteiro do roleplay"
+                              className="shrink-0 text-slate-400 opacity-0 transition-opacity hover:text-blue-600 focus-visible:opacity-100 group-hover:opacity-100"
+                              onClick={() => openScript(r)}
+                            >
+                              <DocumentTextIcon className="h-4 w-4" />
+                            </button>
+                            <button
+                              type="button"
+                              aria-label="Excluir roleplay"
+                              title="Excluir roleplay"
+                              className="shrink-0 text-slate-400 opacity-0 transition-opacity hover:text-red-600 focus-visible:opacity-100 group-hover:opacity-100"
+                              onClick={() =>
+                                setConfirm({
+                                  title: "Excluir roleplay?",
+                                  message: (
+                                    <>
+                                      Excluir <b>{r.name}</b> do acompanhamento. Esta ação não pode
+                                      ser desfeita.
+                                    </>
+                                  ),
+                                  confirmLabel: "Excluir",
+                                  onConfirm: () => void removeRow(r.id),
+                                })
+                              }
+                            >
+                              <TrashIcon className="h-4 w-4" />
+                            </button>
                           </div>
-                          <button
-                            type="button"
-                            aria-label="Ver roteiro"
-                            title="Ver roteiro do roleplay"
-                            className="shrink-0 text-slate-400 opacity-0 transition-opacity hover:text-blue-600 focus-visible:opacity-100 group-hover:opacity-100"
-                            onClick={() => openScript(r)}
-                          >
-                            <DocumentTextIcon className="h-4 w-4" />
-                          </button>
-                          <button
-                            type="button"
-                            aria-label="Excluir roleplay"
-                            title="Excluir roleplay"
-                            className="shrink-0 text-slate-400 opacity-0 transition-opacity hover:text-red-600 focus-visible:opacity-100 group-hover:opacity-100"
-                            onClick={() =>
-                              setConfirm({
-                                title: "Excluir roleplay?",
-                                message: (
-                                  <>
-                                    Excluir <b>{r.name}</b> do acompanhamento. Esta ação não pode
-                                    ser desfeita.
-                                  </>
-                                ),
-                                confirmLabel: "Excluir",
-                                onConfirm: () => void removeRow(r.id),
-                              })
-                            }
-                          >
-                            <TrashIcon className="h-4 w-4" />
-                          </button>
-                        </div>
-                      </td>
-                      {CRITERIA.map(({ score, note, label }) => (
-                        <td key={score} className="px-3 py-3">
-                          <ScoreSelect
-                            value={r[score]}
-                            onChange={(v) => handleScoreChange(r, score, note, label, v)}
-                            endContent={
-                              r[score] === 0.5 ? (
-                                // <span role="button"> em vez de <button>: o endContent fica
-                                // dentro do <button> do trigger do Select (HTML não permite
-                                // button aninhado).
-                                <span
-                                  role="button"
-                                  tabIndex={0}
-                                  aria-label="O que falta"
-                                  title={r[note] ?? "Descrever o que falta"}
-                                  className="flex shrink-0 cursor-pointer items-center self-center text-blue-500 transition-colors hover:text-blue-700"
-                                  onPointerDown={(e) => {
-                                    // impede o react-aria do Select de abrir o dropdown no pointer-down
-                                    e.stopPropagation();
-                                    e.preventDefault();
-                                    openNote(r, note, label);
-                                  }}
-                                  onKeyDown={(e) => {
-                                    if (e.key === "Enter" || e.key === " ") {
-                                      e.stopPropagation();
-                                      e.preventDefault();
-                                      openNote(r, note, label);
-                                    }
-                                  }}
-                                >
-                                  <InformationCircleIcon className="h-5 w-5" />
-                                </span>
-                              ) : undefined
-                            }
-                          />
                         </td>
-                      ))}
-                      <td className="px-3 py-3 font-semibold tabular-nums">
-                        {formatScorePct(computeScore(r, weights))}
-                      </td>
-                      <td className="px-3 py-3">
-                        <Select
-                          aria-label="Status"
-                          selectedKeys={[r.status]}
-                          onSelectionChange={(k) =>
-                            editRow(r.id, {
-                              status: String(Array.from(k)[0] ?? r.status) as ReadinessStatus,
-                            })
-                          }
-                          radius="sm"
-                          variant="bordered"
-                          size="sm"
-                          className="min-w-[140px]"
-                          classNames={managerSelectClassNames}
-                          renderValue={() => <ReadinessStatusBadge status={r.status} />}
-                        >
-                          {STATUS_KEYS.map((s) => (
-                            <SelectItem key={s} textValue={READINESS_STATUS_META[s].label}>
-                              {READINESS_STATUS_META[s].label}
-                            </SelectItem>
-                          ))}
-                        </Select>
-                      </td>
-                    </tr>
-                  ))}
+                        <td className="px-3 py-3">
+                          <span className="font-semibold tabular-nums">
+                            {formatScore5(agg?.overall ?? null)}
+                          </span>
+                        </td>
+                        <td className="px-3 py-3">
+                          <button
+                            type="button"
+                            onClick={() => openEval(r)}
+                            className="flex items-center gap-2 rounded-sm px-1 py-0.5 hover:bg-slate-50"
+                            title="Avaliar / ver consolidado"
+                          >
+                            {raterCount > 0 ? (
+                              <span className="flex -space-x-1.5">
+                                {agg!.evaluatorIds.slice(0, 4).map((id) => {
+                                  const p = profileById.get(id);
+                                  return (
+                                    <InitialChip
+                                      key={id}
+                                      text={p ? initialsFor(p) : "?"}
+                                      title={p ? displayNameFor(p) : "Avaliador"}
+                                    />
+                                  );
+                                })}
+                              </span>
+                            ) : (
+                              <StarIcon className="h-4 w-4 text-slate-400" />
+                            )}
+                            <span className="text-xs text-slate-500">
+                              {raterCount}/{profiles.length} avaliaram
+                            </span>
+                          </button>
+                        </td>
+                        <td className="px-3 py-3">
+                          <Select
+                            aria-label="Status"
+                            selectedKeys={[r.status]}
+                            onSelectionChange={(k) =>
+                              void changeStatus(
+                                r,
+                                String(Array.from(k)[0] ?? r.status) as ReadinessStatus,
+                              )
+                            }
+                            radius="sm"
+                            variant="bordered"
+                            size="sm"
+                            className="min-w-[140px]"
+                            classNames={managerSelectClassNames}
+                            renderValue={() => <ReadinessStatusBadge status={r.status} />}
+                          >
+                            {STATUS_KEYS.map((s) => (
+                              <SelectItem key={s} textValue={READINESS_STATUS_META[s].label}>
+                                {READINESS_STATUS_META[s].label}
+                              </SelectItem>
+                            ))}
+                          </Select>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
               <div className="flex items-center justify-between gap-2 p-3">
@@ -524,24 +532,6 @@ export default function ProntidaoPage() {
                 >
                   Adicionar roleplay
                 </Button>
-                <div className="flex gap-2">
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    isDisabled={!isDirty || saving}
-                    onPress={discardChanges}
-                  >
-                    Descartar alterações
-                  </Button>
-                  <Button
-                    size="sm"
-                    isDisabled={!isDirty}
-                    isLoading={saving}
-                    onPress={saveChanges}
-                  >
-                    Salvar alterações
-                  </Button>
-                </div>
               </div>
             </Card>
           )}
@@ -607,31 +597,109 @@ export default function ProntidaoPage() {
         </ModalContent>
       </Modal>
 
-      {/* Modal: o que falta (critério Parcial) */}
-      <Modal isOpen={noteModal !== null} onOpenChange={() => setNoteModal(null)} radius="sm">
+      {/* Modal: avaliação */}
+      <Modal
+        isOpen={evalRowId !== null}
+        onOpenChange={(open) => {
+          if (!open) setEvalRowId(null);
+        }}
+        radius="sm"
+        size="3xl"
+        scrollBehavior="inside"
+      >
         <ModalContent>
-          <ModalHeader>{noteModal?.label} — o que falta?</ModalHeader>
-          <ModalBody>
-            <Textarea
-              label="Descreva o que ainda falta para ficar OK"
-              labelPlacement="outside"
-              placeholder="ex.: falas prontas, mas o prompt ainda precisa de ajuste."
-              value={noteModal?.value ?? ""}
-              onValueChange={(v) =>
-                setNoteModal((prev) => (prev ? { ...prev, value: v } : prev))
-              }
-              minRows={4}
-              radius="sm"
-              variant="bordered"
-              autoFocus
-            />
-          </ModalBody>
-          <ModalFooter>
-            <Button variant="secondary" onPress={() => setNoteModal(null)}>
-              Cancelar
-            </Button>
-            <Button onPress={saveNote}>Salvar</Button>
-          </ModalFooter>
+          {evalRow && (
+            <>
+              <ModalHeader className="flex flex-col items-start gap-0.5">
+                <span className="text-xs font-medium uppercase tracking-wide text-slate-400">
+                  Avaliar roleplay
+                </span>
+                <span>{evalRow.persona ?? evalRow.name}</span>
+              </ModalHeader>
+              <ModalBody className="gap-4 pb-2">
+                <div className="flex gap-1 rounded-sm bg-slate-100 p-1 text-sm">
+                  <TabButton active={evalTab === "minha"} onClick={() => setEvalTab("minha")}>
+                    Minha avaliação
+                  </TabButton>
+                  <TabButton
+                    active={evalTab === "consolidado"}
+                    onClick={() => setEvalTab("consolidado")}
+                  >
+                    Consolidado ({evalAgg?.evaluatorCount ?? 0})
+                  </TabButton>
+                </div>
+
+                {evalTab === "minha" ? (
+                  <div className="flex flex-col gap-5">
+                    {EVALUATION_CRITERIA.map((c) => (
+                      <div key={c.key} className="flex flex-col gap-2">
+                        <div>
+                          <div className="text-sm font-medium text-slate-800">{c.label}</div>
+                          <div className="text-xs text-slate-500">{c.description}</div>
+                        </div>
+                        <ScoreButtons value={myScores[c.key]} onChange={(n) => setScore(c.key, n)} />
+                        <Textarea
+                          aria-label={`Comentário — ${c.label}`}
+                          placeholder="Comentário (opcional)"
+                          value={myComments[c.key] ?? ""}
+                          onValueChange={(v) =>
+                            setMyComments((prev) => ({ ...prev, [c.key]: v }))
+                          }
+                          minRows={1}
+                          radius="sm"
+                          variant="bordered"
+                        />
+                      </div>
+                    ))}
+                    <Textarea
+                      label="Comentário geral (opcional)"
+                      labelPlacement="outside"
+                      placeholder="Impressão geral, contexto da rodada avaliada, etc."
+                      value={myOverall}
+                      onValueChange={setMyOverall}
+                      minRows={2}
+                      radius="sm"
+                      variant="bordered"
+                    />
+                    <p className="text-xs text-slate-400">
+                      Clique na nota de novo para desmarcá-la. Você pode avaliar apenas alguns
+                      critérios — o score considera só os que receberam nota.
+                    </p>
+                  </div>
+                ) : (
+                  <ConsolidatedView
+                    agg={evalAgg}
+                    evals={evalRowEvals}
+                    profiles={profiles}
+                    profileById={profileById}
+                    weights={evalWeights}
+                  />
+                )}
+              </ModalBody>
+              <ModalFooter className="justify-between">
+                {evalTab === "minha" &&
+                evals.some(
+                  (e) => e.readiness_id === evalRowId && e.evaluator_id === currentUserId,
+                ) ? (
+                  <Button variant="secondary" onPress={removeMyEval} isDisabled={evalSaving}>
+                    Remover minha avaliação
+                  </Button>
+                ) : (
+                  <span />
+                )}
+                <div className="flex gap-2">
+                  <Button variant="secondary" onPress={() => setEvalRowId(null)}>
+                    Fechar
+                  </Button>
+                  {evalTab === "minha" && (
+                    <Button onPress={saveEval} isLoading={evalSaving}>
+                      Salvar avaliação
+                    </Button>
+                  )}
+                </div>
+              </ModalFooter>
+            </>
+          )}
         </ModalContent>
       </Modal>
 
@@ -675,8 +743,8 @@ export default function ProntidaoPage() {
                         autoFocus
                       />
                       <p className="text-xs text-slate-400">
-                        Aceita markdown (títulos #, **negrito**, listas). Deixe em branco e
-                        salve para voltar ao roteiro padrão.
+                        Aceita markdown (títulos #, **negrito**, listas). Deixe em branco e salve
+                        para voltar ao roteiro padrão.
                       </p>
                     </ModalBody>
                     <ModalFooter>
@@ -699,8 +767,7 @@ export default function ProntidaoPage() {
                         <ScriptView markdown={body} />
                       ) : (
                         <p className="text-sm text-slate-500">
-                          Este roleplay ainda não tem roteiro. Clique em “Editar” para
-                          adicionar.
+                          Este roleplay ainda não tem roteiro. Clique em “Editar” para adicionar.
                         </p>
                       )}
                     </ModalBody>
@@ -764,33 +831,169 @@ function Kpi({ label, value }: { label: string; value: string }) {
   );
 }
 
-function ScoreSelect({
-  value,
-  onChange,
-  endContent,
+function TabButton({
+  active,
+  onClick,
+  children,
 }: {
-  value: number;
-  onChange: (v: number) => void;
-  endContent?: React.ReactNode;
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
 }) {
   return (
-    <Select
-      aria-label="Nota"
-      selectedKeys={[String(value)]}
-      onSelectionChange={(k) => onChange(Number(Array.from(k)[0] ?? value))}
-      radius="sm"
-      variant="bordered"
-      size="sm"
-      className="min-w-[140px]"
-      classNames={{ ...managerSelectClassNames, innerWrapper: "items-center" }}
-      endContent={endContent}
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "flex-1 rounded-sm px-3 py-1.5 font-medium transition-colors",
+        active ? "bg-white text-slate-800 shadow-[var(--shadow-sm)]" : "text-slate-500 hover:text-slate-700",
+      )}
     >
-      {SCORE_OPTIONS.map((o) => (
-        <SelectItem key={o.key} textValue={o.label}>
-          {o.label}
-        </SelectItem>
-      ))}
-    </Select>
+      {children}
+    </button>
   );
 }
 
+function ScoreButtons({
+  value,
+  onChange,
+}: {
+  value?: number;
+  onChange: (v: number) => void;
+}) {
+  return (
+    <div className="flex gap-1.5">
+      {[1, 2, 3, 4, 5].map((n) => (
+        <button
+          key={n}
+          type="button"
+          onClick={() => onChange(n)}
+          aria-pressed={value === n}
+          className={cn(
+            "h-9 w-9 rounded-sm border text-sm font-medium tabular-nums transition-colors",
+            value === n
+              ? "border-[var(--primary)] bg-[var(--primary)] text-white"
+              : "border-slate-200 text-slate-600 hover:bg-slate-50",
+          )}
+        >
+          {n}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function InitialChip({ text, title, muted }: { text: string; title?: string; muted?: boolean }) {
+  return (
+    <span
+      title={title}
+      className={cn(
+        "inline-flex h-6 w-6 items-center justify-center rounded-full border border-white text-[10px] font-semibold ring-1 ring-slate-200",
+        muted ? "bg-slate-100 text-slate-400" : "bg-blue-100 text-blue-700",
+      )}
+    >
+      {text}
+    </span>
+  );
+}
+
+function ConsolidatedView({
+  agg,
+  evals,
+  profiles,
+  profileById,
+  weights,
+}: {
+  agg: RoleplayAggregate | null;
+  evals: RoleplayEvaluation[];
+  profiles: Profile[];
+  profileById: Map<string, Profile>;
+  weights: EvalWeights;
+}) {
+  const ratedIds = new Set(agg?.evaluatorIds ?? []);
+  const pendentes = profiles.filter((p) => !ratedIds.has(p.id));
+
+  return (
+    <div className="flex flex-col gap-5">
+      <div className="flex items-center justify-between rounded-sm bg-slate-50 px-4 py-3">
+        <span className="text-sm font-medium text-slate-600">Qualidade geral</span>
+        <span className="text-lg font-semibold tabular-nums text-slate-800">
+          {formatScore5(agg?.overall ?? null)}
+        </span>
+      </div>
+
+      <div className="flex flex-col gap-2">
+        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+          Médias por critério
+        </div>
+        {EVALUATION_CRITERIA.map((c) => {
+          const pc = agg?.perCriterion.find((p) => p.key === c.key);
+          return (
+            <div
+              key={c.key}
+              className="flex items-center justify-between border-b border-slate-100 py-1.5 text-sm"
+            >
+              <span className="text-slate-700">{c.label}</span>
+              <span className="tabular-nums text-slate-500">
+                {pc && pc.average !== null ? (
+                  <>
+                    <span className="font-semibold text-slate-800">
+                      {pc.average.toFixed(1).replace(".", ",")}
+                    </span>{" "}
+                    / {SCORE_MAX} · {pc.count}
+                  </>
+                ) : (
+                  "—"
+                )}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="flex flex-col gap-2">
+        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+          Quem avaliou
+        </div>
+        {evals.length === 0 ? (
+          <p className="text-sm text-slate-500">Ninguém avaliou ainda.</p>
+        ) : (
+          evals.map((e) => {
+            const p = profileById.get(e.evaluator_id);
+            const overall = aggregateRoleplay(e.readiness_id, [e], weights).overall;
+            return (
+              <div key={e.id} className="flex items-center justify-between py-1 text-sm">
+                <span className="flex items-center gap-2">
+                  <InitialChip text={p ? initialsFor(p) : "?"} />
+                  <span className="text-slate-700">{p ? displayNameFor(p) : "Avaliador"}</span>
+                </span>
+                <span className="font-semibold tabular-nums text-slate-800">
+                  {formatScore5(overall)}
+                </span>
+              </div>
+            );
+          })
+        )}
+      </div>
+
+      {pendentes.length > 0 && (
+        <div className="flex flex-col gap-2">
+          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+            Pendentes
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {pendentes.map((p) => (
+              <span
+                key={p.id}
+                className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-500"
+              >
+                <InitialChip text={initialsFor(p)} muted />
+                {displayNameFor(p)}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

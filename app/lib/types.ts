@@ -121,6 +121,7 @@ export interface AppSettings {
   weight_prompt: number;
   weight_roteiro: number;
   weight_teste: number;
+  eval_weights?: EvalWeights;
 }
 
 /** Pesos dos critérios do IPR (somam 1). */
@@ -161,6 +162,28 @@ export interface RoleplayReadiness {
   roteiro: string | null;
   position: number;
   created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// ── Avaliação de qualidade (multi-avaliador) ────────────────────────────────
+
+export interface Profile {
+  id: string;
+  email: string | null;
+  display_name: string | null;
+}
+
+/** Pesos dos critérios de avaliação: key do critério → peso (%); somam 100. */
+export type EvalWeights = Record<string, number>;
+
+export interface RoleplayEvaluation {
+  id: string;
+  readiness_id: string;
+  evaluator_id: string;
+  scores: Record<string, number>; // key do critério → 1..5
+  comments: Record<string, string>; // key do critério → texto
+  overall_comment: string | null;
   created_at: string;
   updated_at: string;
 }
