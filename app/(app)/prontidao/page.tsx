@@ -33,6 +33,8 @@ import {
   ReadinessStatusBadge,
   READINESS_STATUS_META,
 } from "@/app/components/ui/readiness-status-badge";
+import { ConsolidatedView } from "@/app/components/evaluation/consolidated-view";
+import { EvaluationsTabView } from "@/app/components/evaluation/evaluations-tab-view";
 import { ScriptView } from "@/app/components/roleplay-script-view";
 import { managerSelectClassNames } from "@/app/lib/select-classnames";
 import { cn } from "@/app/lib/cn";
@@ -100,7 +102,7 @@ export default function ProntidaoPage() {
 
   // modal de avaliação
   const [evalRowId, setEvalRowId] = useState<string | null>(null);
-  const [evalTab, setEvalTab] = useState<"minha" | "consolidado">("minha");
+  const [evalTab, setEvalTab] = useState<"minha" | "consolidado" | "avaliacoes">("minha");
   const [myScores, setMyScores] = useState<Record<string, number>>({});
   const [myComments, setMyComments] = useState<Record<string, string>>({});
   const [myOverall, setMyOverall] = useState("");
@@ -652,7 +654,13 @@ export default function ProntidaoPage() {
                     active={evalTab === "consolidado"}
                     onClick={() => setEvalTab("consolidado")}
                   >
-                    Consolidado ({evalAgg?.evaluatorCount ?? 0})
+                    Consolidado
+                  </TabButton>
+                  <TabButton
+                    active={evalTab === "avaliacoes"}
+                    onClick={() => setEvalTab("avaliacoes")}
+                  >
+                    Avaliações ({profiles.length})
                   </TabButton>
                 </div>
 
@@ -693,13 +701,16 @@ export default function ProntidaoPage() {
                       critérios — o score considera só os que receberam nota.
                     </p>
                   </div>
+                ) : evalTab === "consolidado" ? (
+                  <ConsolidatedView agg={evalAgg} />
                 ) : (
-                  <ConsolidatedView
-                    agg={evalAgg}
-                    evals={evalRowEvals}
+                  <EvaluationsTabView
                     profiles={profiles}
-                    profileById={profileById}
+                    evals={evalRowEvals}
                     weights={evalWeights}
+                    currentUserId={currentUserId}
+                    readinessId={evalRowId!}
+                    agg={evalAgg}
                   />
                 )}
               </ModalBody>
@@ -921,106 +932,5 @@ function InitialChip({ text, title, muted }: { text: string; title?: string; mut
     >
       {text}
     </span>
-  );
-}
-
-function ConsolidatedView({
-  agg,
-  evals,
-  profiles,
-  profileById,
-  weights,
-}: {
-  agg: RoleplayAggregate | null;
-  evals: RoleplayEvaluation[];
-  profiles: Profile[];
-  profileById: Map<string, Profile>;
-  weights: EvalWeights;
-}) {
-  const ratedIds = new Set(agg?.evaluatorIds ?? []);
-  const pendentes = profiles.filter((p) => !ratedIds.has(p.id));
-
-  return (
-    <div className="flex flex-col gap-5">
-      <div className="flex items-center justify-between rounded-sm bg-slate-50 px-4 py-3">
-        <span className="text-sm font-medium text-slate-600">Qualidade geral</span>
-        <span className="text-lg font-semibold tabular-nums text-slate-800">
-          {formatScore5(agg?.overall ?? null)}
-        </span>
-      </div>
-
-      <div className="flex flex-col gap-2">
-        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-          Médias por critério
-        </div>
-        {EVALUATION_CRITERIA.map((c) => {
-          const pc = agg?.perCriterion.find((p) => p.key === c.key);
-          return (
-            <div
-              key={c.key}
-              className="flex items-center justify-between border-b border-slate-100 py-1.5 text-sm"
-            >
-              <span className="text-slate-700">{c.label}</span>
-              <span className="tabular-nums text-slate-500">
-                {pc && pc.average !== null ? (
-                  <>
-                    <span className="font-semibold text-slate-800">
-                      {pc.average.toFixed(1).replace(".", ",")}
-                    </span>{" "}
-                    / {SCORE_MAX} · {pc.count}
-                  </>
-                ) : (
-                  "—"
-                )}
-              </span>
-            </div>
-          );
-        })}
-      </div>
-
-      <div className="flex flex-col gap-2">
-        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-          Quem avaliou
-        </div>
-        {evals.length === 0 ? (
-          <p className="text-sm text-slate-500">Ninguém avaliou ainda.</p>
-        ) : (
-          evals.map((e) => {
-            const p = profileById.get(e.evaluator_id);
-            const overall = aggregateRoleplay(e.readiness_id, [e], weights).overall;
-            return (
-              <div key={e.id} className="flex items-center justify-between py-1 text-sm">
-                <span className="flex items-center gap-2">
-                  <InitialChip text={p ? initialsFor(p) : "?"} />
-                  <span className="text-slate-700">{p ? displayNameFor(p) : "Avaliador"}</span>
-                </span>
-                <span className="font-semibold tabular-nums text-slate-800">
-                  {formatScore5(overall)}
-                </span>
-              </div>
-            );
-          })
-        )}
-      </div>
-
-      {pendentes.length > 0 && (
-        <div className="flex flex-col gap-2">
-          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-            Pendentes
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {pendentes.map((p) => (
-              <span
-                key={p.id}
-                className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-500"
-              >
-                <InitialChip text={initialsFor(p)} muted />
-                {displayNameFor(p)}
-              </span>
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
   );
 }

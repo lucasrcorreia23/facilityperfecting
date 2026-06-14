@@ -99,6 +99,12 @@ export function formatScore5(n: number | null): string {
   return `${n.toFixed(1).replace(".", ",")} / ${SCORE_MAX}`;
 }
 
+/** Nota inteira de um critério (1..5) ou "—" quando inválida/ausente. */
+export function formatCriterionScore(n: unknown): string {
+  if (!validScore(n)) return "—";
+  return `${n} / ${SCORE_MAX}`;
+}
+
 /** Percentual inteiro a partir de uma fração 0..1 (ex.: 0.5 → "50%"). */
 export function formatPct(frac: number): string {
   return `${Math.round(frac * 100)}%`;
