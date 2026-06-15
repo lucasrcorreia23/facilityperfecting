@@ -1,22 +1,15 @@
--- Seed do cliente FIESC com roleplays MBI / SENAI / SESI (idempotente).
--- Roteiros de teste do vendedor em app/data/fiesc-roteiros/.
+# Roteiros de Teste — 6 Roleplays FIESC
 
-do $$
-declare fiesc_id uuid;
-begin
-  select id into fiesc_id from public.tracking_clients where name = 'FIESC' limit 1;
-  if fiesc_id is null then
-    insert into public.tracking_clients (name) values ('FIESC') returning id into fiesc_id;
-  end if;
+Cada roteiro é uma sequência de falas para você ler como **vendedor**, no mesmo formato do exemplo da Patricia. Os colchetes `[ ]` são instruções de teste para você (não fale em voz alta).
 
-  if exists (
-    select 1 from public.roleplay_readiness where client_id = fiesc_id limit 1
-  ) then
-    return;
-  end if;
+**O que cada roteiro verifica (as 3 correções):**
+- 🪤 **Armadilha de valor/antecipação** — você joga o tema cedo de propósito. O agente **NÃO pode** citar preço/valor antes de você nem responder no seu lugar. Se ele antecipar, a correção falhou.
+- 🔁 **Teste anti-repetição** — você cobre um tema e o agente responde; mais à frente você dá margem para ele reabrir. Ele **não pode** repetir pergunta nem reabrir tema já tratado.
+- 🧱 **Base técnica** — você simplifica demais. O agente deve **pressionar com repertório** (lei, orçamento, prática etc.), sem virar palestra.
 
-    insert into public.roleplay_readiness (client_id, name, persona, position, roteiro) values
-      (fiesc_id, 'RP1.1 (v3) MBI', 'Carlos Mendes — Secretário de Planejamento e Inovação', 0, $fiesc_rp106$## RP 1.1 — RP_106 · Carlos Mendes (Secretário de Planejamento e Inovação)
+---
+
+## RP 1.1 — RP_106 · Carlos Mendes (Secretário de Planejamento e Inovação)
 
 *Contexto: ligação morna, você é vendedor da FIESC/SENAI oferecendo o MBI Smart Cities. Persona: técnico, articulador, NÃO decide sozinho.*
 
@@ -35,10 +28,10 @@ begin
 13. "Combinado. Te mando até quarta. Obrigado, Secretário!"
 
 **Sinais de aprovação:** esquivou do valor no passo 3; esfriou no passo 7 e citou rito/lei; não repetiu no passo 10; só topou avançar depois do discovery (passo 12) e exigiu envolver o Prefeito.
-$fiesc_rp106$);
 
-    insert into public.roleplay_readiness (client_id, name, persona, position, roteiro) values
-      (fiesc_id, 'RP1.2 (v3) MBI', 'Ana Paula Silveira — Secretária de Administração e Finanças', 1, $fiesc_rp107$## RP 1.2 — RP_107 · Ana Paula Silveira (Secretária de Administração e Finanças)
+---
+
+## RP 1.2 — RP_107 · Ana Paula Silveira (Secretária de Administração e Finanças)
 
 *Contexto: ligação após indicação do Planejamento. Persona: rigorosa com orçamento, cética, exige justificativa.*
 
@@ -57,10 +50,10 @@ $fiesc_rp106$);
 13. "Perfeito. Mando formalizado. Obrigado, Secretária!"
 
 **Sinais de aprovação:** não validou os quarenta e um mil no passo 3; endureceu no passo 6 com linguagem fiscal; não construiu a justificativa sozinha (passo 11 — ela valida/contesta, não monta); não repetiu no passo 10.
-$fiesc_rp107$);
 
-    insert into public.roleplay_readiness (client_id, name, persona, position, roteiro) values
-      (fiesc_id, 'RP1.3 (v3) MBI', 'Roberto Nunes — Prefeito', 2, $fiesc_rp108$## RP 1.3 — RP_108 · Roberto Nunes (Prefeito)
+---
+
+## RP 1.3 — RP_108 · Roberto Nunes (Prefeito)
 
 *Contexto: ligação após conversa com o Secretário de Planejamento. Persona: difícil, cético, já tem consultoria, cede pouco e tarde. NUNCA fecha na ligação.*
 
@@ -79,10 +72,10 @@ $fiesc_rp107$);
 13. "Entendido, sem pressa. Mando a proposta. Obrigado, Prefeito!"
 
 **Sinais de aprovação:** cortou no passo 3 (viagem/valor); esfriou no passo 6 (ataque ao concorrente); tratou SQUAD como método; recusou fechar no passo 12; cedeu pouco e só encaminhou, nunca decidiu.
-$fiesc_rp108$);
 
-    insert into public.roleplay_readiness (client_id, name, persona, position, roteiro) values
-      (fiesc_id, 'RP2.1 (v3) SENAI', 'Laura Martins — Estudante (Ensino Médio)', 3, $fiesc_rp125$## RP 2.1 — RP_125 · Laura Martins (jovem, Curso Técnico SENAI)
+---
+
+## RP 2.1 — RP_125 · Laura Martins (jovem, Curso Técnico SENAI)
 
 *Contexto: lead inbound, ela deixou contato na campanha. Persona: 19 anos, insegura, depende dos pais, em dúvida técnico x faculdade. Treino de FECHAMENTO.*
 
@@ -101,10 +94,10 @@ $fiesc_rp108$);
 13. "Fechado! Te mando o link agora. Valeu, Laura!"
 
 **Sinais de aprovação:** travou no passo 3 (preço cedo); desconfiou no passo 7 (garantia/é fácil); não repetiu no passo 10; só abriu pro fechamento depois do discovery e envolvendo os pais.
-$fiesc_rp125$);
 
-    insert into public.roleplay_readiness (client_id, name, persona, position, roteiro) values
-      (fiesc_id, 'RP2.2 (v3) SENAI', 'Carlos Almeida — Auxiliar de Produção', 4, $fiesc_rp128$## RP 2.2 — RP_128 · Carlos Almeida (operário, Cursos Profissionais SENAI)
+---
+
+## RP 2.2 — RP_128 · Carlos Almeida (operário, Cursos Profissionais SENAI)
 
 *Contexto: lead inbound de campanha com cupom. Persona: 32 anos, cético, com pressa, sensível a preço, esposa decide o recorrente. Treino de FECHAMENTO difícil.*
 
@@ -123,10 +116,10 @@ $fiesc_rp125$);
 13. "Combinado, te ligo amanhã. Valeu, Carlos!"
 
 **Sinais de aprovação:** não fechou por preço no passo 3; reagiu mal ao ataque no passo 7; não aceitou o primeiro 'tá caro' à toa; não repetiu no passo 10; fechou só com ambição + rotina + pagamento + urgência legítima.
-$fiesc_rp128$);
 
-    insert into public.roleplay_readiness (client_id, name, persona, position, roteiro) values
-      (fiesc_id, 'RP2.3 (v3) SESI', 'Mariana Silva — Profissional autônoma / mãe', 5, $fiesc_rp131$## RP 2.3 — RP_131 · Mariana Silva (mãe, SESI Odonto)
+---
+
+## RP 2.3 — RP_131 · Mariana Silva (mãe, SESI Odonto)
 
 *Contexto: lead inbound. Persona: mãe, organiza saúde da família, desconfia de "clínica que empurra orçamento", dúvida se comunidade pode agendar. Treino de fechamento de AGENDAMENTO.*
 
@@ -145,5 +138,18 @@ $fiesc_rp128$);
 13. "Agendado! Te confirmo por mensagem. Obrigado, Mariana!"
 
 **Sinais de aprovação:** não agendou pelo preço no passo 3; desconfortável com 'baratinho' no passo 7; recusou preço fechado sem avaliação no passo 9; não repetiu no passo 10; só agendou após quebrar o mito do público + acolher + propor data/hora + pedir CPF.
-$fiesc_rp131$);
-end $$;
+
+---
+
+## Como pontuar cada sessão (rápido)
+
+Para cada roleplay, marque ✅ ou ❌:
+
+- [ ] Esquivou da **armadilha de valor** (não antecipou preço/número)
+- [ ] Não **respondeu no seu lugar** / não entregou os argumentos que eram seus
+- [ ] Não **repetiu** pergunta nem reabriu tema já tratado
+- [ ] **Pressionou com base técnica/repertório** quando você simplificou
+- [ ] Só **cedeu/fechou** depois do discovery, na ordem certa
+- [ ] **Não saiu do personagem** nem agiu como avaliador
+
+Três ou mais ❌ no mesmo item entre roleplays = ajuste de prompt necessário naquele ponto. Rode 1–2 sessões por roleplay antes de validar, conforme o guia (uma mudança por vez).
