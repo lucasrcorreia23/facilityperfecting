@@ -7,10 +7,12 @@ import type {
   CriteriaWeights,
   DraftRow,
   EvalWeights,
+  EvaluationRound,
   ProcessImportResult,
   Profile,
   RoleplayEvaluation,
   RoleplayReadiness,
+  RoundStatus,
   ScenarioConfig,
   TrackingClient,
 } from "@/app/lib/types";
@@ -216,12 +218,100 @@ export async function updateAppWeights(weights: CriteriaWeights) {
   if (error) throw error;
 }
 
-export async function listReadiness(clientId: string): Promise<RoleplayReadiness[]> {
+// ── Rounds (rodadas de avaliação) ───────────────────────────────────────────
+
+export async function listRounds(clientId: string): Promise<EvaluationRound[]> {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from("evaluation_rounds")
+    .select("*")
+    .eq("client_id", clientId)
+    .order("position", { ascending: true });
+  if (error) throw error;
+  return data as EvaluationRound[];
+}
+
+export async function createRound(params: {
+  clientId: string;
+  name: string;
+  position: number;
+}): Promise<EvaluationRound> {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from("evaluation_rounds")
+    .insert({
+      client_id: params.clientId,
+      name: params.name,
+      position: params.position,
+    })
+    .select("*")
+    .single();
+  if (error) throw error;
+  return data as EvaluationRound;
+}
+
+export async function setRoundStatus(id: string, status: RoundStatus): Promise<void> {
+  const supabase = createClient();
+  const { error } = await supabase.from("evaluation_rounds").update({ status }).eq("id", id);
+  if (error) throw error;
+}
+
+/**
+ * Cria um novo round clonando os roleplays do round origem (copia
+ * name/persona/roteiro/status/position). NÃO copia avaliações — o round novo
+ * começa zerado. origin_readiness_id de cada cópia aponta para a raiz da
+ * linhagem, para comparação entre rounds.
+ */
+export async function cloneRound(params: {
+  sourceRoundId: string;
+  name: string;
+}): Promise<EvaluationRound> {
+  const supabase = createClient();
+
+  const { data: source, error: srcErr } = await supabase
+    .from("evaluation_rounds")
+    .select("client_id, position")
+    .eq("id", params.sourceRoundId)
+    .single();
+  if (srcErr) throw srcErr;
+
+  const round = await createRound({
+    clientId: source.client_id,
+    name: params.name,
+    position: Number(source.position ?? 0) + 1,
+  });
+
+  const { data: srcRows, error: rowsErr } = await supabase
+    .from("roleplay_readiness")
+    .select("id, name, persona, roteiro, status, position, origin_readiness_id")
+    .eq("round_id", params.sourceRoundId)
+    .order("position", { ascending: true });
+  if (rowsErr) throw rowsErr;
+
+  if (srcRows && srcRows.length > 0) {
+    const clones = srcRows.map((r) => ({
+      client_id: source.client_id,
+      round_id: round.id,
+      origin_readiness_id: r.origin_readiness_id ?? r.id,
+      name: r.name,
+      persona: r.persona,
+      roteiro: r.roteiro,
+      status: r.status,
+      position: r.position,
+    }));
+    const { error: insErr } = await supabase.from("roleplay_readiness").insert(clones);
+    if (insErr) throw insErr;
+  }
+
+  return round;
+}
+
+export async function listReadiness(roundId: string): Promise<RoleplayReadiness[]> {
   const supabase = createClient();
   const { data, error } = await supabase
     .from("roleplay_readiness")
     .select("*")
-    .eq("client_id", clientId)
+    .eq("round_id", roundId)
     .order("position", { ascending: true });
   if (error) throw error;
   return data as RoleplayReadiness[];
@@ -229,6 +319,7 @@ export async function listReadiness(clientId: string): Promise<RoleplayReadiness
 
 export async function createReadiness(params: {
   clientId: string;
+  roundId: string;
   name: string;
   persona?: string | null;
   position: number;
@@ -238,6 +329,7 @@ export async function createReadiness(params: {
     .from("roleplay_readiness")
     .insert({
       client_id: params.clientId,
+      round_id: params.roundId,
       name: params.name,
       persona: params.persona ?? null,
       position: params.position,

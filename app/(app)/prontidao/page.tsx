@@ -51,7 +51,9 @@ import { EVALUATION_CRITERIA, SCORE_MAX, SCORE_MIN } from "@/app/lib/evaluation-
 import { resolveRoteiro, scriptToText } from "@/app/lib/roleplay-scripts";
 import { createClient } from "@/app/lib/supabase/client";
 import {
+  cloneRound,
   createReadiness,
+  createRound,
   createTrackingClient,
   deleteOwnEvaluation,
   deleteReadiness,
@@ -59,13 +61,16 @@ import {
   listEvaluations,
   listProfiles,
   listReadiness,
+  listRounds,
   listTrackingClients,
+  setRoundStatus,
   updateReadiness,
   upsertEvaluation,
   upsertOwnProfile,
 } from "@/app/lib/db";
 import type {
   EvalWeights,
+  EvaluationRound,
   Profile,
   ReadinessStatus,
   RoleplayEvaluation,
@@ -73,14 +78,25 @@ import type {
   TrackingClient,
 } from "@/app/lib/types";
 
+/** Round padrão ao abrir um cliente: o aberto de maior position; senão o último. */
+function defaultRound(rounds: EvaluationRound[]): EvaluationRound | null {
+  if (rounds.length === 0) return null;
+  const open = rounds.filter((r) => r.status === "aberto");
+  const pool = open.length > 0 ? open : rounds;
+  return pool.reduce((best, r) => (r.position > best.position ? r : best), pool[0]);
+}
+
 const STATUS_KEYS = Object.keys(READINESS_STATUS_META) as ReadinessStatus[];
 
 export default function ProntidaoPage() {
   const [clients, setClients] = useState<TrackingClient[]>([]);
   const [clientId, setClientId] = useState("");
+  const [rounds, setRounds] = useState<EvaluationRound[]>([]);
+  const [roundId, setRoundId] = useState("");
   const [rows, setRows] = useState<RoleplayReadiness[]>([]);
   const [loading, setLoading] = useState(true);
   const [rowsLoading, setRowsLoading] = useState(false);
+  const [roundBusy, setRoundBusy] = useState(false);
   const [confirm, setConfirm] = useState<ConfirmConfig | null>(null);
 
   // avaliação
@@ -109,18 +125,41 @@ export default function ProntidaoPage() {
   const [evalSaving, setEvalSaving] = useState(false);
 
   const client = useMemo(() => clients.find((c) => c.id === clientId) ?? null, [clients, clientId]);
+  const round = useMemo(() => rounds.find((r) => r.id === roundId) ?? null, [rounds, roundId]);
+  const roundClosed = round?.status === "fechado";
   const profileById = useMemo(() => new Map(profiles.map((p) => [p.id, p])), [profiles]);
 
-  const loadRows = useCallback(async (id: string) => {
+  /** Carrega os roleplays + avaliações de um round. */
+  const loadRows = useCallback(async (rid: string) => {
     setRowsLoading(true);
     try {
-      const data = await listReadiness(id);
+      const data = await listReadiness(rid);
       setRows(data);
       setEvals(await listEvaluations(data.map((r) => r.id)));
     } finally {
       setRowsLoading(false);
     }
   }, []);
+
+  /** Seleciona um cliente: carrega seus rounds (criando o Round 1 se não houver). */
+  const loadClient = useCallback(
+    async (cid: string) => {
+      let rs = await listRounds(cid);
+      if (rs.length === 0) {
+        await createRound({ clientId: cid, name: "Round 1", position: 0 });
+        rs = await listRounds(cid);
+      }
+      setRounds(rs);
+      const def = defaultRound(rs);
+      setRoundId(def?.id ?? "");
+      if (def) await loadRows(def.id);
+      else {
+        setRows([]);
+        setEvals([]);
+      }
+    },
+    [loadRows],
+  );
 
   useEffect(() => {
     void (async () => {
@@ -141,16 +180,65 @@ export default function ProntidaoPage() {
       const first = cs.find((c) => c.name === "RD") ?? cs[0];
       if (first) {
         setClientId(first.id);
-        await loadRows(first.id);
+        await loadClient(first.id);
       }
       setLoading(false);
     })();
-  }, [loadRows]);
+  }, [loadClient]);
 
   async function selectClient(id: string) {
     if (id === clientId) return;
     setClientId(id);
+    await loadClient(id);
+  }
+
+  async function selectRound(id: string) {
+    if (id === roundId) return;
+    setRoundId(id);
     await loadRows(id);
+  }
+
+  /** Cria um novo round clonando os roleplays do round atual (sem avaliações). */
+  async function addRound() {
+    if (!round) return;
+    setRoundBusy(true);
+    try {
+      const name = `Round ${rounds.length + 1}`;
+      const created = await cloneRound({ sourceRoundId: round.id, name });
+      const rs = await listRounds(clientId);
+      setRounds(rs);
+      setRoundId(created.id);
+      await loadRows(created.id);
+      addToast({ title: `${name} criado`, description: "Roleplays clonados, sem avaliações.", color: "success" });
+    } catch (err) {
+      addToast({
+        title: "Erro ao criar round",
+        description: err instanceof Error ? err.message : String(err),
+        color: "danger",
+      });
+    } finally {
+      setRoundBusy(false);
+    }
+  }
+
+  /** Alterna entre aberto/fechado (fechado = somente leitura na UI). */
+  async function toggleRoundStatus() {
+    if (!round) return;
+    const next = round.status === "aberto" ? "fechado" : "aberto";
+    setRoundBusy(true);
+    try {
+      await setRoundStatus(round.id, next);
+      setRounds((rs) => rs.map((r) => (r.id === round.id ? { ...r, status: next } : r)));
+      addToast({ title: next === "fechado" ? "Round fechado" : "Round reaberto", color: "success" });
+    } catch (err) {
+      addToast({
+        title: "Erro ao atualizar round",
+        description: err instanceof Error ? err.message : String(err),
+        color: "danger",
+      });
+    } finally {
+      setRoundBusy(false);
+    }
   }
 
   // Agregados por roleplay e KPIs do conjunto.
@@ -326,6 +414,7 @@ export default function ProntidaoPage() {
       const position = rows.reduce((max, r) => Math.max(max, r.position), -1) + 1;
       const row = await createReadiness({
         clientId,
+        roundId,
         name,
         persona: newRpPersona.trim() || null,
         position,
@@ -355,7 +444,7 @@ export default function ProntidaoPage() {
         title="Prontidão dos Roleplays"
         description="Cada pessoa avalia a qualidade de cada roleplay em vários critérios; o score é a média ponderada das avaliações."
         action={
-          <div className="flex items-end gap-2">
+          <div className="flex flex-wrap items-end gap-2">
             <Select
               label="Cliente"
               labelPlacement="outside"
@@ -366,7 +455,7 @@ export default function ProntidaoPage() {
               }}
               radius="sm"
               variant="bordered"
-              className="min-w-[180px]"
+              className="min-w-[160px]"
               classNames={managerSelectClassNames}
             >
               {clients.map((c) => (
@@ -382,6 +471,49 @@ export default function ProntidaoPage() {
             >
               Novo cliente
             </Button>
+            {rounds.length > 0 && (
+              <Select
+                label="Round"
+                labelPlacement="outside"
+                selectedKeys={roundId ? [roundId] : []}
+                onSelectionChange={(k) => {
+                  const id = String(Array.from(k)[0] ?? "");
+                  if (id) void selectRound(id);
+                }}
+                radius="sm"
+                variant="bordered"
+                className="min-w-[160px]"
+                classNames={managerSelectClassNames}
+              >
+                {rounds.map((r) => (
+                  <SelectItem
+                    key={r.id}
+                    textValue={r.status === "fechado" ? `${r.name} (fechado)` : r.name}
+                  >
+                    {r.status === "fechado" ? `${r.name} · fechado` : r.name}
+                  </SelectItem>
+                ))}
+              </Select>
+            )}
+            <Button
+              variant="secondary"
+              onPress={addRound}
+              isDisabled={!round || roundBusy}
+              isLoading={roundBusy}
+              className="shrink-0 whitespace-nowrap px-4"
+            >
+              Novo round
+            </Button>
+            {round && (
+              <Button
+                variant="secondary"
+                onPress={toggleRoundStatus}
+                isDisabled={roundBusy}
+                className="shrink-0 whitespace-nowrap px-4"
+              >
+                {round.status === "aberto" ? "Fechar round" : "Reabrir round"}
+              </Button>
+            )}
           </div>
         }
       />
@@ -666,13 +798,23 @@ export default function ProntidaoPage() {
 
                 {evalTab === "minha" ? (
                   <div className="flex flex-col gap-5">
+                    {roundClosed && (
+                      <div className="rounded-sm border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                        Este round está <b>fechado</b> (somente leitura). Reabra o round para editar
+                        as avaliações.
+                      </div>
+                    )}
                     {EVALUATION_CRITERIA.map((c) => (
                       <div key={c.key} className="flex flex-col gap-2">
                         <div>
                           <div className="text-sm font-medium text-slate-800">{c.label}</div>
                           <div className="text-xs text-slate-500">{c.description}</div>
                         </div>
-                        <ScoreButtons value={myScores[c.key]} onChange={(n) => setScore(c.key, n)} />
+                        <ScoreButtons
+                          value={myScores[c.key]}
+                          onChange={(n) => setScore(c.key, n)}
+                          disabled={roundClosed}
+                        />
                         <Textarea
                           aria-label={`Comentário — ${c.label}`}
                           placeholder="Comentário (opcional)"
@@ -680,6 +822,7 @@ export default function ProntidaoPage() {
                           onValueChange={(v) =>
                             setMyComments((prev) => ({ ...prev, [c.key]: v }))
                           }
+                          isDisabled={roundClosed}
                           minRows={1}
                           radius="sm"
                           variant="bordered"
@@ -692,6 +835,7 @@ export default function ProntidaoPage() {
                       placeholder="Impressão geral, contexto da rodada avaliada, etc."
                       value={myOverall}
                       onValueChange={setMyOverall}
+                      isDisabled={roundClosed}
                       minRows={2}
                       radius="sm"
                       variant="bordered"
@@ -719,7 +863,11 @@ export default function ProntidaoPage() {
                 evals.some(
                   (e) => e.readiness_id === evalRowId && e.evaluator_id === currentUserId,
                 ) ? (
-                  <Button variant="secondary" onPress={removeMyEval} isDisabled={evalSaving}>
+                  <Button
+                    variant="secondary"
+                    onPress={removeMyEval}
+                    isDisabled={evalSaving || roundClosed}
+                  >
                     Remover minha avaliação
                   </Button>
                 ) : (
@@ -730,7 +878,7 @@ export default function ProntidaoPage() {
                     Fechar
                   </Button>
                   {evalTab === "minha" && (
-                    <Button onPress={saveEval} isLoading={evalSaving}>
+                    <Button onPress={saveEval} isLoading={evalSaving} isDisabled={roundClosed}>
                       Salvar avaliação
                     </Button>
                   )}
@@ -895,9 +1043,11 @@ function TabButton({
 function ScoreButtons({
   value,
   onChange,
+  disabled,
 }: {
   value?: number;
   onChange: (v: number) => void;
+  disabled?: boolean;
 }) {
   return (
     <div className="flex gap-1.5">
@@ -905,10 +1055,11 @@ function ScoreButtons({
         <button
           key={n}
           type="button"
+          disabled={disabled}
           onClick={() => onChange(n)}
           aria-pressed={value === n}
           className={cn(
-            "h-9 w-9 rounded-sm border text-sm font-medium tabular-nums transition-colors",
+            "h-9 w-9 rounded-sm border text-sm font-medium tabular-nums transition-colors disabled:cursor-not-allowed disabled:opacity-50",
             value === n
               ? "border-[var(--primary)] bg-[var(--primary)] text-white"
               : "border-slate-200 text-slate-600 hover:bg-slate-50",

@@ -145,9 +145,25 @@ export interface TrackingClient {
   updated_at: string;
 }
 
+export type RoundStatus = "aberto" | "fechado";
+
+export interface EvaluationRound {
+  id: string;
+  client_id: string;
+  name: string;
+  position: number;
+  status: RoundStatus;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface RoleplayReadiness {
   id: string;
   client_id: string;
+  round_id: string;
+  /** Linhagem entre rounds: aponta para o roleplay raiz (null nas linhas raiz). */
+  origin_readiness_id: string | null;
   name: string;
   persona: string | null;
   score_prompt: number;
