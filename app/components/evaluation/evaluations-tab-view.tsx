@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { EvaluatorRow } from "@/app/components/evaluation/evaluator-row";
-import { displayNameFor, formatScore5, type RoleplayAggregate } from "@/app/lib/evaluation";
+import { displayNameFor, formatScore5, REQUIRED_EVALUATIONS_PER_ROLEPLAY, type RoleplayAggregate } from "@/app/lib/evaluation";
 import type { EvalWeights, Profile, RoleplayEvaluation } from "@/app/lib/types";
 
 export function EvaluationsTabView({
@@ -46,7 +46,7 @@ export function EvaluationsTabView({
           Média das avaliações
           {agg && agg.evaluatorCount > 0 && (
             <span className="ml-1 font-normal text-slate-400">
-              ({agg.evaluatorCount} de {profiles.length})
+              ({agg.evaluatorCount} de {REQUIRED_EVALUATIONS_PER_ROLEPLAY})
             </span>
           )}
         </span>

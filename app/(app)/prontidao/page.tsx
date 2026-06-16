@@ -49,6 +49,7 @@ import {
   formatPct,
   formatScore5,
   initialsFor,
+  REQUIRED_EVALUATIONS_PER_ROLEPLAY,
   type RoleplayAggregate,
 } from "@/app/lib/evaluation";
 import { EVALUATION_CRITERIA, SCORE_MAX, SCORE_MIN } from "@/app/lib/evaluation-criteria";
@@ -696,7 +697,7 @@ export default function ProntidaoPage() {
                               <StarIcon className="h-4 w-4 text-slate-400" />
                             )}
                             <span className="text-xs text-slate-500">
-                              {raterCount}/{profiles.length} avaliaram
+                              {raterCount}/{REQUIRED_EVALUATIONS_PER_ROLEPLAY} avaliaram
                             </span>
                           </button>
                         </td>

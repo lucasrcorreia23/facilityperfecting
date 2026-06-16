@@ -62,13 +62,15 @@ export function aggregateRoleplay(
   };
 }
 
+export const REQUIRED_EVALUATIONS_PER_ROLEPLAY = 4;
+
 export interface EvaluationKpis {
   total: number;
   /** média dos overall (1..5), só roleplays avaliados; null se nenhum */
   scoreMedio: number | null;
-  /** 0..1: fração de roleplays com ≥1 avaliação */
+  /** 0..1: fração das avaliações feitas vs. meta (4 por roleplay) */
   pctAvaliados: number;
-  /** roleplays sem nenhuma avaliação */
+  /** slots de avaliação ainda faltando (meta 4 × roleplays − já feitas) */
   pendencias: number;
   bloqueios: number;
 }
@@ -76,8 +78,16 @@ export interface EvaluationKpis {
 export function computeEvaluationKpis(
   rows: { id: string; status: string }[],
   aggregates: Map<string, RoleplayAggregate>,
+  requiredPerRoleplay: number = REQUIRED_EVALUATIONS_PER_ROLEPLAY,
 ): EvaluationKpis {
   const total = rows.length;
+  const meta = total * requiredPerRoleplay;
+  let feitas = 0;
+  for (const r of rows) {
+    const count = aggregates.get(r.id)?.evaluatorCount ?? 0;
+    feitas += Math.min(count, requiredPerRoleplay);
+  }
+
   const avaliados = rows.filter((r) => (aggregates.get(r.id)?.evaluatorCount ?? 0) > 0);
   const overalls = avaliados
     .map((r) => aggregates.get(r.id)?.overall)
@@ -87,8 +97,8 @@ export function computeEvaluationKpis(
     scoreMedio: overalls.length
       ? overalls.reduce((a, b) => a + b, 0) / overalls.length
       : null,
-    pctAvaliados: total ? avaliados.length / total : 0,
-    pendencias: total - avaliados.length,
+    pctAvaliados: meta ? feitas / meta : 0,
+    pendencias: meta - feitas,
     bloqueios: rows.filter((r) => r.status === "bloqueado").length,
   };
 }
