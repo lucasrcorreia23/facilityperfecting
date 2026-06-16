@@ -35,6 +35,10 @@ import {
 } from "@/app/components/ui/readiness-status-badge";
 import { ConsolidatedView } from "@/app/components/evaluation/consolidated-view";
 import { EvaluationsTabView } from "@/app/components/evaluation/evaluations-tab-view";
+import {
+  RoundComparisonView,
+  type RoundPoint,
+} from "@/app/components/evaluation/round-comparison-view";
 import { ScriptView } from "@/app/components/roleplay-script-view";
 import { managerSelectClassNames } from "@/app/lib/select-classnames";
 import { cn } from "@/app/lib/cn";
@@ -59,6 +63,7 @@ import {
   deleteReadiness,
   getEvalWeights,
   listEvaluations,
+  listLineageReadiness,
   listProfiles,
   listReadiness,
   listRounds,
@@ -118,7 +123,10 @@ export default function ProntidaoPage() {
 
   // modal de avaliação
   const [evalRowId, setEvalRowId] = useState<string | null>(null);
-  const [evalTab, setEvalTab] = useState<"minha" | "consolidado" | "avaliacoes">("minha");
+  const [evalTab, setEvalTab] = useState<"minha" | "consolidado" | "avaliacoes" | "evolucao">(
+    "minha",
+  );
+  const [evolution, setEvolution] = useState<RoundPoint[] | null>(null);
   const [myScores, setMyScores] = useState<Record<string, number>>({});
   const [myComments, setMyComments] = useState<Record<string, string>>({});
   const [myOverall, setMyOverall] = useState("");
@@ -319,8 +327,48 @@ export default function ProntidaoPage() {
     setMyScores(mine?.scores ?? {});
     setMyComments(mine?.comments ?? {});
     setMyOverall(mine?.overall_comment ?? "");
+    setEvolution(null);
     setEvalTab("minha");
     setEvalRowId(row.id);
+  }
+
+  /** Carrega a evolução (linhagem) do roleplay aberto ao longo dos rounds. */
+  const loadEvolution = useCallback(
+    async (row: RoleplayReadiness) => {
+      setEvolution(null);
+      const lineageKey = row.origin_readiness_id ?? row.id;
+      const lineageRows = await listLineageReadiness(row.client_id, lineageKey);
+      const allEvals = await listEvaluations(lineageRows.map((r) => r.id));
+      const byRow = new Map<string, RoleplayEvaluation[]>();
+      for (const e of allEvals) {
+        const arr = byRow.get(e.readiness_id);
+        if (arr) arr.push(e);
+        else byRow.set(e.readiness_id, [e]);
+      }
+      const points: RoundPoint[] = lineageRows
+        .map((lr) => {
+          const rd = rounds.find((x) => x.id === lr.round_id);
+          return {
+            roundId: lr.round_id,
+            roundName: rd?.name ?? "—",
+            position: rd?.position ?? 0,
+            status: (rd?.status ?? "aberto") as "aberto" | "fechado",
+            current: lr.round_id === roundId,
+            agg: aggregateRoleplay(lr.id, byRow.get(lr.id) ?? [], evalWeights),
+          };
+        })
+        .sort((a, b) => a.position - b.position);
+      setEvolution(points);
+    },
+    [rounds, roundId, evalWeights],
+  );
+
+  function selectEvalTab(tab: "minha" | "consolidado" | "avaliacoes" | "evolucao") {
+    setEvalTab(tab);
+    if (tab === "evolucao" && evalRowId) {
+      const row = rows.find((r) => r.id === evalRowId);
+      if (row) void loadEvolution(row);
+    }
   }
 
   function setScore(key: string, n: number) {
@@ -442,9 +490,9 @@ export default function ProntidaoPage() {
     <div className="flex flex-col gap-6">
       <PageHeader
         title="Prontidão dos Roleplays"
-        description="Cada pessoa avalia a qualidade de cada roleplay em vários critérios; o score é a média ponderada das avaliações."
+        description="Score = média ponderada das avaliações."
         action={
-          <div className="flex flex-wrap items-end gap-2">
+          <div className="flex items-end gap-2">
             <Select
               label="Cliente"
               labelPlacement="outside"
@@ -455,7 +503,7 @@ export default function ProntidaoPage() {
               }}
               radius="sm"
               variant="bordered"
-              className="min-w-[160px]"
+              className="w-[160px]"
               classNames={managerSelectClassNames}
             >
               {clients.map((c) => (
@@ -471,10 +519,20 @@ export default function ProntidaoPage() {
             >
               Novo cliente
             </Button>
+          </div>
+        }
+      />
+
+      {client && (
+        <>
+          {/* Toolbar de round — seleção da rodada + ações */}
+          <div className="flex flex-wrap items-center gap-2 rounded-sm border border-slate-200 bg-slate-50 px-3 py-2">
+            <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+              Round
+            </span>
             {rounds.length > 0 && (
               <Select
-                label="Round"
-                labelPlacement="outside"
+                aria-label="Round"
                 selectedKeys={roundId ? [roundId] : []}
                 onSelectionChange={(k) => {
                   const id = String(Array.from(k)[0] ?? "");
@@ -482,7 +540,8 @@ export default function ProntidaoPage() {
                 }}
                 radius="sm"
                 variant="bordered"
-                className="min-w-[160px]"
+                size="sm"
+                className="w-[180px]"
                 classNames={managerSelectClassNames}
               >
                 {rounds.map((r) => (
@@ -495,31 +554,37 @@ export default function ProntidaoPage() {
                 ))}
               </Select>
             )}
-            <Button
-              variant="secondary"
-              onPress={addRound}
-              isDisabled={!round || roundBusy}
-              isLoading={roundBusy}
-              className="shrink-0 whitespace-nowrap px-4"
-            >
-              Novo round
-            </Button>
-            {round && (
+            {roundClosed && (
+              <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-700">
+                somente leitura
+              </span>
+            )}
+            <div className="ml-auto flex items-center gap-2">
               <Button
                 variant="secondary"
-                onPress={toggleRoundStatus}
-                isDisabled={roundBusy}
-                className="shrink-0 whitespace-nowrap px-4"
+                size="sm"
+                onPress={addRound}
+                isDisabled={!round || roundBusy}
+                isLoading={roundBusy}
+                startContent={<PlusIcon className="h-4 w-4" />}
+                className="shrink-0 whitespace-nowrap"
               >
-                {round.status === "aberto" ? "Fechar round" : "Reabrir round"}
+                Novo round
               </Button>
-            )}
+              {round && (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onPress={toggleRoundStatus}
+                  isDisabled={roundBusy}
+                  className="shrink-0 whitespace-nowrap"
+                >
+                  {round.status === "aberto" ? "Fechar round" : "Reabrir round"}
+                </Button>
+              )}
+            </div>
           </div>
-        }
-      />
 
-      {client && (
-        <>
           {/* KPIs do conjunto */}
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
             <Kpi label="Score médio" value={formatScore5(kpis.scoreMedio)} />
@@ -779,20 +844,26 @@ export default function ProntidaoPage() {
               </ModalHeader>
               <ModalBody className="gap-4 pb-2">
                 <div className="flex gap-1 rounded-sm bg-slate-100 p-1 text-sm">
-                  <TabButton active={evalTab === "minha"} onClick={() => setEvalTab("minha")}>
+                  <TabButton active={evalTab === "minha"} onClick={() => selectEvalTab("minha")}>
                     Minha avaliação
                   </TabButton>
                   <TabButton
                     active={evalTab === "consolidado"}
-                    onClick={() => setEvalTab("consolidado")}
+                    onClick={() => selectEvalTab("consolidado")}
                   >
                     Consolidado
                   </TabButton>
                   <TabButton
                     active={evalTab === "avaliacoes"}
-                    onClick={() => setEvalTab("avaliacoes")}
+                    onClick={() => selectEvalTab("avaliacoes")}
                   >
                     Avaliações ({profiles.length})
+                  </TabButton>
+                  <TabButton
+                    active={evalTab === "evolucao"}
+                    onClick={() => selectEvalTab("evolucao")}
+                  >
+                    Evolução
                   </TabButton>
                 </div>
 
@@ -847,6 +918,8 @@ export default function ProntidaoPage() {
                   </div>
                 ) : evalTab === "consolidado" ? (
                   <ConsolidatedView agg={evalAgg} />
+                ) : evalTab === "evolucao" ? (
+                  <RoundComparisonView points={evolution} />
                 ) : (
                   <EvaluationsTabView
                     profiles={profiles}

@@ -317,6 +317,25 @@ export async function listReadiness(roundId: string): Promise<RoleplayReadiness[
   return data as RoleplayReadiness[];
 }
 
+/**
+ * Linhagem de um roleplay entre rounds: a linha raiz (id = lineageKey) + todas
+ * as cópias (origin_readiness_id = lineageKey), em todos os rounds do cliente.
+ * Usado para comparar a evolução do mesmo roleplay round a round.
+ */
+export async function listLineageReadiness(
+  clientId: string,
+  lineageKey: string,
+): Promise<RoleplayReadiness[]> {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from("roleplay_readiness")
+    .select("*")
+    .eq("client_id", clientId)
+    .or(`id.eq.${lineageKey},origin_readiness_id.eq.${lineageKey}`);
+  if (error) throw error;
+  return data as RoleplayReadiness[];
+}
+
 export async function createReadiness(params: {
   clientId: string;
   roundId: string;
