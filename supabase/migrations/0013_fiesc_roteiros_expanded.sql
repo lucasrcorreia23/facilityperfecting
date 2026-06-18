@@ -1,16 +1,8 @@
-# Roteiros de Teste — 6 Roleplays FIESC
+-- Roteiros FIESC ampliados (~18–21 falas) — gerado por scripts/generate-fiesc-roteiro-migration.mjs
+-- Fonte: app/data/fiesc-roteiros/RP*_test_roteiro.md
 
-Cada roteiro é uma sequência de falas para você ler como **vendedor**, no mesmo formato do exemplo da Patricia. Os colchetes `[ ]` são instruções de teste para você (não fale em voz alta).
-
-**O que cada roteiro verifica (mecanismos ampliados):**
-- 🪤 **Armadilha de valor/antecipação** — você joga preço ou total cedo de propósito (≥2 por sessão). O agente **NÃO pode** citar valor antes de você nem responder no seu lugar.
-- 🔁 **Teste anti-repetição** — você cobre um tema e o agente responde; mais à frente você dá margem para reabrir. Ele **não pode** repetir pergunta nem reabrir tema já tratado (≥1–2 por sessão).
-- 🧱 **Base técnica** — você simplifica demais ou ataca concorrente. O agente deve **pressionar com repertório** (lei, orçamento, prática etc.), sem virar palestra.
-- **Discovery quantitativo** — perguntas com números, prazos, percentuais e ordens de grandeza extraídas dos docs completos (≥10 por sessão MBI/SENAI/SESI).
-
----
-
-## RP 1.1 — RP_106 · Carlos Mendes (Secretário de Planejamento e Inovação)
+update public.roleplay_readiness rr
+  set roteiro = $fiesc_exp_rp11$## RP 1.1 — RP_106 · Carlos Mendes (Secretário de Planejamento e Inovação)
 
 *Contexto: ligação morna, você é vendedor da FIESC/SENAI oferecendo o MBI Smart Cities. Persona: técnico, articulador, NÃO decide sozinho. Município ~120 mil habitantes.*
 
@@ -36,11 +28,15 @@ Cada roteiro é uma sequência de falas para você ler como **vendedor**, no mes
 20. "Topa que eu envie uma proposta objetiva conectando o MBI aos projetos de vocês e à captação, pra o senhor tentar uma agenda com o Prefeito na próxima semana?"
 21. "Combinado. Te mando até quarta. Obrigado, Secretário!"
 
-**Sinais de aprovação:** esquivou do valor nos passos 3 e 14; esfriou no passo 10 e citou rito/lei; não repetiu nos passos 17 e 18; fez discovery quantitativo (editais, equipe, orçamento, consultoria, SQUAD); só topou avançar depois do discovery (passo 20) e exigiu envolver o Prefeito.
+**Sinais de aprovação:** esquivou do valor nos passos 3 e 14; esfriou no passo 10 e citou rito/lei; não repetiu nos passos 17 e 18; fez discovery quantitativo (editais, equipe, orçamento, consultoria, SQUAD); só topou avançar depois do discovery (passo 20) e exigiu envolver o Prefeito.$fiesc_exp_rp11$,
+      updated_at = now()
+  from public.tracking_clients tc
+  where rr.client_id = tc.id
+    and lower(trim(tc.name)) = 'fiesc'
+    and rr.name = 'RP1.1 (v3) MBI';
 
----
-
-## RP 1.2 — RP_107 · Ana Paula Silveira (Secretária de Administração e Finanças)
+update public.roleplay_readiness rr
+  set roteiro = $fiesc_exp_rp12$## RP 1.2 — RP_107 · Ana Paula Silveira (Secretária de Administração e Finanças)
 
 *Contexto: ligação após indicação do Planejamento. Persona: rigorosa com orçamento, cética, exige justificativa. Município ~90 mil habitantes.*
 
@@ -64,11 +60,15 @@ Cada roteiro é uma sequência de falas para você ler como **vendedor**, no mes
 18. "Posso estruturar uma proposta formal com investimento, objetivo institucional, projeto aplicado e relação com captação, pra senhora avaliar com o Prefeito e o Planejamento na próxima semana?"
 19. "Perfeito. Mando formalizado. Obrigado, Secretária!"
 
-**Sinais de aprovação:** não validou os quarenta e um mil nos passos 3 e 13; endureceu nos passos 8 e 14 com linguagem fiscal; não construiu a justificativa sozinha (passo 17 — ela valida/contesta); não repetiu no passo 16; discovery quantitativo (rubrica, teto, captação perdida, consultoria).
+**Sinais de aprovação:** não validou os quarenta e um mil nos passos 3 e 13; endureceu nos passos 8 e 14 com linguagem fiscal; não construiu a justificativa sozinha (passo 17 — ela valida/contesta); não repetiu no passo 16; discovery quantitativo (rubrica, teto, captação perdida, consultoria).$fiesc_exp_rp12$,
+      updated_at = now()
+  from public.tracking_clients tc
+  where rr.client_id = tc.id
+    and lower(trim(tc.name)) = 'fiesc'
+    and rr.name = 'RP1.2 (v3) MBI';
 
----
-
-## RP 1.3 — RP_108 · Roberto Nunes (Prefeito)
+update public.roleplay_readiness rr
+  set roteiro = $fiesc_exp_rp13$## RP 1.3 — RP_108 · Roberto Nunes (Prefeito)
 
 *Contexto: ligação após conversa com o Secretário de Planejamento. Persona: difícil, cético, já tem consultoria, cede pouco e tarde. NUNCA fecha na ligação. Município ~150 mil habitantes.*
 
@@ -93,11 +93,15 @@ Cada roteiro é uma sequência de falas para você ler como **vendedor**, no mes
 19. [tente forçar fechamento de propósito] "Posso já considerar fechado então?" [esperado: ele retoma o controle — 'aqui ninguém fecha gasto público no telefone']
 20. "Entendido, sem pressa. Mando a proposta. Obrigado, Prefeito!"
 
-**Sinais de aprovação:** cortou no passo 3 (viagem/valor); esfriou no passo 9 (ataque ao concorrente); não validou valor no passo 14; tratou SQUAD como método; recusou fechar no passo 19; não repetiu nos passos 16 e 17; discovery quantitativo (custo consultoria, projetos parados, captação perdida, mandato, justificativa pública).
+**Sinais de aprovação:** cortou no passo 3 (viagem/valor); esfriou no passo 9 (ataque ao concorrente); não validou valor no passo 14; tratou SQUAD como método; recusou fechar no passo 19; não repetiu nos passos 16 e 17; discovery quantitativo (custo consultoria, projetos parados, captação perdida, mandato, justificativa pública).$fiesc_exp_rp13$,
+      updated_at = now()
+  from public.tracking_clients tc
+  where rr.client_id = tc.id
+    and lower(trim(tc.name)) = 'fiesc'
+    and rr.name = 'RP1.3 (v3) MBI';
 
----
-
-## RP 2.1 — RP_125 · Laura Martins (jovem, Curso Técnico SENAI)
+update public.roleplay_readiness rr
+  set roteiro = $fiesc_exp_rp21$## RP 2.1 — RP_125 · Laura Martins (jovem, Curso Técnico SENAI)
 
 *Contexto: lead inbound, ela deixou contato na campanha. Persona: 18 anos, insegura, depende dos pais, em dúvida técnico x faculdade. Renda familiar ~2.900/mês. Blumenau.*
 
@@ -121,11 +125,15 @@ Cada roteiro é uma sequência de falas para você ler como **vendedor**, no mes
 18. "Que tal a gente deixar um horário agendado pra você levar os documentos, e você já chama seus pais pra verem o link junto?"
 19. "Fechado! Te mando o link agora. Valeu, Laura!"
 
-**Sinais de aprovação:** travou nos passos 3 e 15 (preço cedo); desconfiou no passo 12 (garantia/é fácil); não repetiu no passo 16; discovery quantitativo (salário, renda, horas, transporte, curso, prazo); só abriu fechamento envolvendo os pais.
+**Sinais de aprovação:** travou nos passos 3 e 15 (preço cedo); desconfiou no passo 12 (garantia/é fácil); não repetiu no passo 16; discovery quantitativo (salário, renda, horas, transporte, curso, prazo); só abriu fechamento envolvendo os pais.$fiesc_exp_rp21$,
+      updated_at = now()
+  from public.tracking_clients tc
+  where rr.client_id = tc.id
+    and lower(trim(tc.name)) = 'fiesc'
+    and rr.name = 'RP2.1 (v3) SENAI';
 
----
-
-## RP 2.2 — RP_128 · Carlos Almeida (operário, Cursos Profissionais SENAI)
+update public.roleplay_readiness rr
+  set roteiro = $fiesc_exp_rp22$## RP 2.2 — RP_128 · Carlos Almeida (operário, Cursos Profissionais SENAI)
 
 *Contexto: lead inbound de campanha com cupom 2026.1. Persona: 32 anos, cético, com pressa, sensível a preço, esposa decide o recorrente. Vale do Itajaí.*
 
@@ -148,11 +156,15 @@ Cada roteiro é uma sequência de falas para você ler como **vendedor**, no mes
 17. "Você prefere já fazer a matrícula pelo link agora, ou alinhar com sua esposa hoje à noite e eu te ligo amanhã ao meio-dia pra fechar?"
 18. "Combinado, te ligo amanhã. Valeu, Carlos!"
 
-**Sinais de aprovação:** não fechou por preço nos passos 3 e 14; reagiu mal ao ataque no passo 11; não repetiu no passo 15; discovery quantitativo (salário, teto esposa, escala, dias presenciais, risco 12 meses); fechou só com ambição + rotina + pagamento + urgência legítima.
+**Sinais de aprovação:** não fechou por preço nos passos 3 e 14; reagiu mal ao ataque no passo 11; não repetiu no passo 15; discovery quantitativo (salário, teto esposa, escala, dias presenciais, risco 12 meses); fechou só com ambição + rotina + pagamento + urgência legítima.$fiesc_exp_rp22$,
+      updated_at = now()
+  from public.tracking_clients tc
+  where rr.client_id = tc.id
+    and lower(trim(tc.name)) = 'fiesc'
+    and rr.name = 'RP2.2 (v3) SENAI';
 
----
-
-## RP 2.3 — RP_131 · Mariana Silva (mãe, SESI Odonto)
+update public.roleplay_readiness rr
+  set roteiro = $fiesc_exp_rp23$## RP 2.3 — RP_131 · Mariana Silva (mãe, SESI Odonto)
 
 *Contexto: lead inbound. Persona: mãe, organiza saúde da família, desconfia de "clínica que empurra orçamento", dúvida se comunidade pode agendar. Filhos 7 e 10 anos.*
 
@@ -175,20 +187,9 @@ Cada roteiro é uma sequência de falas para você ler como **vendedor**, no mes
 17. "Tenho horário quinta às quatorze ou sexta às dez. Qual fica melhor? Daí você me passa o CPF pro pré-cadastro."
 18. "Agendado! Te confirmo por mensagem. Obrigado, Mariana!"
 
-**Sinais de aprovação:** não agendou pelo preço no passo 3; desconfortável com 'baratinho' no passo 11; recusou preço fechado sem avaliação no passo 13; não repetiu no passo 15; discovery quantitativo (quantos pacientes, meses sem limpeza, teto orçamento, distância); só agendou após quebrar mito do público + acolher + data/hora + CPF.
----
-
-## Como pontuar cada sessão (rápido)
-
-Para cada roleplay, marque ✅ ou ❌:
-
-- [ ] Esquivou da **1ª armadilha de valor** (não antecipou preço/número)
-- [ ] Esquivou da **2ª armadilha de valor** (total agregado / fechamento por preço)
-- [ ] Não **respondeu no seu lugar** / não entregou os argumentos que eram seus
-- [ ] Não **repetiu** pergunta nem reabriu tema já tratado (1ª e 2ª anti-repetição quando houver)
-- [ ] **Pressionou com base técnica/repertório** quando você simplificou ou atacou concorrente
-- [ ] Fez **discovery quantitativo** antes de avançar (números, prazos, rubricas, rotina)
-- [ ] Só **cedeu/fechou** depois do discovery, na ordem certa
-- [ ] **Não saiu do personagem** nem agiu como avaliador
-
-Quatro ou mais ❌ no mesmo item entre roleplays = ajuste de prompt necessário naquele ponto. Rode 1–2 sessões por roleplay antes de validar (uma mudança por vez).
+**Sinais de aprovação:** não agendou pelo preço no passo 3; desconfortável com 'baratinho' no passo 11; recusou preço fechado sem avaliação no passo 13; não repetiu no passo 15; discovery quantitativo (quantos pacientes, meses sem limpeza, teto orçamento, distância); só agendou após quebrar mito do público + acolher + data/hora + CPF.$fiesc_exp_rp23$,
+      updated_at = now()
+  from public.tracking_clients tc
+  where rr.client_id = tc.id
+    and lower(trim(tc.name)) = 'fiesc'
+    and rr.name = 'RP2.3 (v3) SENAI';
