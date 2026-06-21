@@ -52,6 +52,11 @@ export interface ScenarioConfig {
   skill?: string | null;
   objective?: string | null;
   aditional_instructions?: string | null;
+  // Payload de case_setup escrito à mão. Quando presente, o export PULA o
+  // /role_plays/generate (IA) e manda estes campos VERBATIM para a Perfecting.
+  // Shape = saída de generateCaseSetup (company_profile, persona_profile,
+  // buyer_*, salesperson_*, training_*, etc.). Ver buildCaseSetupCreate.
+  case_setup_payload?: Record<string, unknown> | null;
 }
 
 export interface CallContextType {

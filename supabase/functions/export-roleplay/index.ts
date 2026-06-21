@@ -135,21 +135,38 @@ async function exportDraft(draftId: string): Promise<{ caseSetupId: number }> {
     }
   }
 
-  // 4) CASE SETUP (sempre)
+  // 4) CASE SETUP
+  // Se o draft traz um payload escrito à mão (scenario.case_setup_payload), PULAMOS
+  // o /role_plays/generate (IA) e mandamos os campos VERBATIM. Caso contrário, fluxo
+  // normal: a IA gera o case setup a partir do contexto/cenário.
   await setJob({ step: "case_setup" });
-  const genCase = await generateCaseSetup(token, perfectingContextId, {
-    call_context_type_id: callContextTypeId,
-    scenario_difficulty_level: difficulty,
-    training_objective: draft.scenario?.objective ?? undefined,
-    training_targeted_sales_skills: draft.scenario?.skill ?? undefined,
-    aditional_instructions: draft.scenario?.aditional_instructions ?? undefined,
-  });
+  const verbatim = draft.scenario?.case_setup_payload as
+    | Record<string, unknown>
+    | null
+    | undefined;
+  const genCase = verbatim
+    ? {
+        // o conteúdo vem exatamente como escrito; só call_context/dificuldade
+        // são reforçados pelo fluxo padrão (resolução de id + enum válido).
+        ...verbatim,
+        call_context_type_id: callContextTypeId,
+        scenario_difficulty_level: difficulty,
+      }
+    : await generateCaseSetup(token, perfectingContextId, {
+        call_context_type_id: callContextTypeId,
+        scenario_difficulty_level: difficulty,
+        training_objective: draft.scenario?.objective ?? undefined,
+        training_targeted_sales_skills: draft.scenario?.skill ?? undefined,
+        aditional_instructions: draft.scenario?.aditional_instructions ?? undefined,
+      });
   const { id: caseSetupId, elevenlabs_agent_id } = await createCaseSetup(
     token,
     genCase,
     perfectingContextId,
     callContextTypeId,
     connection.default_user_group_id ?? null,
+    // verbatim → pulamos o /generate, então a Perfecting monta o case prompt aqui.
+    Boolean(verbatim),
   );
 
   await db
