@@ -266,7 +266,10 @@ const CASE_SETUP_PAYLOAD = {
     "Sustentou tom consultivo e respeitoso à operação atual?",
   ],
 
-  persona_voice_id: 1,
+  // Par de voz válido (ElevenLabs) — sem persona_voice_model_id a Perfecting
+  // crasha (500) ao provisionar o agente de voz. Valores obtidos do /generate real.
+  persona_voice_id: 2,
+  persona_voice_model_id: "6OQ4sAE2Nc046rmN5Tmf",
   successful_sale_dialogues_examples: [],
   unsuccessful_sale_dialogues_examples: [],
 };

@@ -65,19 +65,39 @@ async function postJson<T = unknown>(url: string, token: string, body: unknown):
         },
         body: JSON.stringify(body),
       });
-      const data = await res.json().catch(() => ({}));
+      // Lê o corpo como texto primeiro e tenta JSON — assim um 500 com corpo
+      // não-JSON (ou vazio) ainda preserva o conteúdo bruto no error_detail.
+      const raw = await res.text().catch(() => "");
+      let data: unknown = {};
+      if (raw) {
+        try {
+          data = JSON.parse(raw);
+        } catch {
+          data = { raw };
+        }
+      }
       if (res.ok) return data as T;
+      // Extrai um detalhe útil: usa `.detail` quando existe e não é vazio;
+      // senão cai pro corpo bruto (evita o inútil {"detail":{}}).
+      const detailOf = (d: unknown): unknown => {
+        const det = (d as { detail?: unknown })?.detail;
+        const empty =
+          det == null ||
+          (typeof det === "object" && det !== null && Object.keys(det).length === 0) ||
+          (typeof det === "string" && det.trim() === "");
+        return empty ? raw || d : det;
+      };
       // 422 = validação → não retenta
       if (res.status === 422) {
-        throw new PerfectingError(422, (data as { detail?: unknown })?.detail ?? data);
+        throw new PerfectingError(422, detailOf(data));
       }
       // 5xx → retenta
       if (res.status >= 500 && attempt <= MAX_RETRIES) {
-        lastErr = new PerfectingError(res.status, (data as { detail?: unknown })?.detail ?? data);
+        lastErr = new PerfectingError(res.status, detailOf(data));
         await new Promise((r) => setTimeout(r, 1200 * attempt));
         continue;
       }
-      throw new PerfectingError(res.status, (data as { detail?: unknown })?.detail ?? data);
+      throw new PerfectingError(res.status, detailOf(data));
     } catch (e) {
       const isAbort = e instanceof DOMException && e.name === "AbortError";
       if (isAbort && attempt <= MAX_RETRIES) {

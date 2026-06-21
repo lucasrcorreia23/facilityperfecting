@@ -159,14 +159,16 @@ async function exportDraft(draftId: string): Promise<{ caseSetupId: number }> {
         training_targeted_sales_skills: draft.scenario?.skill ?? undefined,
         aditional_instructions: draft.scenario?.aditional_instructions ?? undefined,
       });
+
   const { id: caseSetupId, elevenlabs_agent_id } = await createCaseSetup(
     token,
     genCase,
     perfectingContextId,
     callContextTypeId,
     connection.default_user_group_id ?? null,
-    // verbatim → pulamos o /generate, então a Perfecting monta o case prompt aqui.
-    Boolean(verbatim),
+    // create simples (sem ?generate_case_prompt) — mesmo contrato dos exports que
+    // já funcionam. Os campos verbatim bastam; a Perfecting monta o prompt server-side.
+    false,
   );
 
   await db
