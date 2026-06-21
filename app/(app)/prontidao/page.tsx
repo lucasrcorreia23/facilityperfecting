@@ -121,6 +121,12 @@ export default function ProntidaoPage() {
   const [newRpOpen, setNewRpOpen] = useState(false);
   const [newRpName, setNewRpName] = useState("");
   const [newRpPersona, setNewRpPersona] = useState("");
+  const [editRowId, setEditRowId] = useState<string | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editPersona, setEditPersona] = useState("");
+  const [editResponsavel, setEditResponsavel] = useState("");
+  const [editObservacoes, setEditObservacoes] = useState("");
+  const [editSaving, setEditSaving] = useState(false);
 
   // modal de avaliação
   const [evalRowId, setEvalRowId] = useState<string | null>(null);
@@ -481,6 +487,41 @@ export default function ProntidaoPage() {
     }
   }
 
+  function openEdit(row: RoleplayReadiness) {
+    setEditRowId(row.id);
+    setEditName(row.name);
+    setEditPersona(row.persona ?? "");
+    setEditResponsavel(row.responsavel ?? "");
+    setEditObservacoes(row.observacoes ?? "");
+  }
+
+  async function saveEdit() {
+    if (!editRowId) return;
+    const name = editName.trim();
+    if (!name) return;
+    const persona = editPersona.trim() || null;
+    const responsavel = editResponsavel.trim() || null;
+    const observacoes = editObservacoes.trim() || null;
+    setEditSaving(true);
+    try {
+      await updateReadiness(editRowId, { name, persona, responsavel, observacoes });
+      setRows((prev) =>
+        prev.map((r) =>
+          r.id === editRowId ? { ...r, name, persona, responsavel, observacoes } : r,
+        ),
+      );
+      setEditRowId(null);
+    } catch (err) {
+      addToast({
+        title: "Erro ao editar roleplay",
+        description: err instanceof Error ? err.message : String(err),
+        color: "danger",
+      });
+    } finally {
+      setEditSaving(false);
+    }
+  }
+
   if (loading) return <LoadingView label="Carregando prontidão…" />;
 
   const evalRow = evalRowId ? rows.find((r) => r.id === evalRowId) ?? null : null;
@@ -644,6 +685,15 @@ export default function ProntidaoPage() {
                               onClick={() => openScript(r)}
                             >
                               <DocumentTextIcon className="h-4 w-4" />
+                            </button>
+                            <button
+                              type="button"
+                              aria-label="Editar roleplay"
+                              title="Editar informações do roleplay"
+                              className="shrink-0 text-slate-400 opacity-0 transition-opacity hover:text-blue-600 focus-visible:opacity-100 group-hover:opacity-100"
+                              onClick={() => openEdit(r)}
+                            >
+                              <PencilSquareIcon className="h-4 w-4" />
                             </button>
                             <button
                               type="button"
@@ -820,6 +870,67 @@ export default function ProntidaoPage() {
               Cancelar
             </Button>
             <Button onPress={addRoleplay}>Adicionar</Button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
+
+      {/* Modal: editar roleplay */}
+      <Modal
+        isOpen={editRowId !== null}
+        onOpenChange={(open) => {
+          if (!open) setEditRowId(null);
+        }}
+        radius="sm"
+      >
+        <ModalContent>
+          <ModalHeader>Editar roleplay</ModalHeader>
+          <ModalBody className="gap-4">
+            <Input
+              label="Nome do roleplay"
+              labelPlacement="outside"
+              placeholder="ex.: RP1.1 (v4)"
+              value={editName}
+              onValueChange={setEditName}
+              radius="sm"
+              variant="bordered"
+              autoFocus
+            />
+            <Input
+              label="Persona (opcional)"
+              labelPlacement="outside"
+              placeholder="ex.: Antônio Ribeiro — Diretor Executivo"
+              value={editPersona}
+              onValueChange={setEditPersona}
+              radius="sm"
+              variant="bordered"
+            />
+            <Input
+              label="Responsável (opcional)"
+              labelPlacement="outside"
+              placeholder="ex.: Lucas"
+              value={editResponsavel}
+              onValueChange={setEditResponsavel}
+              radius="sm"
+              variant="bordered"
+            />
+            <Textarea
+              label="Observações (opcional)"
+              labelPlacement="outside"
+              placeholder="Notas sobre o roleplay…"
+              value={editObservacoes}
+              onValueChange={setEditObservacoes}
+              radius="sm"
+              variant="bordered"
+              minRows={3}
+            />
+          </ModalBody>
+          <ModalFooter>
+            <Button variant="secondary" onPress={() => setEditRowId(null)}>
+              Cancelar
+            </Button>
+            <Button onPress={saveEdit} isLoading={editSaving} isDisabled={!editName.trim()}>
+              Salvar
+            </Button>
           </ModalFooter>
         </ModalContent>
       </Modal>

@@ -395,15 +395,15 @@ export async function createCaseSetup(
   contextId: number,
   callContextTypeId: number | undefined,
   userGroupId: number | null,
-  generateCasePrompt = false,
+  generateCasePrompt?: boolean,
 ): Promise<{ id: number; elevenlabs_agent_id: string | null }> {
   const payload = buildCaseSetupCreate(generated, contextId, callContextTypeId, userGroupId);
-  // Fluxo normal: SEM ?generate_case_prompt=true (o /generate já preparou os campos).
-  // Fluxo VERBATIM: pulamos o /generate, então pedimos à Perfecting montar o case
-  // prompt a partir dos campos estruturados exatos que enviamos.
-  const url = generateCasePrompt
-    ? `${RP}/case_setup/create?generate_case_prompt=true`
-    : `${RP}/case_setup/create`;
+  // undefined → omite o param (API usa default = true), igual aos exports normais.
+  // true/false → envia explícito (usado p/ isolar o crash de geração de prompt).
+  const url =
+    generateCasePrompt === undefined
+      ? `${RP}/case_setup/create`
+      : `${RP}/case_setup/create?generate_case_prompt=${generateCasePrompt}`;
   const data = await postJson<{ id?: number; elevenlabs_agent_id?: string }>(
     url,
     token,

@@ -58,7 +58,19 @@ export function AppHeader({
             {initials}
           </button>
         </DropdownTrigger>
-        <DropdownMenu aria-label="Conta">
+        <DropdownMenu aria-label="Conta" disabledKeys={["profile"]}>
+          <DropdownItem
+            key="profile"
+            isReadOnly
+            showDivider
+            className="opacity-100"
+            textValue={email ?? "Conta"}
+          >
+            <span className="block text-[11px] text-slate-400">Conectado como</span>
+            <span className="block truncate text-sm font-medium text-slate-700">
+              {email ?? "—"}
+            </span>
+          </DropdownItem>
           <DropdownItem
             key="logout"
             className={MENU_ITEM_HOVER_DANGER}

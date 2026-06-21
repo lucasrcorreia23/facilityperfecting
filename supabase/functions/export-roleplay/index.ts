@@ -166,9 +166,8 @@ async function exportDraft(draftId: string): Promise<{ caseSetupId: number }> {
     perfectingContextId,
     callContextTypeId,
     connection.default_user_group_id ?? null,
-    // create simples (sem ?generate_case_prompt) — mesmo contrato dos exports que
-    // já funcionam. Os campos verbatim bastam; a Perfecting monta o prompt server-side.
-    false,
+    // omite generate_case_prompt → usa o default da API (true), igual aos exports
+    // normais: a Perfecting monta o case prompt a partir dos nossos campos exatos.
   );
 
   await db

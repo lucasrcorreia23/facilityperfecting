@@ -57,7 +57,9 @@ const CASE_SETUP_PAYLOAD = {
     location: "Joinville, Santa Catarina, Brasil",
     description:
       "A Nexen é uma distribuidora B2B de materiais e insumos para indústria e varejo, com operação comercial de campo e inside sales, em crescimento acelerado nos últimos dois anos.",
-    industry_slug: "logistica-e-distribuicao",
+    // ⚠️ slug DEVE existir no conjunto válido da Perfecting, senão o case_setup/create
+    // crasha (500). "logistica-e-distribuicao" não existe; "consultoria-e-servicos" é válido.
+    industry_slug: "consultoria-e-servicos",
     annual_revenue: 90,
     specialization:
       "Distribuição B2B de insumos industriais e revenda para varejo regional no Sul do país",
@@ -93,7 +95,8 @@ const CASE_SETUP_PAYLOAD = {
       "Já tenho meu controle em planilha e funciona; meu time não vai preencher; é mais um custo fixo; não tenho tempo de implementar agora; o que garante que isso não vira mais uma ferramenta abandonada.",
     hobbies_and_interests:
       "Futebol de fim de semana, churrasco com o time comercial, automobilismo.",
-    communication_style_id: 1,
+    // ⚠️ id deve existir no conjunto válido da Perfecting; 1 crasha (500). 2 é válido.
+    communication_style_id: 2,
     years_in_current_position: 6,
     decision_making_role_description:
       "Decisor da operação comercial; influencia fortemente a compra, mas investimento recorrente acima de um teto passa pela diretoria/financeiro.",
