@@ -22,7 +22,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "..");
 const DEFAULT_OUT = join(ROOT, "supabase/migrations/0014_seed_rp_a1_rd.sql");
 
-const OWNER_EMAIL = "lucas@perfecting.com.br";
+const OWNER_EMAIL = "lucas_rc15@live.com";
 const TITLE =
   "RP A.1 (V1) Aquisição RD Station: Conversão de Lead Sem Ferramenta — Da Planilha ao CRM";
 

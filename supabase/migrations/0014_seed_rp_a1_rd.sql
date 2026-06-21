@@ -8,7 +8,7 @@
 -- (o insert da oferta retorna 0 linhas e os CTEs encadeados não inserem nada).
 
 with u as (
-  select id from auth.users where email = 'lucas@perfecting.com.br'
+  select id from auth.users where email = 'lucas_rc15@live.com'
 ),
 o as (
   insert into public.offers (offer_name, general_description, status, created_by)
