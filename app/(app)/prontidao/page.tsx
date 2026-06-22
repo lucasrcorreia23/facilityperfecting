@@ -529,7 +529,7 @@ export default function ProntidaoPage() {
   const evalRowEvals = evalRowId ? evals.filter((e) => e.readiness_id === evalRowId) : [];
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-0">
       <PageHeader
         title="Prontidão dos Roleplays"
         description="Score = média ponderada das avaliações."
@@ -566,7 +566,7 @@ export default function ProntidaoPage() {
       />
 
       {client && (
-        <>
+        <div className="flex flex-col gap-6">
           {/* Toolbar de round — seleção da rodada + ações */}
           <div className="flex flex-wrap items-center gap-2 rounded-sm border border-slate-200 bg-slate-50 px-3 py-2">
             <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -812,7 +812,7 @@ export default function ProntidaoPage() {
               </div>
             </Card>
           )}
-        </>
+        </div>
       )}
 
       {/* Modal: novo cliente */}
