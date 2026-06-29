@@ -102,7 +102,7 @@ export function DraftActions({
             isDisabled={busy}
             onPress={exported ? () => setResendOpen(true) : onSend}
           >
-            {exported ? "Reenviar para Perfecting" : "Enviar para Perfecting"}
+            {exported ? "Reenviar para a conta destino" : "Enviar para a conta destino"}
           </DropdownItem>
           <DropdownItem
             key="new-scenario"
