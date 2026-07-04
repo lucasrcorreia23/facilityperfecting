@@ -28,9 +28,11 @@ import { Card } from "@/app/components/ui/card";
 import { Button } from "@/app/components/ui/button";
 import { PageHeader } from "@/app/components/ui/page-header";
 import { ConfirmDialog, type ConfirmConfig } from "@/app/components/ui/confirm-dialog";
+import { SendStatusModal, type SendStatus } from "@/app/components/ui/send-status-modal";
 import { managerSelectClassNames } from "@/app/lib/select-classnames";
 import {
   createDraftFromText,
+  invokeExport,
   listCallContexts,
   listConnections,
   processImport,
@@ -105,7 +107,15 @@ export default function CriacaoPage() {
   const [promptModalOpen, setPromptModalOpen] = useState(false);
   const [promptDraft, setPromptDraft] = useState("");
   const [confirm, setConfirm] = useState<ConfirmConfig | null>(null);
+  const [sendModalOpen, setSendModalOpen] = useState(false);
+  const [sendStatus, setSendStatus] = useState<SendStatus>("sending");
+  const [sendError, setSendError] = useState<string | null>(null);
+  const [sentDraftId, setSentDraftId] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
+  // Assinatura do formulário no momento em que o rascunho foi criado. Se o
+  // formulário mudar, o próximo envio cria um novo rascunho (evita reenviar
+  // dados obsoletos); "Tentar novamente" sem edição reusa o mesmo (sem duplicar).
+  const draftSigRef = useRef<string | null>(null);
 
   useEffect(() => {
     try {
@@ -126,18 +136,26 @@ export default function CriacaoPage() {
       );
   }, []);
 
+  // Envio concluído com sucesso → mostra o estado por ~1,2s e vai à Biblioteca.
+  useEffect(() => {
+    if (sendStatus !== "success") return;
+    const t = setTimeout(() => router.push("/biblioteca"), 1200);
+    return () => clearTimeout(t);
+  }, [sendStatus, router]);
+
   const isSupported = (f: File) =>
-    /\.(pdf|docx)$/i.test(f.name) ||
+    /\.(pdf|docx|md|markdown)$/i.test(f.name) ||
     f.type.includes("pdf") ||
     f.type.includes("word") ||
-    f.type.includes("officedocument");
+    f.type.includes("officedocument") ||
+    f.type.includes("markdown");
 
   /** Extrai o texto de 1+ arquivos e junta tudo (vários arquivos = um material). */
   async function ingestFiles(files: File[]) {
     const supported = files.filter(isSupported);
     const rejected = files.length - supported.length;
     if (supported.length === 0) {
-      addToast({ title: "Formato não suportado", description: "Envie PDF ou DOCX.", color: "warning" });
+      addToast({ title: "Formato não suportado", description: "Envie PDF, DOCX ou Markdown (.md).", color: "warning" });
       return;
     }
     setExtracting(true);
@@ -287,33 +305,44 @@ export default function CriacaoPage() {
     });
   }
 
-  async function handleSave() {
+  /** Valida os campos obrigatórios do rascunho; mostra toast e retorna false se inválido. */
+  function validateInputs(): boolean {
     if (!text.trim() || !offerName.trim()) {
       addToast({ title: "Preencha o texto e o nome da oferta", color: "warning" });
-      return;
+      return false;
     }
     if (!callContextSlug) {
       addToast({ title: "Escolha o tipo de chamada", color: "warning" });
-      return;
+      return false;
     }
+    return true;
+  }
+
+  /** Monta o payload do rascunho a partir do formulário atual. */
+  function buildDraftPayload() {
+    return {
+      text: text.trim(),
+      offerName: offerName.trim(),
+      sourceType: (tab === "arquivo" ? "file" : "paste") as "file" | "paste",
+      filePath: tab === "arquivo" ? filePath : null,
+      meta: fileNames.length ? { filenames: fileNames } : {},
+      connectionId: connectionId || null,
+      contextNotes: perfil.trim() || null,
+      scenario: {
+        call_context_slug: callContextSlug,
+        difficulty,
+        objective: objetivo.trim() || null,
+        skill: habilidades.trim() || null,
+        aditional_instructions: cenarioInstrucoes.trim() || null,
+      },
+    };
+  }
+
+  async function handleSave() {
+    if (!validateInputs()) return;
     setSaving(true);
     try {
-      await createDraftFromText({
-        text: text.trim(),
-        offerName: offerName.trim(),
-        sourceType: tab === "arquivo" ? "file" : "paste",
-        filePath: tab === "arquivo" ? filePath : null,
-        meta: fileNames.length ? { filenames: fileNames } : {},
-        connectionId: connectionId || null,
-        contextNotes: perfil.trim() || null,
-        scenario: {
-          call_context_slug: callContextSlug,
-          difficulty,
-          objective: objetivo.trim() || null,
-          skill: habilidades.trim() || null,
-          aditional_instructions: cenarioInstrucoes.trim() || null,
-        },
-      });
+      await createDraftFromText(buildDraftPayload());
       addToast({ title: "Rascunho salvo", color: "success" });
       router.push("/biblioteca");
     } catch (err) {
@@ -325,6 +354,59 @@ export default function CriacaoPage() {
     } finally {
       setSaving(false);
     }
+  }
+
+  /** Extrai uma mensagem legível do erro retornado pela Edge Function de export. */
+  function formatExportError(error: unknown): string | null {
+    if (error == null) return null;
+    if (typeof error === "string") return error;
+    if (typeof error === "object") {
+      const e = error as { detail?: unknown; message?: unknown };
+      if (typeof e.detail === "string") return e.detail;
+      if (typeof e.message === "string") return e.message;
+      try {
+        return JSON.stringify(e.detail ?? e.message ?? error);
+      } catch {
+        return String(error);
+      }
+    }
+    return String(error);
+  }
+
+  /** Salva o rascunho (se ainda não salvo) e dispara o envio para a conta de destino. */
+  async function runSend() {
+    setSendStatus("sending");
+    setSendError(null);
+    try {
+      const payload = buildDraftPayload();
+      const sig = JSON.stringify(payload);
+      let draftId = sentDraftId;
+      if (!draftId || draftSigRef.current !== sig) {
+        const res = await createDraftFromText(payload);
+        draftId = res.draftId;
+        setSentDraftId(draftId);
+        draftSigRef.current = sig;
+      }
+      const data = await invokeExport([draftId]);
+      const result = data?.results?.[0];
+      if (!data?.ok || !result?.ok) {
+        throw new Error(formatExportError(result?.error) ?? "Falha ao enviar para o destino");
+      }
+      setSendStatus("success");
+    } catch (err) {
+      setSendError(err instanceof Error ? err.message : String(err));
+      setSendStatus("error");
+    }
+  }
+
+  async function handleSendToDestination() {
+    if (!validateInputs()) return;
+    if (!connectionId) {
+      addToast({ title: "Selecione uma conta de destino", color: "warning" });
+      return;
+    }
+    setSendModalOpen(true);
+    await runSend();
   }
 
   return (
@@ -366,7 +448,7 @@ export default function CriacaoPage() {
               ref={fileInput}
               type="file"
               multiple
-              accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+              accept=".pdf,.docx,.md,.markdown,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/markdown"
               className="hidden"
               onChange={handleFile}
             />
@@ -395,7 +477,7 @@ export default function CriacaoPage() {
                   ? "Solte os arquivos aqui"
                   : fileNames.length
                     ? `${fileNames.length} arquivo(s): ${fileNames.join(", ")}`
-                    : "Arraste PDFs/DOCX aqui (vários de uma vez), ou clique para selecionar"}
+                    : "Arraste PDFs/DOCX/MD aqui (vários de uma vez), ou clique para selecionar"}
             </button>
             {fileNames.length > 0 && !extracting && (
               <button
@@ -652,7 +734,7 @@ export default function CriacaoPage() {
 
         <div className="flex justify-end gap-2">
           <Button
-            variant="secondary"
+            variant="link"
             onPress={() =>
               setConfirm({
                 title: "Limpar tudo?",
@@ -671,6 +753,7 @@ export default function CriacaoPage() {
             Limpar
           </Button>
           <Button
+            variant="secondary"
             onPress={() =>
               setConfirm({
                 title: "Salvar roleplay na biblioteca?",
@@ -688,6 +771,18 @@ export default function CriacaoPage() {
             isDisabled={extracting}
           >
             Salvar roleplay na biblioteca
+          </Button>
+          <Button
+            onPress={handleSendToDestination}
+            isDisabled={
+              !connectionId ||
+              extracting ||
+              saving ||
+              processing ||
+              (sendModalOpen && sendStatus === "sending")
+            }
+          >
+            Enviar para destino
           </Button>
         </div>
       </Card>
@@ -729,6 +824,14 @@ export default function CriacaoPage() {
       </Modal>
 
       <ConfirmDialog config={confirm} onClose={() => setConfirm(null)} />
+
+      <SendStatusModal
+        open={sendModalOpen}
+        status={sendStatus}
+        errorMessage={sendError}
+        onRetry={runSend}
+        onClose={() => setSendModalOpen(false)}
+      />
     </div>
   );
 }
