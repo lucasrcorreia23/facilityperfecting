@@ -187,6 +187,123 @@ export interface RoleplayReadiness {
   updated_at: string;
 }
 
+// ── Trilhas (planos de trilhas de roleplay) ────────────────────────────────
+
+export type MethodologySourceStatus = "pending" | "fetched" | "error";
+
+export interface MethodologySource {
+  id: string;
+  title: string;
+  url: string;
+  content: string | null;
+  status: MethodologySourceStatus;
+  error_detail: string | null;
+  fetched_at: string | null;
+  enabled: boolean;
+  position: number;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type TrailPlanStatus =
+  | "draft"
+  | "extracting"
+  | "analyzing"
+  | "analyzed"
+  | "planning"
+  | "ready"
+  | "error";
+
+export interface TrailInputFile {
+  name: string;
+  path: string | null;
+  chars: number;
+}
+
+/** Skill gap identificado na etapa 1 (frequência × impacto). */
+export interface SkillGap {
+  skill: string;
+  categoria: string;
+  frequencia: number; // 1..5
+  impacto: number; // 1..5
+  score: number; // frequencia × impacto
+  evidencias: string[];
+  vendedores_afetados: string[];
+}
+
+/** Radar de competências de um vendedor (etapa 1). */
+export interface RadarEntry {
+  vendedor: string;
+  cargo: string;
+  categorias: { nome: string; score: number }[]; // score 0..10
+}
+
+export interface TrailPlan {
+  id: string;
+  client_name: string;
+  sales_methodology: string | null;
+  additional_context: string | null;
+  seller_count: number | null;
+  website_url: string | null;
+  input_files: TrailInputFile[];
+  input_text: string | null;
+  prompt_override: string | null;
+  status: TrailPlanStatus;
+  analysis_markdown: string | null;
+  plan_markdown: string | null;
+  skill_gaps: SkillGap[] | null;
+  radar: RadarEntry[] | null;
+  offer_id: string | null;
+  error_detail: Record<string, unknown> | null;
+  usage: Record<string, unknown> | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Trail {
+  id: string;
+  plan_id: string;
+  name: string;
+  description: string | null;
+  skill_gaps_alvo: string[];
+  vendedores_alvo: string[];
+  position: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TrailItem {
+  id: string;
+  trail_id: string;
+  position: number;
+  titulo: string;
+  objetivo: string | null;
+  skill: string | null;
+  call_context_slug: string | null;
+  difficulty: string;
+  instrucoes_cenario: string | null;
+  draft_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Item enriquecido com o status do draft gerado (join). */
+export interface TrailItemRow extends TrailItem {
+  draft: Pick<RoleplayDraft, "id" | "status" | "connection_id" | "error_detail"> | null;
+}
+
+/** Trilha com itens aninhados (getTrailPlan). */
+export interface TrailWithItems extends Trail {
+  items: TrailItemRow[];
+}
+
+/** Plano com trilhas aninhadas (getTrailPlan). */
+export interface TrailPlanDetail extends TrailPlan {
+  trails: TrailWithItems[];
+}
+
 // ── Avaliação de qualidade (multi-avaliador) ────────────────────────────────
 
 export interface Profile {

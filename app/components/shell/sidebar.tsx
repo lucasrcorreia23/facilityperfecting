@@ -7,12 +7,14 @@ import {
   LinkIcon,
   Cog6ToothIcon,
   ClipboardDocumentCheckIcon,
+  AcademicCapIcon,
 } from "@heroicons/react/24/outline";
 import { RobotIcon } from "@/app/components/icons/robot-icon";
 import { cn } from "@/app/lib/cn";
 
 const ITEMS = [
   { href: "/criacao", label: "Criação", icon: RobotIcon },
+  { href: "/trilhas", label: "Trilhas", icon: AcademicCapIcon },
   { href: "/biblioteca", label: "Biblioteca", icon: RectangleStackIcon },
   { href: "/prontidao", label: "Prontidão", icon: ClipboardDocumentCheckIcon },
   { href: "/conexoes", label: "Conexões", icon: LinkIcon },
@@ -56,7 +58,7 @@ export function Sidebar({ collapsed }: { collapsed: boolean }) {
 export function MobileNav() {
   const pathname = usePathname();
   return (
-    <nav className="layer-header fixed bottom-0 left-0 right-0 grid grid-cols-5 border-t border-slate-200 bg-white sm:hidden">
+    <nav className="layer-header fixed bottom-0 left-0 right-0 grid grid-cols-6 border-t border-slate-200 bg-white sm:hidden">
       {ITEMS.map(({ href, label, icon: Icon }) => {
         const active = pathname.startsWith(href);
         return (

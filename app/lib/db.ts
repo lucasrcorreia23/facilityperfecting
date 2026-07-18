@@ -8,6 +8,7 @@ import type {
   DraftRow,
   EvalWeights,
   EvaluationRound,
+  MethodologySource,
   ProcessImportResult,
   Profile,
   RoleplayEvaluation,
@@ -15,6 +16,11 @@ import type {
   RoundStatus,
   ScenarioConfig,
   TrackingClient,
+  Trail,
+  TrailInputFile,
+  TrailItem,
+  TrailPlan,
+  TrailPlanDetail,
 } from "@/app/lib/types";
 import { defaultEvalWeights } from "@/app/lib/evaluation-criteria";
 
@@ -510,6 +516,270 @@ export async function processImport(
   if (error) throw new Error(await functionErrorMessage(error, "Falha ao processar"));
   if (!data?.ok) throw new Error(JSON.stringify(data?.error ?? data));
   return data.result as ProcessImportResult;
+}
+
+// ── Trilhas (planos de trilhas de roleplay) ────────────────────────────────
+
+export async function listMethodologySources(): Promise<MethodologySource[]> {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from("methodology_sources")
+    .select("*")
+    .order("position", { ascending: true });
+  if (error) throw error;
+  return data as MethodologySource[];
+}
+
+export async function updateMethodologySource(
+  id: string,
+  patch: Partial<
+    Pick<MethodologySource, "title" | "url" | "content" | "enabled" | "status" | "fetched_at">
+  >,
+) {
+  const supabase = createClient();
+  const { error } = await supabase.from("methodology_sources").update(patch).eq("id", id);
+  if (error) throw error;
+}
+
+/** Coleta o conteúdo de uma URL (website do cliente) ou re-coleta uma fonte da base. */
+export async function invokeIngestUrl(
+  params: { url: string } | { sourceId: string },
+): Promise<{ text: string; title: string }> {
+  const supabase = createClient();
+  const { data, error } = await supabase.functions.invoke("ingest-url", { body: params });
+  if (error) throw new Error(await functionErrorMessage(error, "Falha ao coletar a URL"));
+  if (!data?.ok) throw new Error(String(data?.error ?? "Falha ao coletar a URL"));
+  return { text: data.text, title: data.title };
+}
+
+export async function listTrailPlans(): Promise<TrailPlan[]> {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from("trail_plans")
+    .select("*")
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  return data as TrailPlan[];
+}
+
+export async function createTrailPlan(params: {
+  clientName: string;
+  salesMethodology?: string | null;
+  additionalContext?: string | null;
+  sellerCount?: number | null;
+  websiteUrl?: string | null;
+  inputFiles: TrailInputFile[];
+  inputText: string;
+  promptOverride?: string | null;
+}): Promise<{ planId: string }> {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from("trail_plans")
+    .insert({
+      client_name: params.clientName,
+      sales_methodology: params.salesMethodology ?? null,
+      additional_context: params.additionalContext ?? null,
+      seller_count: params.sellerCount ?? null,
+      website_url: params.websiteUrl ?? null,
+      input_files: params.inputFiles,
+      input_text: params.inputText,
+      prompt_override: params.promptOverride ?? null,
+      status: "draft",
+    })
+    .select("id")
+    .single();
+  if (error) throw error;
+  return { planId: data.id };
+}
+
+/** Plano com trilhas + itens + status dos drafts, ordenados por position. */
+export async function getTrailPlan(planId: string): Promise<TrailPlanDetail> {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from("trail_plans")
+    .select(
+      "*, trails(*, items:trail_items(*, draft:roleplay_drafts(id, status, connection_id, error_detail)))",
+    )
+    .eq("id", planId)
+    .single();
+  if (error) throw error;
+  const plan = data as unknown as TrailPlanDetail;
+  plan.trails = (plan.trails ?? [])
+    .sort((a, b) => a.position - b.position)
+    .map((t) => ({ ...t, items: (t.items ?? []).sort((a, b) => a.position - b.position) }));
+  return plan;
+}
+
+export async function deleteTrailPlan(planId: string) {
+  const supabase = createClient();
+  const { error } = await supabase.from("trail_plans").delete().eq("id", planId);
+  if (error) throw error;
+}
+
+/** Dispara um estágio da geração (analysis → analyzed; plan → ready). Retorna 202 imediato. */
+export async function invokeGenerateTrailPlan(planId: string, stage: "analysis" | "plan") {
+  const supabase = createClient();
+  const { data, error } = await supabase.functions.invoke("generate-trail-plan", {
+    body: { planId, stage },
+  });
+  if (error) throw new Error(await functionErrorMessage(error, "Falha ao iniciar a geração"));
+  if (!data?.ok) throw new Error(String(data?.error ?? "Falha ao iniciar a geração"));
+  return data;
+}
+
+export async function updateTrail(
+  id: string,
+  patch: Partial<Pick<Trail, "name" | "description" | "skill_gaps_alvo" | "vendedores_alvo">>,
+) {
+  const supabase = createClient();
+  const { error } = await supabase.from("trails").update(patch).eq("id", id);
+  if (error) throw error;
+}
+
+export async function createTrailItem(params: {
+  trailId: string;
+  position: number;
+  titulo: string;
+}): Promise<TrailItem> {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from("trail_items")
+    .insert({ trail_id: params.trailId, position: params.position, titulo: params.titulo })
+    .select("*")
+    .single();
+  if (error) throw error;
+  return data as TrailItem;
+}
+
+export async function updateTrailItem(
+  id: string,
+  patch: Partial<
+    Pick<
+      TrailItem,
+      "titulo" | "objetivo" | "skill" | "call_context_slug" | "difficulty" | "instrucoes_cenario"
+    >
+  >,
+) {
+  const supabase = createClient();
+  const { error } = await supabase.from("trail_items").update(patch).eq("id", id);
+  if (error) throw error;
+}
+
+/** Persiste a nova ordem dos itens de uma trilha (position = índice). */
+export async function reorderTrailItems(items: { id: string; position: number }[]) {
+  const supabase = createClient();
+  for (const item of items) {
+    const { error } = await supabase
+      .from("trail_items")
+      .update({ position: item.position })
+      .eq("id", item.id);
+    if (error) throw error;
+  }
+}
+
+export async function deleteTrailItem(id: string) {
+  const supabase = createClient();
+  const { error } = await supabase.from("trail_items").delete().eq("id", id);
+  if (error) throw error;
+}
+
+/**
+ * Gera roleplay_drafts para os itens ainda sem draft (todos, ou só das trilhas
+ * informadas). Cria UMA offer por plano (materiais do cliente) e a reusa em
+ * todos os drafts — padrão "Novo cenário desta oferta"; o export reusa a offer
+ * por conexão via offer_perfecting_ids.
+ */
+export async function generateTrailDrafts(
+  planId: string,
+  trailIds?: string[],
+): Promise<{ created: number }> {
+  const supabase = createClient();
+
+  const { data: plan, error: planErr } = await supabase
+    .from("trail_plans")
+    .select("id, client_name, input_text, input_files, offer_id")
+    .eq("id", planId)
+    .single();
+  if (planErr) throw planErr;
+
+  // Offer única do plano (criada sob demanda na 1ª geração).
+  let offerId: string | null = plan.offer_id;
+  if (!offerId) {
+    const inputText: string = plan.input_text ?? "";
+    const { data: source, error: srcErr } = await supabase
+      .from("sources")
+      .insert({
+        type: "file",
+        raw_text: inputText,
+        meta: { origin: "trail_plan", plan_id: planId, files: plan.input_files ?? [] },
+      })
+      .select("id")
+      .single();
+    if (srcErr) throw srcErr;
+
+    const { data: offer, error: offErr } = await supabase
+      .from("offers")
+      .insert({
+        offer_name: plan.client_name,
+        general_description: inputText,
+        source_id: source.id,
+      })
+      .select("id")
+      .single();
+    if (offErr) throw offErr;
+    offerId = offer.id;
+
+    const { error: linkErr } = await supabase
+      .from("trail_plans")
+      .update({ offer_id: offerId })
+      .eq("id", planId);
+    if (linkErr) throw linkErr;
+  }
+
+  let trailsQuery = supabase.from("trails").select("id, name").eq("plan_id", planId);
+  if (trailIds && trailIds.length > 0) trailsQuery = trailsQuery.in("id", trailIds);
+  const { data: trails, error: trailsErr } = await trailsQuery;
+  if (trailsErr) throw trailsErr;
+  if (!trails || trails.length === 0) return { created: 0 };
+
+  const trailNames = new Map(trails.map((t) => [t.id, t.name]));
+  const { data: items, error: itemsErr } = await supabase
+    .from("trail_items")
+    .select("*")
+    .in("trail_id", trails.map((t) => t.id))
+    .is("draft_id", null)
+    .order("position", { ascending: true });
+  if (itemsErr) throw itemsErr;
+
+  let created = 0;
+  for (const item of (items ?? []) as TrailItem[]) {
+    const trailName = trailNames.get(item.trail_id) ?? "Trilha";
+    const { data: draft, error: draftErr } = await supabase
+      .from("roleplay_drafts")
+      .insert({
+        offer_id: offerId,
+        scenario: {
+          call_context_slug: item.call_context_slug,
+          difficulty: item.difficulty,
+          skill: item.skill,
+          objective: item.objetivo,
+          aditional_instructions: item.instrucoes_cenario,
+        },
+        title: `${trailName} — ${item.position + 1}. ${item.titulo}`,
+      })
+      .select("id")
+      .single();
+    if (draftErr) throw draftErr;
+
+    const { error: linkErr } = await supabase
+      .from("trail_items")
+      .update({ draft_id: draft.id })
+      .eq("id", item.id);
+    if (linkErr) throw linkErr;
+    created += 1;
+  }
+
+  return { created };
 }
 
 export async function uploadAndExtract(file: File): Promise<{

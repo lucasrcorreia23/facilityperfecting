@@ -1,6 +1,7 @@
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { extractText as extractPdf, getDocumentProxy } from "npm:unpdf@0.12.1";
 import mammoth from "npm:mammoth@1.8.0";
+import * as XLSX from "npm:xlsx@0.18.5";
 import { corsHeaders, json } from "../_shared/cors.ts";
 
 const db = createClient(
@@ -36,6 +37,10 @@ Deno.serve(async (req) => {
     const isDocx =
       (mime ?? "").includes("word") ||
       name.toLowerCase().endsWith(".docx");
+    const isXlsx =
+      (mime ?? "").includes("spreadsheetml") ||
+      (mime ?? "").includes("ms-excel") ||
+      /\.xlsx?$/.test(name.toLowerCase());
 
     let text = "";
     if (isPdf) {
@@ -45,6 +50,12 @@ Deno.serve(async (req) => {
     } else if (isDocx) {
       const { value } = await mammoth.extractRawText({ arrayBuffer: buf.buffer });
       text = value;
+    } else if (isXlsx) {
+      // Planilha → CSV por aba (preserva linhas/colunas dos scorecards sem inflar tokens)
+      const wb = XLSX.read(buf, { type: "array" });
+      text = wb.SheetNames
+        .map((sheet) => `## Planilha: ${sheet}\n${XLSX.utils.sheet_to_csv(wb.Sheets[sheet])}`)
+        .join("\n\n");
     } else {
       // fallback: tratar como texto puro
       text = new TextDecoder().decode(buf);
