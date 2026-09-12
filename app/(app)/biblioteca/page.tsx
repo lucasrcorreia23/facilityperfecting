@@ -27,13 +27,32 @@ import { createClient } from "@/app/lib/supabase/client";
 import {
   deleteDraft,
   invokeExport,
+  invokeExportPlaybook,
   listConnections,
   listDrafts,
+  pollPlaybookRun,
   setDraftConnection,
 } from "@/app/lib/db";
 import type { Connection, DraftRow } from "@/app/lib/types";
+import { perfectingRoleplayUrl } from "@/app/lib/perfecting-app";
 
-const PERFECTING_HML = "https://app-hml.perfecting.app";
+const isPlaybookDraft = (d: DraftRow) => d.scenario?.generation_mode === "playbook";
+
+/** Etapas do pipeline de implementação (as do meio vêm cruas da API). */
+const PLAYBOOK_STAGE_LABELS: Record<string, string> = {
+  starting: "iniciando",
+  offer: "oferta",
+  context: "contexto",
+  persona: "persona",
+  implementing: "implementando",
+  validating_methodologies: "validando metodologias",
+  creating_case_setup: "criando roleplay",
+  generating_methodology_content: "gerando conteúdo",
+  generating_behavior_guidance: "gerando comportamento",
+  generating_objections: "gerando objeções",
+  call_type_completed: "etapa concluída",
+  done: "concluído",
+};
 
 export default function BibliotecaPage() {
   const [drafts, setDrafts] = useState<DraftRow[]>([]);
@@ -127,8 +146,8 @@ export default function BibliotecaPage() {
         title: `Enviar ${sendIds.length} roleplay(s) para a Perfecting?`,
         message: (
           <>
-            Isso vai <b>criar o(s) roleplay(s) na conta de destino, em produção</b> — conteúdo real
-            na conta do cliente. Confira a conta antes de continuar.
+            Isso vai <b>criar o(s) roleplay(s) na conta de destino</b> (HML ou
+            produção, conforme a conexão escolhida). Confira a conta antes de continuar.
           </>
         ),
         confirmLabel: "Enviar",
@@ -156,7 +175,15 @@ export default function BibliotecaPage() {
   async function runExport(ids: string[]) {
     setSending(true);
     try {
-      await invokeExport(ids);
+      // Playbook tem motor próprio (job longo, 1 roleplay por etapa) e responde
+      // 202 — o resultado chega por realtime/poll, não na resposta.
+      const playbookIds = ids.filter((id) => {
+        const d = drafts.find((x) => x.id === id);
+        return d ? isPlaybookDraft(d) : false;
+      });
+      const methodologyIds = ids.filter((id) => !playbookIds.includes(id));
+      if (methodologyIds.length > 0) await invokeExport(methodologyIds);
+      for (const id of playbookIds) await invokeExportPlaybook(id);
       setSelected(new Set());
       await refresh();
     } catch (err) {
@@ -176,6 +203,30 @@ export default function BibliotecaPage() {
   }
 
   const selectedArr = useMemo(() => Array.from(selected), [selected]);
+
+  // Chave estável: sem isso o realtime recria o intervalo a cada refresh e o poll nunca dispara.
+  const runningPlaybookIds = useMemo(
+    () =>
+      drafts
+        .filter((d) => d.status === "exporting" && isPlaybookDraft(d))
+        .map((d) => d.id)
+        .sort()
+        .join(","),
+    [drafts],
+  );
+
+  /** Reconcilia implementações em andamento (cobre stream que caiu no meio). */
+  useEffect(() => {
+    if (!runningPlaybookIds) return;
+    const ids = runningPlaybookIds.split(",");
+    const timer = setInterval(() => {
+      void (async () => {
+        for (const id of ids) await pollPlaybookRun(id).catch(() => {});
+        await refresh();
+      })();
+    }, 20_000);
+    return () => clearInterval(timer);
+  }, [runningPlaybookIds, refresh]);
 
   if (loading) return <LoadingView label="Carregando biblioteca…" />;
 
@@ -239,7 +290,10 @@ export default function BibliotecaPage() {
                   <td className="px-4 py-4">
                     {d.status === "exported" && d.perfecting_case_setup_id ? (
                       <a
-                        href={`${PERFECTING_HML}/roleplays/${d.perfecting_case_setup_id}/details`}
+                        href={perfectingRoleplayUrl(
+                          d.connection?.environment,
+                          d.perfecting_case_setup_id,
+                        )}
                         target="_blank"
                         rel="noreferrer"
                         className="inline-flex"
@@ -251,6 +305,38 @@ export default function BibliotecaPage() {
                       <span title={d.status === "error" ? JSON.stringify(d.error_detail) : undefined}>
                         <StatusBadge status={d.status} />
                       </span>
+                    )}
+                    {isPlaybookDraft(d) && (
+                      <div className="mt-1 text-xs text-slate-500">
+                        {d.status === "exporting" ? (
+                          <span>
+                            {d.playbook_run?.call_type_total
+                              ? `etapa ${d.playbook_run.call_type_index ?? 0}/${d.playbook_run.call_type_total}`
+                              : "preparando"}
+                            {d.playbook_run?.stage
+                              ? ` — ${PLAYBOOK_STAGE_LABELS[d.playbook_run.stage] ?? d.playbook_run.stage}`
+                              : ""}
+                          </span>
+                        ) : (
+                          (d.playbook_run?.case_setup_ids?.length ?? 0) > 0 && (
+                            <span className="flex flex-wrap items-center gap-1">
+                              {d.playbook_run!.case_setup_ids!.length} roleplays:
+                              {d.playbook_run!.case_setup_ids!.map((id, i) => (
+                                <a
+                                  key={id}
+                                  href={perfectingRoleplayUrl(d.connection?.environment, id)}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="underline hover:text-slate-700"
+                                  title={`Abrir roleplay ${id}`}
+                                >
+                                  {i + 1}
+                                </a>
+                              ))}
+                            </span>
+                          )
+                        )}
+                      </div>
                     )}
                   </td>
                   <td className="hidden px-4 py-4 text-slate-500 md:table-cell">
@@ -287,8 +373,8 @@ export default function BibliotecaPage() {
           <ModalHeader>Conta de destino</ModalHeader>
           <ModalBody>
             <p className="text-sm text-slate-500">
-              Escolha a org da Perfecting onde os roleplays serão criados. O envio cria{" "}
-              <b>conteúdo real na conta do cliente, em produção</b>.
+              Escolha a org da Perfecting onde os roleplays serão criados (HML ou
+              produção). O envio cria <b>conteúdo real na conta do cliente</b>.
             </p>
             <Select
               label="Conta"

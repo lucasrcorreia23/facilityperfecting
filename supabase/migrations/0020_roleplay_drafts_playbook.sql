@@ -1,0 +1,16 @@
+-- Modo playbook na Criação: um rascunho vira N roleplays (um por etapa do
+-- playbook), então perfecting_case_setup_id (id único) não dá conta sozinho.
+--
+-- playbook_run guarda o progresso do stream de implementação e o resultado:
+-- { playbook_id, playbook_name, job_id, stage, call_type_index, call_type_total,
+--   started_at, context_id, persona_id, before_case_setup_ids[],
+--   case_setup_ids[], results[] }
+--
+-- before_case_setup_ids é o snapshot tirado ANTES de abrir o stream: os ids
+-- criados saem do diff contra a lista do contexto, porque o evento
+-- implementation_ready não devolve os case_setup_id. É também o que permite ao
+-- poll reconciliar se a Edge Function morrer no meio do stream.
+--
+-- O modo escolhido e o playbook ficam em roleplay_drafts.scenario (jsonb),
+-- sem coluna nova. roleplay_drafts já está na publication de realtime (0004).
+alter table roleplay_drafts add column if not exists playbook_run jsonb;

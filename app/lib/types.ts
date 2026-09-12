@@ -46,16 +46,23 @@ export interface Context {
   updated_at: string;
 }
 
+/** "playbook" = a jornada inteira do playbook (1 roleplay por etapa). */
+export type GenerationMode = "methodology" | "playbook";
+
 export interface ScenarioConfig {
   call_context_slug?: string | null;
   difficulty?: string | null;
   skill?: string | null;
   objective?: string | null;
   aditional_instructions?: string | null;
-  // Payload de case_setup escrito à mão. Quando presente, o export PULA o
-  // /role_plays/generate (IA) e manda estes campos VERBATIM para a Perfecting.
-  // Shape = saída de generateCaseSetup (company_profile, persona_profile,
-  // buyer_*, salesperson_*, training_*, etc.). Ver buildCaseSetupCreate.
+  // Modo playbook: call_context/dificuldade/instruções acima não se aplicam —
+  // vêm das etapas do playbook.
+  generation_mode?: GenerationMode | null;
+  playbook_id?: number | null;
+  playbook_name?: string | null;
+  // Payload de case_setup escrito à mão. Em produção o export manda VERBATIM.
+  // Em HML, se faltar company_profile/persona_profile/persona_voice_model_id,
+  // completa via /generate e sobrepõe só training_* / instruções.
   case_setup_payload?: Record<string, unknown> | null;
 }
 
@@ -65,6 +72,117 @@ export interface CallContextType {
   slug: string;
   group: string;
   stage?: string;
+}
+
+/** Playbook como existe NA CONTA da Perfecting (retornado por GET /playbook/list). */
+export interface Playbook {
+  id: number;
+  name: string;
+  playbook_status_id: number | null;
+}
+
+export interface Methodology {
+  id: number;
+  name: string;
+  slug: string;
+  description: string;
+  application_case: string;
+}
+
+/** Etapa do playbook — cada uma vira um roleplay na implementação. */
+export interface PlaybookCallType {
+  id: number;
+  name: string;
+  description: string | null;
+  order: number | null;
+  call_context_type_id: number | null;
+}
+
+/** Progresso e resultado da implementação por playbook (roleplay_drafts.playbook_run). */
+export interface PlaybookRun {
+  playbook_id?: number;
+  playbook_name?: string | null;
+  job_id?: string | number | null;
+  stage?: string;
+  call_type_index?: number | null;
+  call_type_total?: number | null;
+  started_at?: string;
+  finished_at?: string | null;
+  context_id?: number;
+  persona_id?: number | null;
+  before_case_setup_ids?: number[];
+  case_setup_ids?: number[];
+  results?: unknown[];
+}
+
+// ── Playbooks autorados aqui (tabelas locais), antes de virarem playbook na conta ──
+
+export type PlaybookDraftStatus =
+  | "draft"
+  | "generating"
+  | "ready"
+  | "exporting"
+  | "exported"
+  | "error";
+
+/** O que já foi criado no destino — base da idempotência do reenvio. */
+export interface PlaybookExportRun {
+  connection_id?: string;
+  perfecting_playbook_id?: number;
+  call_types?: Record<string, number>;
+  call_blocks?: Record<string, number>;
+  finished_at?: string | null;
+}
+
+export interface PlaybookDraft {
+  id: string;
+  name: string;
+  input_files: TrailInputFile[];
+  input_text: string | null;
+  prompt_override: string | null;
+  status: PlaybookDraftStatus;
+  error_detail: Record<string, unknown> | null;
+  usage: Record<string, unknown> | null;
+  export_run: PlaybookExportRun | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Etapa da jornada — vira um PlaybookCallType na conta (e um roleplay depois). */
+export interface PlaybookDraftCallType {
+  id: string;
+  playbook_id: string;
+  position: number;
+  name: string;
+  description: string | null;
+  call_context_slug: string | null;
+  methodology_slug: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Subetapa — vira um PlaybookCallBlock na conta. */
+export interface PlaybookDraftCallBlock {
+  id: string;
+  call_type_id: string;
+  position: number;
+  name: string;
+  description: string | null;
+  objective: string | null;
+  sample_questions: string[];
+  what_to_do: string[];
+  what_to_avoid: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PlaybookDraftCallTypeWithBlocks extends PlaybookDraftCallType {
+  playbook_call_blocks: PlaybookDraftCallBlock[];
+}
+
+export interface PlaybookDraftDetail extends PlaybookDraft {
+  playbook_call_types: PlaybookDraftCallTypeWithBlocks[];
 }
 
 export interface ImportGap {
@@ -94,6 +212,9 @@ export interface RoleplayDraft {
   status: DraftStatus;
   perfecting_case_setup_id: number | null;
   elevenlabs_agent_id: string | null;
+  // Modo playbook: N roleplays num rascunho só (perfecting_case_setup_id guarda
+  // o primeiro, por compatibilidade; a lista completa fica aqui).
+  playbook_run: PlaybookRun | null;
   error_detail: Record<string, unknown> | null;
   created_by: string | null;
   created_at: string;
@@ -103,7 +224,7 @@ export interface RoleplayDraft {
 /** Linha enriquecida para a Biblioteca (join com offer/connection). */
 export interface DraftRow extends RoleplayDraft {
   offer: Pick<Offer, "id" | "offer_name"> | null;
-  connection: Pick<Connection, "id" | "org_name" | "org_id"> | null;
+  connection: Pick<Connection, "id" | "org_name" | "org_id" | "environment"> | null;
 }
 
 export interface ExportJob {

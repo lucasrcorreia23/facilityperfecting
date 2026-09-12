@@ -2,7 +2,7 @@ import { corsHeaders, json } from "../_shared/cors.ts";
 import { listCallContexts, loginSuperadmin, PerfectingError } from "../_shared/perfecting.ts";
 
 const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY") ?? "";
-const MODEL = Deno.env.get("ANTHROPIC_MODEL") ?? "claude-opus-4-8";
+const MODEL = Deno.env.get("ANTHROPIC_MODEL") ?? "claude-sonnet-5";
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 
 /**
@@ -109,8 +109,8 @@ Deno.serve(async (req) => {
     const base = typeof body.prompt === "string" && body.prompt.trim() ? body.prompt.trim() : SYSTEM_BASE;
 
     // call_contexts válidos da Perfecting (para o modelo escolher um slug real)
-    const saToken = await loginSuperadmin();
-    const contexts = await listCallContexts(saToken);
+    const saToken = await loginSuperadmin("hml");
+    const contexts = await listCallContexts("hml", saToken);
     if (contexts.length === 0) {
       return json({ ok: false, error: "nenhum call_context disponível na Perfecting" }, 502);
     }

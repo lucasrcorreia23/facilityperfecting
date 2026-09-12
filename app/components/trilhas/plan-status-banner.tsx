@@ -3,13 +3,18 @@
 import { Spinner } from "@heroui/react";
 import { CheckCircleIcon, XCircleIcon } from "@heroicons/react/24/outline";
 import { Button } from "@/app/components/ui/button";
-import type { TrailPlanStatus } from "@/app/lib/types";
+import type { PlaybookDraftStatus, TrailPlanStatus } from "@/app/lib/types";
 
-const RUNNING_LABEL: Partial<Record<TrailPlanStatus, string>> = {
+/** Serve trilhas e playbooks: os rótulos são parametrizáveis, os defaults são os de trilhas. */
+type GenerationStatus = TrailPlanStatus | PlaybookDraftStatus;
+
+const RUNNING_LABEL: Partial<Record<GenerationStatus, string>> = {
   extracting: "Extraindo o material enviado…",
-  analyzing: "Etapa 1/2 — Analisando os materiais e mapeando skill gaps (pode levar alguns minutos)…",
+  analyzing:
+    "Etapa 1/2 — Analisando os materiais e mapeando skill gaps (processamento em lote — normalmente alguns minutos)…",
   analyzed: "Etapa 1/2 concluída — iniciando o plano de trilhas…",
-  planning: "Etapa 2/2 — Montando as trilhas e os roleplays (pode levar alguns minutos)…",
+  planning:
+    "Etapa 2/2 — Montando as trilhas e os roleplays (processamento em lote — normalmente alguns minutos)…",
 };
 
 /** Estado da geração do plano (realtime). Em erro, oferece retomar o estágio pendente. */
@@ -18,19 +23,21 @@ export function PlanStatusBanner({
   errorMessage,
   onRetry,
   retrying,
+  readyLabel = "Plano de trilhas pronto. Revise as trilhas abaixo antes de gerar os roleplays.",
+  runningLabels = RUNNING_LABEL,
 }: {
-  status: TrailPlanStatus;
+  status: GenerationStatus;
   errorMessage?: string | null;
   onRetry: () => void;
   retrying?: boolean;
+  readyLabel?: string;
+  runningLabels?: Partial<Record<GenerationStatus, string>>;
 }) {
   if (status === "ready") {
     return (
       <div className="flex items-center gap-2.5 rounded-sm border border-green-200 bg-green-50 px-4 py-3">
         <CheckCircleIcon className="w-5 h-5 shrink-0 text-green-600" />
-        <p className="text-sm font-medium text-green-800">
-          Plano de trilhas pronto. Revise as trilhas abaixo antes de gerar os roleplays.
-        </p>
+        <p className="text-sm font-medium text-green-800">{readyLabel}</p>
       </div>
     );
   }
@@ -54,7 +61,7 @@ export function PlanStatusBanner({
     );
   }
 
-  const label = RUNNING_LABEL[status];
+  const label = runningLabels[status];
   if (!label) return null;
   return (
     <div className="flex items-center gap-3 rounded-sm border border-blue-200 bg-blue-50 px-4 py-3">

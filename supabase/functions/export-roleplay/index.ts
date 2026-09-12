@@ -1,15 +1,13 @@
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { corsHeaders, json } from "../_shared/cors.ts";
+import { authenticateConnection, resolveOfferContext } from "../_shared/destination.ts";
 import {
   createCaseSetup,
-  createContext,
-  createOffer,
   generateCaseSetup,
-  generateContext,
-  generateOffer,
+  generatePersonaFromContext,
+  isHmlCaseSetupComplete,
   listCallContexts,
-  loginAsUser,
-  loginSuperadmin,
+  overlayVerbatimOnGenerated,
   PerfectingError,
   resolveCallContextTypeId,
 } from "../_shared/perfecting.ts";
@@ -23,7 +21,7 @@ const db = createClient(
 
 /**
  * Exporta um rascunho para a org de destino na Perfecting.
- * Fluxo: superadmin login → login_as_user → offer → context → case_setup.
+ * Fluxo: superadmin login → login_as_user → offer → context → (persona HML) → case_setup.
  * Reuso por conexão: pula offer/context se já existe id na ponte. Idempotente.
  */
 async function exportDraft(draftId: string): Promise<{ caseSetupId: number }> {
@@ -35,14 +33,6 @@ async function exportDraft(draftId: string): Promise<{ caseSetupId: number }> {
   if (error || !draft) throw new PerfectingError(404, "rascunho não encontrado");
 
   const connection = draft.connections;
-  if (!connection) throw new PerfectingError(400, "rascunho sem conexão de destino");
-  if (connection.target_user_id == null) {
-    throw new PerfectingError(400, "conexão sem gestor-alvo (target_user_id)");
-  }
-
-  const offer = draft.offers;
-  const context = draft.contexts; // pode ser null → criamos via generate
-  const connId = connection.id;
 
   // Defaults globais (app_settings) — usados quando o draft não traz scenario.
   const { data: settings } = await db
@@ -61,17 +51,16 @@ async function exportDraft(draftId: string): Promise<{ caseSetupId: number }> {
   const setJob = (patch: Record<string, unknown>) =>
     jobId ? db.from("export_jobs").update(patch).eq("id", jobId) : Promise.resolve();
 
-  // 1) login + impersonação
-  const saToken = await loginSuperadmin();
-  const token = await loginAsUser(saToken, connection.target_user_id, connection.org_id);
+  // 1) login + impersonação no ambiente da conexão (hml | prod)
+  const { env, token } = await authenticateConnection(connection);
 
   // resolver call_context: scenario do draft → default global → 1º disponível.
   // ⚠️ /role_plays/generate QUEBRA (500) se call_context OU dificuldade faltarem.
   const callContextSlug =
     draft.scenario?.call_context_slug ?? settings?.default_call_context_slug ?? null;
-  let callContextTypeId = await resolveCallContextTypeId(token, callContextSlug);
+  let callContextTypeId = await resolveCallContextTypeId(env, token, callContextSlug);
   if (callContextTypeId == null) {
-    const all = await listCallContexts(token);
+    const all = await listCallContexts(env, token);
     callContextTypeId = all[0]?.id;
   }
   if (callContextTypeId == null) {
@@ -82,85 +71,56 @@ async function exportDraft(draftId: string): Promise<{ caseSetupId: number }> {
   const rawDifficulty = draft.scenario?.difficulty ?? settings?.default_difficulty ?? "medium";
   const difficulty = VALID_DIFFICULTIES.has(rawDifficulty) ? rawDifficulty : "medium";
 
-  // 2) OFFER (reuso por conexão)
-  await setJob({ step: "offer" });
-  let perfectingOfferId: number;
-  const { data: offerBridge } = await db
-    .from("offer_perfecting_ids")
-    .select("perfecting_offer_id")
-    .eq("offer_id", offer.id)
-    .eq("connection_id", connId)
-    .maybeSingle();
-  if (offerBridge?.perfecting_offer_id) {
-    perfectingOfferId = offerBridge.perfecting_offer_id;
-  } else {
-    const gen = await generateOffer(token, offer.offer_name, offer.general_description);
-    perfectingOfferId = await createOffer(
-      token,
-      gen,
-      offer.offer_name,
-      offer.general_description,
-      offer.url ?? "",
-    );
-    await db.from("offer_perfecting_ids").insert({
-      offer_id: offer.id,
-      connection_id: connId,
-      perfecting_offer_id: perfectingOfferId,
-    });
-  }
+  // 2/3) OFFER + CONTEXT (reuso por conexão)
+  const { perfectingContextId } = await resolveOfferContext(db, draft, env, token, (step) =>
+    setJob({ step }),
+  );
 
-  // 3) CONTEXT (reuso por conexão)
-  await setJob({ step: "context" });
-  let perfectingContextId: number;
-  const localContextId = context?.id ?? null;
-  const { data: ctxBridge } = localContextId
-    ? await db
-        .from("context_perfecting_ids")
-        .select("perfecting_context_id")
-        .eq("context_id", localContextId)
-        .eq("connection_id", connId)
-        .maybeSingle()
-    : { data: null };
-  if (ctxBridge?.perfecting_context_id) {
-    perfectingContextId = ctxBridge.perfecting_context_id;
-  } else {
-    const gen = await generateContext(token, perfectingOfferId, context?.target_notes ?? "");
-    perfectingContextId = await createContext(token, gen, perfectingOfferId);
-    if (localContextId) {
-      await db.from("context_perfecting_ids").insert({
-        context_id: localContextId,
-        connection_id: connId,
-        perfecting_context_id: perfectingContextId,
-      });
-    }
+  // 3b) PERSONA (só HML — a API persiste e o roleplay entra no catálogo novo)
+  let personaId: number | null = null;
+  if (env === "hml") {
+    await setJob({ step: "persona" });
+    const persona = await generatePersonaFromContext(env, token, perfectingContextId);
+    personaId = persona.id;
+    await setJob({ error_detail: { persona_id: personaId } });
   }
 
   // 4) CASE SETUP
-  // Se o draft traz um payload escrito à mão (scenario.case_setup_payload), PULAMOS
-  // o /role_plays/generate (IA) e mandamos os campos VERBATIM. Caso contrário, fluxo
-  // normal: a IA gera o case setup a partir do contexto/cenário.
+  // Se o draft traz um payload escrito à mão (scenario.case_setup_payload):
+  //   prod → manda VERBATIM
+  //   hml  → normaliza; se faltar profile/voz, completa via /generate e
+  //          sobrepõe só training_* / instruções do verbatim.
   await setJob({ step: "case_setup" });
   const verbatim = draft.scenario?.case_setup_payload as
     | Record<string, unknown>
     | null
     | undefined;
-  const genCase = verbatim
-    ? {
-        // o conteúdo vem exatamente como escrito; só call_context/dificuldade
-        // são reforçados pelo fluxo padrão (resolução de id + enum válido).
-        ...verbatim,
-        call_context_type_id: callContextTypeId,
-        scenario_difficulty_level: difficulty,
-      }
-    : await generateCaseSetup(token, perfectingContextId, {
-        call_context_type_id: callContextTypeId,
-        scenario_difficulty_level: difficulty,
-        training_objective: draft.scenario?.objective ?? undefined,
-        training_targeted_sales_skills: draft.scenario?.skill ?? undefined,
-        aditional_instructions: draft.scenario?.aditional_instructions ?? undefined,
-      });
+  const scenarioInput = {
+    call_context_type_id: callContextTypeId,
+    scenario_difficulty_level: difficulty,
+    training_objective: draft.scenario?.objective ?? undefined,
+    training_targeted_sales_skills: draft.scenario?.skill ?? undefined,
+    aditional_instructions: draft.scenario?.aditional_instructions ?? undefined,
+  };
+  let genCase: Record<string, unknown>;
+  if (verbatim) {
+    const withIds = {
+      ...verbatim,
+      call_context_type_id: callContextTypeId,
+      scenario_difficulty_level: difficulty,
+    };
+    if (env === "hml" && !isHmlCaseSetupComplete(withIds)) {
+      const generated = await generateCaseSetup(env, token, perfectingContextId, scenarioInput);
+      genCase = overlayVerbatimOnGenerated(generated, withIds);
+    } else {
+      genCase = withIds;
+    }
+  } else {
+    genCase = await generateCaseSetup(env, token, perfectingContextId, scenarioInput);
+  }
 
   const { id: caseSetupId, elevenlabs_agent_id } = await createCaseSetup(
+    env,
     token,
     genCase,
     perfectingContextId,
@@ -179,7 +139,11 @@ async function exportDraft(draftId: string): Promise<{ caseSetupId: number }> {
       error_detail: null,
     })
     .eq("id", draftId);
-  await setJob({ state: "done", finished_at: new Date().toISOString() });
+  await setJob({
+    state: "done",
+    finished_at: new Date().toISOString(),
+    error_detail: personaId != null ? { persona_id: personaId } : null,
+  });
 
   return { caseSetupId };
 }

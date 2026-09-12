@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { extractText as extractPdf, getDocumentProxy } from "npm:unpdf@0.12.1";
 import mammoth from "npm:mammoth@1.8.0";
@@ -48,7 +49,8 @@ Deno.serve(async (req) => {
       const { text: t } = await extractPdf(pdf, { mergePages: true });
       text = Array.isArray(t) ? t.join("\n") : t;
     } else if (isDocx) {
-      const { value } = await mammoth.extractRawText({ arrayBuffer: buf.buffer });
+      // API Node do mammoth: exige { buffer } (arrayBuffer só existe na build de browser)
+      const { value } = await mammoth.extractRawText({ buffer: Buffer.from(buf) });
       text = value;
     } else if (isXlsx) {
       // Planilha → CSV por aba (preserva linhas/colunas dos scorecards sem inflar tokens)

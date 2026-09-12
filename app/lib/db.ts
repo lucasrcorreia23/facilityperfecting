@@ -8,7 +8,14 @@ import type {
   DraftRow,
   EvalWeights,
   EvaluationRound,
+  Methodology,
   MethodologySource,
+  Playbook,
+  PlaybookCallType,
+  PlaybookDraft,
+  PlaybookDraftCallBlock,
+  PlaybookDraftCallType,
+  PlaybookDraftDetail,
   ProcessImportResult,
   Profile,
   RoleplayEvaluation,
@@ -126,6 +133,7 @@ export async function listConnections(): Promise<Connection[]> {
   const { data, error } = await supabase
     .from("connections")
     .select("*")
+    .order("environment", { ascending: true })
     .order("org_name", { ascending: true });
   if (error) throw error;
   return data as Connection[];
@@ -135,7 +143,7 @@ export async function listDrafts(): Promise<DraftRow[]> {
   const supabase = createClient();
   const { data, error } = await supabase
     .from("roleplay_drafts")
-    .select("*, offer:offers(id, offer_name), connection:connections(id, org_name, org_id)")
+    .select("*, offer:offers(id, offer_name), connection:connections(id, org_name, org_id, environment)")
     .order("created_at", { ascending: false });
   if (error) throw error;
   return data as unknown as DraftRow[];
@@ -162,14 +170,65 @@ export async function invokeExport(draftIds: string[]) {
   const { data, error } = await supabase.functions.invoke("export-roleplay", {
     body: { draftIds },
   });
-  if (error) throw error;
+  if (error) throw new Error(await functionErrorMessage(error, "Falha ao exportar"));
   return data;
+}
+
+/** Playbooks da org de destino (para o seletor de modo na Criação). */
+export async function listPlaybooks(connectionId: string): Promise<Playbook[]> {
+  const supabase = createClient();
+  const { data, error } = await supabase.functions.invoke("list-playbooks", {
+    body: { connectionId },
+  });
+  if (error) throw new Error(await functionErrorMessage(error, "Falha ao listar os playbooks"));
+  if (!data?.ok) throw new Error(JSON.stringify(data?.error ?? data));
+  return (data.playbooks ?? []) as Playbook[];
+}
+
+/** Etapas do playbook — quantos/quais roleplays a implementação vai criar. */
+export async function listPlaybookCallTypes(
+  connectionId: string,
+  playbookId: number,
+): Promise<PlaybookCallType[]> {
+  const supabase = createClient();
+  const { data, error } = await supabase.functions.invoke("list-playbooks", {
+    body: { connectionId, playbookId },
+  });
+  if (error) throw new Error(await functionErrorMessage(error, "Falha ao listar as etapas"));
+  if (!data?.ok) throw new Error(JSON.stringify(data?.error ?? data));
+  return (data.callTypes ?? []) as PlaybookCallType[];
+}
+
+/**
+ * Dispara a implementação por playbook (202 imediato). O progresso chega por
+ * realtime em roleplay_drafts; `pollPlaybookRun` reconcilia periodicamente.
+ */
+export async function invokeExportPlaybook(draftId: string) {
+  const supabase = createClient();
+  const { data, error } = await supabase.functions.invoke("implement-playbook", {
+    body: { draftId },
+  });
+  if (error) throw new Error(await functionErrorMessage(error, "Falha ao iniciar a implementação"));
+  if (!data?.ok) throw new Error(JSON.stringify(data?.error ?? data));
+  return data;
+}
+
+/** Consulta/reconcilia a implementação em andamento (nunca reexecuta). */
+export async function pollPlaybookRun(
+  draftId: string,
+): Promise<{ done?: boolean; created?: number; total?: number }> {
+  const supabase = createClient();
+  const { data, error } = await supabase.functions.invoke("implement-playbook", {
+    body: { draftId, stage: "poll" },
+  });
+  if (error) throw new Error(await functionErrorMessage(error, "Falha ao consultar a implementação"));
+  return data ?? {};
 }
 
 export async function invokeSyncOrgs() {
   const supabase = createClient();
   const { data, error } = await supabase.functions.invoke("list-orgs", { body: {} });
-  if (error) throw error;
+  if (error) throw new Error(await functionErrorMessage(error, "Falha ao sincronizar as contas"));
   return data;
 }
 
@@ -481,7 +540,8 @@ export async function updateEvalWeights(weights: EvalWeights): Promise<void> {
 export async function listCallContexts(): Promise<CallContextType[]> {
   const supabase = createClient();
   const { data, error } = await supabase.functions.invoke("list-call-contexts", { body: {} });
-  if (error) throw error;
+  if (error)
+    throw new Error(await functionErrorMessage(error, "Falha ao listar os tipos de call"));
   if (!data?.ok) throw new Error(JSON.stringify(data?.error ?? data));
   return (data.items ?? []) as CallContextType[];
 }
@@ -516,6 +576,205 @@ export async function processImport(
   if (error) throw new Error(await functionErrorMessage(error, "Falha ao processar"));
   if (!data?.ok) throw new Error(JSON.stringify(data?.error ?? data));
   return data.result as ProcessImportResult;
+}
+
+// ── Playbooks (autoria local → envio para a conta) ─────────────────────────
+
+export async function listMethodologies(): Promise<Methodology[]> {
+  const supabase = createClient();
+  const { data, error } = await supabase.functions.invoke("list-methodologies", { body: {} });
+  if (error) throw new Error(await functionErrorMessage(error, "Falha ao listar as metodologias"));
+  if (!data?.ok) throw new Error(JSON.stringify(data?.error ?? data));
+  return (data.items ?? []) as Methodology[];
+}
+
+export async function listPlaybookDrafts(): Promise<PlaybookDraft[]> {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from("playbooks")
+    .select("*")
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  return data as PlaybookDraft[];
+}
+
+export async function createPlaybookDraft(params: {
+  name: string;
+  inputText: string;
+  inputFiles: TrailInputFile[];
+  promptOverride?: string | null;
+}): Promise<{ playbookId: string }> {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from("playbooks")
+    .insert({
+      name: params.name,
+      input_text: params.inputText,
+      input_files: params.inputFiles,
+      prompt_override: params.promptOverride ?? null,
+      status: "draft",
+    })
+    .select("id")
+    .single();
+  if (error) throw error;
+  return { playbookId: data.id };
+}
+
+/** Playbook com etapas + subetapas, ordenados por position. */
+export async function getPlaybookDraft(playbookId: string): Promise<PlaybookDraftDetail> {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from("playbooks")
+    .select("*, playbook_call_types(*, playbook_call_blocks(*))")
+    .eq("id", playbookId)
+    .single();
+  if (error) throw error;
+  const playbook = data as unknown as PlaybookDraftDetail;
+  playbook.playbook_call_types = (playbook.playbook_call_types ?? [])
+    .sort((a, b) => a.position - b.position)
+    .map((ct) => ({
+      ...ct,
+      playbook_call_blocks: (ct.playbook_call_blocks ?? []).sort((a, b) => a.position - b.position),
+    }));
+  return playbook;
+}
+
+export async function deletePlaybookDraft(playbookId: string) {
+  const supabase = createClient();
+  const { error } = await supabase.from("playbooks").delete().eq("id", playbookId);
+  if (error) throw error;
+}
+
+export async function updatePlaybookDraft(
+  id: string,
+  patch: Partial<Pick<PlaybookDraft, "name" | "status">>,
+) {
+  const supabase = createClient();
+  const { error } = await supabase.from("playbooks").update(patch).eq("id", id);
+  if (error) throw error;
+}
+
+export async function createPlaybookCallType(params: {
+  playbookId: string;
+  position: number;
+  name: string;
+}): Promise<PlaybookDraftCallType> {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from("playbook_call_types")
+    .insert({ playbook_id: params.playbookId, position: params.position, name: params.name })
+    .select("*")
+    .single();
+  if (error) throw error;
+  return data as PlaybookDraftCallType;
+}
+
+export async function updatePlaybookCallType(
+  id: string,
+  patch: Partial<
+    Pick<PlaybookDraftCallType, "name" | "description" | "call_context_slug" | "methodology_slug">
+  >,
+) {
+  const supabase = createClient();
+  const { error } = await supabase.from("playbook_call_types").update(patch).eq("id", id);
+  if (error) throw error;
+}
+
+export async function deletePlaybookCallType(id: string) {
+  const supabase = createClient();
+  const { error } = await supabase.from("playbook_call_types").delete().eq("id", id);
+  if (error) throw error;
+}
+
+export async function createPlaybookCallBlock(params: {
+  callTypeId: string;
+  position: number;
+  name: string;
+}): Promise<PlaybookDraftCallBlock> {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from("playbook_call_blocks")
+    .insert({ call_type_id: params.callTypeId, position: params.position, name: params.name })
+    .select("*")
+    .single();
+  if (error) throw error;
+  return data as PlaybookDraftCallBlock;
+}
+
+export async function updatePlaybookCallBlock(
+  id: string,
+  patch: Partial<
+    Pick<
+      PlaybookDraftCallBlock,
+      "name" | "description" | "objective" | "sample_questions" | "what_to_do" | "what_to_avoid"
+    >
+  >,
+) {
+  const supabase = createClient();
+  const { error } = await supabase.from("playbook_call_blocks").update(patch).eq("id", id);
+  if (error) throw error;
+}
+
+export async function deletePlaybookCallBlock(id: string) {
+  const supabase = createClient();
+  const { error } = await supabase.from("playbook_call_blocks").delete().eq("id", id);
+  if (error) throw error;
+}
+
+/** Persiste a nova ordem (position = índice), como reorderTrailItems. */
+export async function reorderPlaybookCallTypes(items: { id: string; position: number }[]) {
+  const supabase = createClient();
+  for (const item of items) {
+    const { error } = await supabase
+      .from("playbook_call_types")
+      .update({ position: item.position })
+      .eq("id", item.id);
+    if (error) throw error;
+  }
+}
+
+export async function reorderPlaybookCallBlocks(items: { id: string; position: number }[]) {
+  const supabase = createClient();
+  for (const item of items) {
+    const { error } = await supabase
+      .from("playbook_call_blocks")
+      .update({ position: item.position })
+      .eq("id", item.id);
+    if (error) throw error;
+  }
+}
+
+/** Dispara a estruturação por IA (202 imediato; acompanha por realtime/poll). */
+export async function invokeGeneratePlaybook(playbookId: string) {
+  const supabase = createClient();
+  const { data, error } = await supabase.functions.invoke("generate-playbook", {
+    body: { playbookId },
+  });
+  if (error) throw new Error(await functionErrorMessage(error, "Falha ao iniciar a geração"));
+  if (!data?.ok) throw new Error(JSON.stringify(data?.error ?? data));
+  return data;
+}
+
+export async function pollPlaybookGeneration(
+  playbookId: string,
+): Promise<{ done?: boolean; status?: string }> {
+  const supabase = createClient();
+  const { data, error } = await supabase.functions.invoke("generate-playbook", {
+    body: { playbookId, stage: "poll" },
+  });
+  if (error) throw new Error(await functionErrorMessage(error, "Falha ao consultar a geração"));
+  return data ?? {};
+}
+
+/** Cria o playbook (etapas + subetapas) na conta de destino. */
+export async function invokeSendPlaybook(playbookId: string, connectionId: string) {
+  const supabase = createClient();
+  const { data, error } = await supabase.functions.invoke("export-playbook", {
+    body: { playbookId, connectionId },
+  });
+  if (error) throw new Error(await functionErrorMessage(error, "Falha ao enviar o playbook"));
+  if (!data?.ok) throw new Error(JSON.stringify(data?.error ?? data));
+  return data;
 }
 
 // ── Trilhas (planos de trilhas de roleplay) ────────────────────────────────
@@ -625,6 +884,21 @@ export async function invokeGenerateTrailPlan(planId: string, stage: "analysis" 
   if (error) throw new Error(await functionErrorMessage(error, "Falha ao iniciar a geração"));
   if (!data?.ok) throw new Error(String(data?.error ?? "Falha ao iniciar a geração"));
   return data;
+}
+
+/**
+ * Consulta o batch pendente da geração (Anthropic Batch API). Quando o resultado
+ * fica pronto, a própria função grava e o status muda via realtime. Se o plano
+ * ficou preso em analyzing/planning sem batch (execução antiga morta), a função
+ * ressubmete o estágio automaticamente.
+ */
+export async function pollTrailPlanGeneration(planId: string): Promise<{ done?: boolean }> {
+  const supabase = createClient();
+  const { data, error } = await supabase.functions.invoke("generate-trail-plan", {
+    body: { planId, stage: "poll" },
+  });
+  if (error) throw new Error(await functionErrorMessage(error, "Falha ao consultar a geração"));
+  return data ?? {};
 }
 
 export async function updateTrail(
@@ -808,7 +1082,10 @@ export async function uploadAndExtract(file: File): Promise<{
   const { data, error } = await supabase.functions.invoke("extract-text", {
     body: { filePath: path, filename: file.name, mime: file.type },
   });
-  if (error) throw error;
-  if (!data?.ok) throw new Error(data?.error ?? "Falha ao extrair texto");
+  if (error)
+    throw new Error(
+      `${file.name}: ${await functionErrorMessage(error, "falha ao extrair o texto")}`,
+    );
+  if (!data?.ok) throw new Error(`${file.name}: ${data?.error ?? "falha ao extrair o texto"}`);
   return { text: data.text, suggestedOfferName: data.suggestedOfferName, filePath: path };
 }

@@ -3,23 +3,34 @@ import { listCallContexts, loginSuperadmin } from "../_shared/perfecting.ts";
 import { corsHeaders, json } from "../_shared/cors.ts";
 
 /**
- * Geração do plano de trilhas em 2 estágios (1 chamada LLM por invocação, para
- * caber no wall clock da Edge Function):
- *   stage "analysis" → Análise Data-to-Skill (analyzing → analyzed)
- *   stage "plan"     → Plano de trilhas      (planning  → ready)
- * Responde 202 imediato e processa em background (EdgeRuntime.waitUntil);
- * o front acompanha o status de trail_plans via realtime e dispara o estágio
- * seguinte quando vê "analyzed".
+ * Geração do plano de trilhas em 2 estágios via Anthropic Message Batches
+ * (50% do custo e sem estourar o wall clock da Edge Function):
+ *   stage "analysis" → submete a Análise Data-to-Skill (status analyzing)
+ *   stage "plan"     → submete o plano de trilhas      (status planning)
+ *   stage "poll"     → consulta o batch pendente; quando pronto, grava o
+ *                      resultado (analyzing → analyzed; planning → ready).
+ *                      Se o status indica geração em andamento mas não há
+ *                      batch pendente (execução antiga morta no meio), o
+ *                      poll ressubmete o estágio preso.
+ * O front acompanha trail_plans via realtime e chama "poll" periodicamente
+ * enquanto o status for analyzing/planning.
  */
 
 declare const EdgeRuntime: { waitUntil(promise: Promise<unknown>): void };
 
 const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY") ?? "";
-const MODEL = Deno.env.get("ANTHROPIC_MODEL") ?? "claude-opus-4-8";
-const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
+const MODEL = Deno.env.get("ANTHROPIC_MODEL") ?? "claude-sonnet-5";
+const ANTHROPIC_BATCHES_URL = "https://api.anthropic.com/v1/messages/batches";
 const MAX_OUTPUT_TOKENS = 32000;
-// Orçamento de entrada (~150-190k tokens). O limitador prático é o TPM do tier.
-const INPUT_CHAR_BUDGET = 600_000;
+// Orçamento TOTAL do prompt (system + metodologia + material) em caracteres.
+// Transcrição em PT rende ~2-2,5 chars/token; 1,8M chars ≈ 720-900k tokens —
+// folga sob a janela de 1M do Sonnet 5 / Opus. Via Batch API não há limite de
+// tokens/minuto do tier para segurar a chamada.
+const PROMPT_CHAR_BUDGET = 1_800_000;
+// Teto da base de metodologia (entra no system prompt) para não engolir o orçamento.
+const METHODOLOGY_CHAR_BUDGET = 300_000;
+// Piso do material do cliente: garante que os documentos nunca fiquem sem espaço.
+const MIN_INPUT_CHAR_BUDGET = 100_000;
 
 const db = createClient(
   Deno.env.get("SUPABASE_URL")!,
@@ -198,93 +209,118 @@ function buildPlanSchema(slugs: string[]) {
   };
 }
 
-interface StreamResult {
-  text: string;
-  stopReason: string | null;
-  usage: Record<string, unknown>;
+function anthropicHeaders(): Record<string, string> {
+  return {
+    "x-api-key": ANTHROPIC_API_KEY,
+    "anthropic-version": "2023-06-01",
+    "content-type": "application/json",
+  };
 }
 
-/** Chama a Messages API com stream:true e acumula o texto (saídas longas estouram o modo não-streaming). */
-async function streamAnthropic(payload: Record<string, unknown>): Promise<StreamResult> {
-  const res = await fetch(ANTHROPIC_URL, {
+interface SystemBlock {
+  type: string;
+  text: string;
+  cache_control?: { type: string };
+}
+
+/** Submete o estágio como Message Batch e devolve o id do batch. */
+async function submitBatch(params: {
+  planId: string;
+  stage: "analysis" | "plan";
+  system: SystemBlock[];
+  userContent: string;
+  schema: Record<string, unknown>;
+}): Promise<string> {
+  const res = await fetch(ANTHROPIC_BATCHES_URL, {
     method: "POST",
-    headers: {
-      "x-api-key": ANTHROPIC_API_KEY,
-      "anthropic-version": "2023-06-01",
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({ ...payload, stream: true }),
+    headers: anthropicHeaders(),
+    body: JSON.stringify({
+      requests: [
+        {
+          // custom_id só aceita [a-zA-Z0-9_-] (máx. 64) — uuid + "-" + stage cabe.
+          custom_id: `${params.planId}-${params.stage}`,
+          params: {
+            model: MODEL,
+            max_tokens: MAX_OUTPUT_TOKENS,
+            // Sem thinking: a saída JSON é garantida pelo schema (output_config.format).
+            output_config: { format: { type: "json_schema", schema: params.schema } },
+            system: params.system,
+            messages: [{ role: "user", content: params.userContent }],
+          },
+        },
+      ],
+    }),
   });
-
+  const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    const data = await res.json().catch(() => ({}));
-    const msg =
-      res.status === 429
-        ? "Limite de tokens por minuto da Anthropic atingido. O material é grande demais para o tier atual da conta — reduza o conteúdo, processe em partes, ou aumente o tier no console da Anthropic."
-        : (data?.error?.message ?? JSON.stringify(data?.error ?? data));
-    throw new Error(`Anthropic ${res.status}: ${msg}`);
-  }
-  if (!res.body) throw new Error("Anthropic: resposta sem corpo");
-
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let text = "";
-  let stopReason: string | null = null;
-  const usage: Record<string, unknown> = {};
-
-  const handleEvent = (raw: string) => {
-    const line = raw.trim();
-    if (!line.startsWith("data:")) return;
-    const dataStr = line.slice(5).trim();
-    if (!dataStr || dataStr === "[DONE]") return;
-    let event: Record<string, unknown>;
-    try {
-      event = JSON.parse(dataStr);
-    } catch {
-      return;
-    }
-    const type = event.type as string;
-    if (type === "content_block_delta") {
-      const delta = event.delta as { type?: string; text?: string } | undefined;
-      if (delta?.type === "text_delta" && typeof delta.text === "string") text += delta.text;
-    } else if (type === "message_start") {
-      const msg = event.message as { usage?: Record<string, unknown> } | undefined;
-      if (msg?.usage) Object.assign(usage, msg.usage);
-    } else if (type === "message_delta") {
-      const delta = event.delta as { stop_reason?: string } | undefined;
-      if (delta?.stop_reason) stopReason = delta.stop_reason;
-      const u = event.usage as Record<string, unknown> | undefined;
-      if (u) Object.assign(usage, u);
-    } else if (type === "error") {
-      const err = event.error as { message?: string } | undefined;
-      throw new Error(`Anthropic stream error: ${err?.message ?? dataStr}`);
-    }
-  };
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    let idx: number;
-    while ((idx = buffer.indexOf("\n")) >= 0) {
-      const line = buffer.slice(0, idx);
-      buffer = buffer.slice(idx + 1);
-      handleEvent(line);
-    }
-  }
-  if (buffer.trim()) handleEvent(buffer);
-
-  if (stopReason === "max_tokens") {
     throw new Error(
-      "A resposta estourou o limite de tokens de saída. Reduza o material de entrada ou tente novamente.",
+      `Anthropic ${res.status}: ${data?.error?.message ?? JSON.stringify(data?.error ?? data)}`,
     );
   }
-  return { text, stopReason, usage };
+  return data.id as string;
+}
+
+interface BatchOutcome {
+  done: boolean;
+  result?: Record<string, unknown>;
+  usage?: Record<string, unknown>;
+}
+
+/** Consulta o batch; quando concluído, baixa e parseia o JSON da resposta. */
+async function fetchBatchOutcome(batchId: string): Promise<BatchOutcome> {
+  const res = await fetch(`${ANTHROPIC_BATCHES_URL}/${batchId}`, { headers: anthropicHeaders() });
+  const batch = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(
+      `Anthropic ${res.status}: ${batch?.error?.message ?? JSON.stringify(batch?.error ?? batch)}`,
+    );
+  }
+  if (batch.processing_status !== "ended") return { done: false };
+
+  const resultsRes = await fetch(batch.results_url as string, { headers: anthropicHeaders() });
+  if (!resultsRes.ok) {
+    throw new Error(`Anthropic ${resultsRes.status} ao baixar o resultado do batch`);
+  }
+  const line = (await resultsRes.text())
+    .split("\n")
+    .find((l) => l.trim());
+  if (!line) throw new Error("Batch concluído sem resultado.");
+  const entry = JSON.parse(line);
+  const r = entry.result as {
+    type?: string;
+    error?: { error?: { message?: string }; message?: string };
+    message?: {
+      content?: { type: string; text?: string }[];
+      stop_reason?: string;
+      usage?: Record<string, unknown>;
+    };
+  };
+  if (r?.type !== "succeeded") {
+    const msg = r?.error?.error?.message ?? r?.error?.message ?? "erro desconhecido";
+    throw new Error(`Geração falhou no batch (${r?.type ?? "?"}): ${msg}`);
+  }
+  const message = r.message ?? {};
+  if (message.stop_reason === "max_tokens") {
+    throw new Error(
+      "A resposta estourou o limite de tokens de saída. Reduza o material de entrada e retome.",
+    );
+  }
+  const text = (message.content ?? [])
+    .filter((b) => b.type === "text")
+    .map((b) => b.text ?? "")
+    .join("");
+  let result: Record<string, unknown>;
+  try {
+    result = JSON.parse(text);
+  } catch {
+    throw new Error("A IA retornou um resultado incompleto. Retome a geração.");
+  }
+  return { done: true, result, usage: message.usage ?? {} };
 }
 
 interface PlanRow {
   id: string;
+  status: string;
   client_name: string;
   sales_methodology: string | null;
   additional_context: string | null;
@@ -296,6 +332,7 @@ interface PlanRow {
   radar: unknown;
   usage: Record<string, unknown> | null;
   created_by: string | null;
+  pending_batch: { id?: string; stage?: string } | null;
 }
 
 function fillVars(template: string, plan: PlanRow): string {
@@ -336,12 +373,15 @@ async function loadMethodologyBlock(): Promise<string> {
   const parts = withContent.map(
     (s) => `### ${s.title}\nFonte: ${s.url}\n\n${(s.content as string).trim()}`,
   );
-  return `BASE DE METODOLOGIA (referência para a tomada de decisão):\n\n${parts.join("\n\n---\n\n")}`;
+  return truncateToBudget(
+    `BASE DE METODOLOGIA (referência para a tomada de decisão):\n\n${parts.join("\n\n---\n\n")}`,
+    METHODOLOGY_CHAR_BUDGET,
+  );
 }
 
-function truncateInput(text: string): string {
-  if (text.length <= INPUT_CHAR_BUDGET) return text;
-  return `${text.slice(0, INPUT_CHAR_BUDGET)}\n\n[... material truncado por limite de tamanho — priorize o conteúdo acima ...]`;
+function truncateToBudget(text: string, budget: number): string {
+  if (text.length <= budget) return text;
+  return `${text.slice(0, budget)}\n\n[... material truncado por limite de tamanho — priorize o conteúdo acima ...]`;
 }
 
 async function setPlan(planId: string, patch: Record<string, unknown>) {
@@ -349,34 +389,12 @@ async function setPlan(planId: string, patch: Record<string, unknown>) {
   if (error) throw error;
 }
 
-async function callClaude(params: {
-  system: { type: string; text: string; cache_control?: { type: string } }[];
-  userContent: string;
-  schema: Record<string, unknown>;
-}): Promise<{ result: Record<string, unknown>; usage: Record<string, unknown> }> {
-  const { text, usage } = await streamAnthropic({
-    model: MODEL,
-    max_tokens: MAX_OUTPUT_TOKENS,
-    // Sem thinking: a saída JSON é garantida pelo schema (output_config.format).
-    output_config: { format: { type: "json_schema", schema: params.schema } },
-    system: params.system,
-    messages: [{ role: "user", content: params.userContent }],
-  });
-  let result: Record<string, unknown>;
-  try {
-    result = JSON.parse(text);
-  } catch {
-    throw new Error("A IA retornou um resultado incompleto. Tente novamente.");
-  }
-  return { result, usage };
-}
-
-async function runAnalysis(plan: PlanRow) {
-  await setPlan(plan.id, { status: "analyzing", error_detail: null });
+async function submitAnalysis(plan: PlanRow) {
+  await setPlan(plan.id, { status: "analyzing", error_detail: null, pending_batch: null });
 
   const methodology = await loadMethodologyBlock();
   const base = promptOverrides(plan).analysis ?? SYSTEM_BASE_ANALYSIS;
-  const system = [
+  const system: SystemBlock[] = [
     // Bloco estável primeiro (prefix caching): a base de metodologia não muda entre execuções/estágios.
     ...(methodology
       ? [{ type: "text", text: methodology, cache_control: { type: "ephemeral" } }]
@@ -384,15 +402,26 @@ async function runAnalysis(plan: PlanRow) {
     { type: "text", text: fillVars(base, plan) },
   ];
 
-  const input = truncateInput((plan.input_text ?? "").trim());
+  // O que sobra do orçamento total após o system (metodologia + instruções) vai para o material.
+  const systemChars = system.reduce((n, block) => n + block.text.length, 0);
+  const inputBudget = Math.max(MIN_INPUT_CHAR_BUDGET, PROMPT_CHAR_BUDGET - systemChars);
+  const input = truncateToBudget((plan.input_text ?? "").trim(), inputBudget);
   if (!input) throw new Error("Plano sem material de entrada (input_text vazio).");
 
-  const { result, usage } = await callClaude({
+  const batchId = await submitBatch({
+    planId: plan.id,
+    stage: "analysis",
     system,
     userContent: `DOCUMENTOS DO CLIENTE ${plan.client_name}:\n\n${input}`,
     schema: buildAnalysisSchema(),
   });
 
+  await setPlan(plan.id, {
+    pending_batch: { id: batchId, stage: "analysis", submitted_at: new Date().toISOString() },
+  });
+}
+
+async function finishAnalysis(plan: PlanRow, result: Record<string, unknown>, usage: Record<string, unknown>) {
   await setPlan(plan.id, {
     status: "analyzed",
     analysis_markdown: result.analise_markdown ?? null,
@@ -400,20 +429,21 @@ async function runAnalysis(plan: PlanRow) {
     radar: result.radar ?? [],
     seller_count: plan.seller_count ?? result.numero_vendedores_detectado ?? null,
     usage: { ...(plan.usage ?? {}), analysis: usage },
+    pending_batch: null,
   });
 }
 
-async function runPlan(plan: PlanRow) {
+async function submitPlan(plan: PlanRow) {
   if (!plan.analysis_markdown) {
     throw new Error("Execute a etapa de análise antes de gerar o plano de trilhas.");
   }
-  await setPlan(plan.id, { status: "planning", error_detail: null });
+  await setPlan(plan.id, { status: "planning", error_detail: null, pending_batch: null });
 
   // Call contexts reais da Perfecting; fallback estático se indisponível.
   let contexts: { slug: string; name: string; stage?: string }[];
   try {
-    const saToken = await loginSuperadmin();
-    contexts = await listCallContexts(saToken);
+    const saToken = await loginSuperadmin("hml");
+    contexts = await listCallContexts("hml", saToken);
     if (contexts.length === 0) contexts = FALLBACK_CALL_CONTEXTS;
   } catch {
     contexts = FALLBACK_CALL_CONTEXTS;
@@ -425,7 +455,7 @@ async function runPlan(plan: PlanRow) {
 
   const methodology = await loadMethodologyBlock();
   const base = promptOverrides(plan).plan ?? SYSTEM_BASE_PLAN;
-  const system = [
+  const system: SystemBlock[] = [
     ...(methodology
       ? [{ type: "text", text: methodology, cache_control: { type: "ephemeral" } }]
       : []),
@@ -442,12 +472,20 @@ async function runPlan(plan: PlanRow) {
     `RADAR POR VENDEDOR (JSON):\n${JSON.stringify(plan.radar ?? [], null, 2)}`,
   ].join("\n\n---\n\n");
 
-  const { result, usage } = await callClaude({
+  const batchId = await submitBatch({
+    planId: plan.id,
+    stage: "plan",
     system,
     userContent,
     schema: buildPlanSchema(slugs),
   });
 
+  await setPlan(plan.id, {
+    pending_batch: { id: batchId, stage: "plan", submitted_at: new Date().toISOString() },
+  });
+}
+
+async function finishPlan(plan: PlanRow, result: Record<string, unknown>, usage: Record<string, unknown>) {
   // Regeração: substitui as trilhas anteriores (edições manuais são perdidas — a UI avisa).
   const { error: delErr } = await db.from("trails").delete().eq("plan_id", plan.id);
   if (delErr) throw delErr;
@@ -511,26 +549,60 @@ async function runPlan(plan: PlanRow) {
     status: "ready",
     plan_markdown: result.plan_markdown ?? null,
     usage: { ...(plan.usage ?? {}), plan: usage },
+    pending_batch: null,
   });
+}
+
+const PLAN_COLUMNS =
+  "id, status, client_name, sales_methodology, additional_context, seller_count, input_text, prompt_override, analysis_markdown, skill_gaps, radar, usage, created_by, pending_batch";
+
+async function loadPlan(planId: string): Promise<PlanRow> {
+  const { data: plan, error } = await db
+    .from("trail_plans")
+    .select(PLAN_COLUMNS)
+    .eq("id", planId)
+    .single();
+  if (error || !plan) throw new Error("plano não encontrado");
+  return plan as PlanRow;
+}
+
+/** Consulta o batch pendente. Sem batch com status de geração em andamento = execução antiga morta no meio → ressubmete o estágio preso. */
+async function runPoll(plan: PlanRow): Promise<{ done: boolean }> {
+  const pending = plan.pending_batch;
+  if (!pending?.id) {
+    if (plan.status === "analyzing") {
+      await submitAnalysis(plan);
+      return { done: false };
+    }
+    if (plan.status === "planning") {
+      await submitPlan(plan);
+      return { done: false };
+    }
+    return { done: true };
+  }
+  const outcome = await fetchBatchOutcome(pending.id);
+  if (!outcome.done) return { done: false };
+  if (pending.stage === "analysis") {
+    await finishAnalysis(plan, outcome.result!, outcome.usage ?? {});
+  } else {
+    await finishPlan(plan, outcome.result!, outcome.usage ?? {});
+  }
+  return { done: true };
 }
 
 async function run(planId: string, stage: "analysis" | "plan") {
   try {
-    const { data: plan, error } = await db
-      .from("trail_plans")
-      .select(
-        "id, client_name, sales_methodology, additional_context, seller_count, input_text, prompt_override, analysis_markdown, skill_gaps, radar, usage, created_by",
-      )
-      .eq("id", planId)
-      .single();
-    if (error || !plan) throw new Error("plano não encontrado");
-
-    if (stage === "analysis") await runAnalysis(plan as PlanRow);
-    else await runPlan(plan as PlanRow);
+    const plan = await loadPlan(planId);
+    if (stage === "analysis") await submitAnalysis(plan);
+    else await submitPlan(plan);
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     console.error(`generate-trail-plan[${stage}] falhou:`, message);
-    await setPlan(planId, { status: "error", error_detail: { stage, message } }).catch(() => {});
+    await setPlan(planId, {
+      status: "error",
+      error_detail: { stage, message },
+      pending_batch: null,
+    }).catch(() => {});
   }
 }
 
@@ -543,16 +615,41 @@ Deno.serve(async (req) => {
     }
     const body = await req.json().catch(() => ({}));
     const planId = typeof body.planId === "string" ? body.planId : "";
-    const stage = body.stage === "plan" ? "plan" : body.stage === "analysis" ? "analysis" : null;
+    const stage =
+      body.stage === "plan"
+        ? "plan"
+        : body.stage === "analysis"
+          ? "analysis"
+          : body.stage === "poll"
+            ? "poll"
+            : null;
     if (!planId || !stage) return json({ ok: false, error: "planId e stage são obrigatórios" }, 400);
+
+    if (stage === "poll") {
+      // Síncrono: o front usa a resposta para saber se o resultado já saiu.
+      try {
+        const { done } = await runPoll(await loadPlan(planId));
+        return json({ ok: true, done }, 200);
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        console.error("generate-trail-plan[poll] falhou:", message);
+        await setPlan(planId, {
+          status: "error",
+          error_detail: { stage: "poll", message },
+          pending_batch: null,
+        }).catch(() => {});
+        return json({ ok: false, error: message }, 200);
+      }
+    }
 
     const { data: plan, error } = await db
       .from("trail_plans")
-      .select("id, status")
+      .select("id, status, pending_batch")
       .eq("id", planId)
       .single();
     if (error || !plan) return json({ ok: false, error: "plano não encontrado" }, 404);
-    if (plan.status === "analyzing" || plan.status === "planning") {
+    if ((plan.status === "analyzing" || plan.status === "planning") && plan.pending_batch) {
+      // Batch em andamento de verdade; sem pending_batch, deixa ressubmeter (execução antiga morta).
       return json({ ok: false, error: "geração já em andamento para este plano" }, 409);
     }
 

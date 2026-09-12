@@ -17,12 +17,19 @@ export function SendStatusModal({
   errorMessage,
   onRetry,
   onClose,
+  sendingLabel = "Enviando roleplay para a conta de destino…",
+  successTitle = "Enviado com sucesso!",
+  successHint = "Redirecionando para a Biblioteca…",
 }: {
   open: boolean;
   status: SendStatus;
   errorMessage?: string | null;
   onRetry: () => void;
   onClose: () => void;
+  /** Copy alternativa — o modo playbook inicia um job longo em vez de enviar 1 roleplay. */
+  sendingLabel?: string;
+  successTitle?: string;
+  successHint?: string;
 }) {
   const dismissable = status === "error";
   return (
@@ -42,16 +49,14 @@ export function SendStatusModal({
             {status === "sending" && (
               <>
                 <Spinner color="primary" />
-                <p className="text-sm text-slate-600">
-                  Enviando roleplay para a conta de destino…
-                </p>
+                <p className="text-sm text-slate-600">{sendingLabel}</p>
               </>
             )}
             {status === "success" && (
               <>
                 <CheckCircleIcon className="w-12 h-12 text-emerald-500" />
-                <p className="text-base font-medium text-slate-800">Enviado com sucesso!</p>
-                <p className="text-sm text-slate-500">Redirecionando para a Biblioteca…</p>
+                <p className="text-base font-medium text-slate-800">{successTitle}</p>
+                <p className="text-sm text-slate-500">{successHint}</p>
               </>
             )}
             {status === "error" && (

@@ -56,7 +56,7 @@ export default function ConexoesPage() {
     <div className="flex flex-col gap-0">
       <PageHeader
         title="Conexões"
-        description="Contas (orgs) da Perfecting que podem receber roleplays."
+        description="Contas (orgs) da Perfecting em HML e produção que podem receber roleplays."
         action={
           <Button
             onPress={sync}

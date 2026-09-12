@@ -33,12 +33,22 @@ import { managerSelectClassNames } from "@/app/lib/select-classnames";
 import {
   createDraftFromText,
   invokeExport,
+  invokeExportPlaybook,
   listCallContexts,
   listConnections,
+  listPlaybookCallTypes,
+  listPlaybooks,
   processImport,
   uploadAndExtract,
 } from "@/app/lib/db";
-import type { CallContextType, Connection, ImportGap } from "@/app/lib/types";
+import type {
+  CallContextType,
+  Connection,
+  GenerationMode,
+  ImportGap,
+  Playbook,
+  PlaybookCallType,
+} from "@/app/lib/types";
 
 const GAP_STYLES: Record<ImportGap["severidade"], { label: string; cls: string }> = {
   critico: { label: "Crítico", cls: "bg-red-50 text-red-700" },
@@ -88,6 +98,11 @@ export default function CriacaoPage() {
   const [connections, setConnections] = useState<Connection[]>([]);
   const [callContexts, setCallContexts] = useState<CallContextType[]>([]);
   const [callContextSlug, setCallContextSlug] = useState<string>("");
+  const [generationMode, setGenerationMode] = useState<GenerationMode>("methodology");
+  const [playbooks, setPlaybooks] = useState<Playbook[]>([]);
+  const [playbookId, setPlaybookId] = useState<string>("");
+  const [playbookCallTypes, setPlaybookCallTypes] = useState<PlaybookCallType[]>([]);
+  const [loadingPlaybooks, setLoadingPlaybooks] = useState(false);
   const [difficulty, setDifficulty] = useState<string>("medium");
   const [perfil, setPerfil] = useState("");
   const [cenarioInstrucoes, setCenarioInstrucoes] = useState("");
@@ -117,6 +132,19 @@ export default function CriacaoPage() {
   // dados obsoletos); "Tentar novamente" sem edição reusa o mesmo (sem duplicar).
   const draftSigRef = useRef<string | null>(null);
 
+  const isPlaybookMode = generationMode === "playbook";
+  const selectedPlaybook = playbooks.find((p) => String(p.id) === playbookId) ?? null;
+
+  /** Trocar de conta invalida os playbooks carregados (são por organização). */
+  function handleConnectionChange(id: string) {
+    setConnectionId(id);
+    setPlaybooks([]);
+    setPlaybookId("");
+    setPlaybookCallTypes([]);
+    setGenerationMode("methodology");
+    setLoadingPlaybooks(Boolean(id));
+  }
+
   useEffect(() => {
     try {
       const saved = localStorage.getItem(PROMPT_STORAGE_KEY);
@@ -135,6 +163,48 @@ export default function CriacaoPage() {
         }),
       );
   }, []);
+
+  // Playbook é por organização: só dá para listar depois de escolher o destino.
+  useEffect(() => {
+    if (!connectionId) return;
+    let active = true;
+    listPlaybooks(connectionId)
+      .then((items) => {
+        if (!active) return;
+        setPlaybooks(items);
+        if (items.length === 1) setPlaybookId(String(items[0].id));
+      })
+      .catch(() => {
+        if (!active) return;
+        addToast({
+          title: "Não foi possível listar os playbooks desta conta",
+          description: "A criação por metodologia segue disponível.",
+          color: "warning",
+        });
+      })
+      .finally(() => {
+        if (active) setLoadingPlaybooks(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [connectionId]);
+
+  // As etapas do playbook são os roleplays que serão criados — mostradas antes do envio.
+  useEffect(() => {
+    if (!connectionId || !playbookId) return;
+    let active = true;
+    listPlaybookCallTypes(connectionId, Number(playbookId))
+      .then((items) => {
+        if (active) setPlaybookCallTypes(items);
+      })
+      .catch(() => {
+        /* sem as etapas o envio ainda funciona — some só o preview */
+      });
+    return () => {
+      active = false;
+    };
+  }, [connectionId, playbookId]);
 
   // Envio concluído com sucesso → mostra o estado por ~1,2s e vai à Biblioteca.
   useEffect(() => {
@@ -221,7 +291,7 @@ export default function CriacaoPage() {
   function clearAll() {
     setText("");
     setOfferName("");
-    setConnectionId("");
+    handleConnectionChange("");
     setCallContextSlug("");
     setDifficulty("medium");
     setPerfil("");
@@ -311,6 +381,19 @@ export default function CriacaoPage() {
       addToast({ title: "Preencha o texto e o nome da oferta", color: "warning" });
       return false;
     }
+    // No modo playbook o tipo de chamada vem de cada etapa — o que é obrigatório
+    // é a conta de destino (dona do playbook) e o playbook escolhido.
+    if (isPlaybookMode) {
+      if (!connectionId) {
+        addToast({ title: "Selecione uma conta de destino", color: "warning" });
+        return false;
+      }
+      if (!playbookId) {
+        addToast({ title: "Escolha o playbook", color: "warning" });
+        return false;
+      }
+      return true;
+    }
     if (!callContextSlug) {
       addToast({ title: "Escolha o tipo de chamada", color: "warning" });
       return false;
@@ -334,6 +417,9 @@ export default function CriacaoPage() {
         objective: objetivo.trim() || null,
         skill: habilidades.trim() || null,
         aditional_instructions: cenarioInstrucoes.trim() || null,
+        generation_mode: generationMode,
+        playbook_id: isPlaybookMode ? Number(playbookId) : null,
+        playbook_name: isPlaybookMode ? (selectedPlaybook?.name ?? null) : null,
       },
     };
   }
@@ -387,6 +473,13 @@ export default function CriacaoPage() {
         setSentDraftId(draftId);
         draftSigRef.current = sig;
       }
+      // Playbook: job longo (1 roleplay por etapa). A função responde 202 assim
+      // que inicia; o progresso é acompanhado na Biblioteca.
+      if (isPlaybookMode) {
+        await invokeExportPlaybook(draftId);
+        setSendStatus("success");
+        return;
+      }
       const data = await invokeExport([draftId]);
       const result = data?.results?.[0];
       if (!data?.ok || !result?.ok) {
@@ -403,6 +496,27 @@ export default function CriacaoPage() {
     if (!validateInputs()) return;
     if (!connectionId) {
       addToast({ title: "Selecione uma conta de destino", color: "warning" });
+      return;
+    }
+    // Playbook cria vários roleplays de uma vez na conta do cliente — confirma antes.
+    if (isPlaybookMode) {
+      const total = playbookCallTypes.length;
+      setConfirm({
+        title: total ? `Criar ${total} roleplay(s) nesta conta?` : "Iniciar a implementação?",
+        message: (
+          <>
+            A Perfecting vai criar <b>um roleplay por etapa</b> do playbook{" "}
+            <b>{selectedPlaybook?.name ?? ""}</b>
+            {total ? ` (${total} no total)` : ""}, usando a oferta, o contexto e a persona
+            extraídos do material. Leva alguns minutos — dá para acompanhar na Biblioteca.
+          </>
+        ),
+        confirmLabel: "Criar roleplays",
+        onConfirm: async () => {
+          setSendModalOpen(true);
+          await runSend();
+        },
+      });
       return;
     }
     setSendModalOpen(true);
@@ -647,40 +761,128 @@ export default function CriacaoPage() {
           />
         )}
 
+        {/* Antes do modo: playbook é por organização, então depende do destino. */}
         <Select
-          label="Tipo de chamada (call context)"
+          label={isPlaybookMode ? "Conta de destino" : "Conta de destino (opcional)"}
           labelPlacement="outside"
-          placeholder={callContexts.length ? "Escolha o tipo de chamada" : "Carregando…"}
-          isDisabled={callContexts.length === 0}
-          selectedKeys={callContextSlug ? [callContextSlug] : []}
-          onSelectionChange={(keys) => setCallContextSlug(String(Array.from(keys)[0] ?? ""))}
+          placeholder="Definir depois, no envio"
+          selectedKeys={connectionId ? [connectionId] : []}
+          onSelectionChange={(keys) => handleConnectionChange(String(Array.from(keys)[0] ?? ""))}
           radius="sm"
           variant="bordered"
           classNames={managerSelectClassNames}
-          isRequired
+          description={
+            loadingPlaybooks
+              ? "Verificando se esta conta tem playbook…"
+              : connectionId && playbooks.length === 0
+                ? "Esta conta não tem playbook — a criação segue por metodologia."
+                : undefined
+          }
         >
-          {callContexts.map((c) => (
-            <SelectItem key={c.slug} textValue={c.name}>
-              {c.name} — {c.group}
+          {connections.map((c) => (
+            <SelectItem key={c.id} textValue={`${c.org_name ?? `Org ${c.org_id}`} (${c.environment})`}>
+              {c.org_name ?? `Org ${c.org_id}`} ({c.environment})
             </SelectItem>
           ))}
         </Select>
 
-        <Select
-          label="Dificuldade"
-          labelPlacement="outside"
-          selectedKeys={[difficulty]}
-          onSelectionChange={(keys) => setDifficulty(String(Array.from(keys)[0] ?? "medium"))}
-          radius="sm"
-          variant="bordered"
-          classNames={managerSelectClassNames}
-        >
-          {DIFFICULTIES.map((d) => (
-            <SelectItem key={d.key}>{d.label}</SelectItem>
-          ))}
-        </Select>
+        {playbooks.length > 0 && (
+          <div className="flex flex-col gap-3">
+            <p className="text-sm text-slate-700">Como gerar o roleplay</p>
+            <Tabs
+              selectedKey={generationMode}
+              onSelectionChange={(k) => setGenerationMode(String(k) as GenerationMode)}
+              radius="sm"
+              variant="bordered"
+              classNames={{ tabList: "rounded-sm", tab: "rounded-sm" }}
+            >
+              <Tab key="methodology" title="Por metodologia" />
+              <Tab key="playbook" title="Pelo playbook da conta" />
+            </Tabs>
+          </div>
+        )}
 
-        {aiProcessed && (
+        {isPlaybookMode ? (
+          <div className="flex flex-col gap-3">
+            <Select
+              label="Playbook"
+              labelPlacement="outside"
+              placeholder="Escolha o playbook"
+              selectedKeys={playbookId ? [playbookId] : []}
+              onSelectionChange={(keys) => {
+                setPlaybookCallTypes([]);
+                setPlaybookId(String(Array.from(keys)[0] ?? ""));
+              }}
+              radius="sm"
+              variant="bordered"
+              classNames={managerSelectClassNames}
+              isRequired
+            >
+              {playbooks.map((p) => (
+                <SelectItem key={String(p.id)} textValue={p.name}>
+                  {p.name}
+                </SelectItem>
+              ))}
+            </Select>
+            <div className="flex flex-col gap-2 rounded-sm border border-slate-200 bg-slate-50 p-4">
+              <p className="text-sm font-medium text-slate-700">
+                {playbookCallTypes.length > 0
+                  ? `Serão criados ${playbookCallTypes.length} roleplay(s) — um por etapa do playbook`
+                  : "A jornada do playbook vira um roleplay por etapa"}
+              </p>
+              {playbookCallTypes.length > 0 && (
+                <ol className="flex flex-col gap-1 text-sm text-slate-600">
+                  {playbookCallTypes.map((ct, i) => (
+                    <li key={ct.id}>
+                      <span className="text-slate-400">{i + 1}.</span> {ct.name}
+                    </li>
+                  ))}
+                </ol>
+              )}
+              <p className="text-xs text-slate-500">
+                O tipo de chamada, as rubricas e o comportamento vêm de cada etapa do playbook. O
+                material acima é usado para a oferta, o contexto e a persona.
+              </p>
+            </div>
+          </div>
+        ) : (
+          <>
+            <Select
+              label="Tipo de chamada (call context)"
+              labelPlacement="outside"
+              placeholder={callContexts.length ? "Escolha o tipo de chamada" : "Carregando…"}
+              isDisabled={callContexts.length === 0}
+              selectedKeys={callContextSlug ? [callContextSlug] : []}
+              onSelectionChange={(keys) => setCallContextSlug(String(Array.from(keys)[0] ?? ""))}
+              radius="sm"
+              variant="bordered"
+              classNames={managerSelectClassNames}
+              isRequired
+            >
+              {callContexts.map((c) => (
+                <SelectItem key={c.slug} textValue={c.name}>
+                  {c.name} — {c.group}
+                </SelectItem>
+              ))}
+            </Select>
+
+            <Select
+              label="Dificuldade"
+              labelPlacement="outside"
+              selectedKeys={[difficulty]}
+              onSelectionChange={(keys) => setDifficulty(String(Array.from(keys)[0] ?? "medium"))}
+              radius="sm"
+              variant="bordered"
+              classNames={managerSelectClassNames}
+            >
+              {DIFFICULTIES.map((d) => (
+                <SelectItem key={d.key}>{d.label}</SelectItem>
+              ))}
+            </Select>
+          </>
+        )}
+
+        {aiProcessed && !isPlaybookMode && (
           <>
             <Textarea
               label="Comportamento do cenário"
@@ -714,23 +916,6 @@ export default function CriacaoPage() {
             />
           </>
         )}
-
-        <Select
-          label="Conta de destino (opcional)"
-          labelPlacement="outside"
-          placeholder="Definir depois, no envio"
-          selectedKeys={connectionId ? [connectionId] : []}
-          onSelectionChange={(keys) => setConnectionId(String(Array.from(keys)[0] ?? ""))}
-          radius="sm"
-          variant="bordered"
-          classNames={managerSelectClassNames}
-        >
-          {connections.map((c) => (
-            <SelectItem key={c.id} textValue={`${c.org_name ?? `Org ${c.org_id}`} (${c.environment})`}>
-              {c.org_name ?? `Org ${c.org_id}`} ({c.environment})
-            </SelectItem>
-          ))}
-        </Select>
 
         <div className="flex justify-end gap-2">
           <Button
@@ -831,6 +1016,11 @@ export default function CriacaoPage() {
         errorMessage={sendError}
         onRetry={runSend}
         onClose={() => setSendModalOpen(false)}
+        {...(isPlaybookMode && {
+          sendingLabel: "Iniciando a implementação do playbook…",
+          successTitle: "Implementação iniciada!",
+          successHint: "Acompanhe o progresso na Biblioteca…",
+        })}
       />
     </div>
   );

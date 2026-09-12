@@ -37,6 +37,7 @@ import {
   invokeGenerateTrailPlan,
   listCallContexts,
   listConnections,
+  pollTrailPlanGeneration,
   setDraftConnection,
 } from "@/app/lib/db";
 import type { CallContextType, Connection, TrailPlanDetail } from "@/app/lib/types";
@@ -97,6 +98,28 @@ export default function PlanoTrilhasPage() {
       supabase.removeChannel(channel);
     };
   }, [planId, refresh]);
+
+  // Batch API: enquanto um estágio processa, consulta o resultado periodicamente.
+  // O poll também destrava planos presos (analyzing/planning sem batch pendente).
+  useEffect(() => {
+    if (plan?.status !== "analyzing" && plan?.status !== "planning") return;
+    let cancelled = false;
+    const tick = () => {
+      void pollTrailPlanGeneration(planId)
+        .then((r) => {
+          if (!cancelled && r?.done) void refresh();
+        })
+        .catch(() => {
+          // erro real vira status "error" via realtime; falha de rede tenta de novo no próximo tick
+        });
+    };
+    tick();
+    const interval = setInterval(tick, 20_000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [plan?.status, planId, refresh]);
 
   // Encadeia o estágio 2 automaticamente quando a análise conclui.
   useEffect(() => {

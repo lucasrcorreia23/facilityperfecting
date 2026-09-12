@@ -9,8 +9,8 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   try {
-    const saToken = await loginSuperadmin();
-    const items = await listCallContexts(saToken);
+    const saToken = await loginSuperadmin("hml");
+    const items = await listCallContexts("hml", saToken);
     return json({ ok: true, items });
   } catch (e) {
     const detail = e instanceof PerfectingError ? { status: e.status, detail: e.detail } : { message: String(e) };

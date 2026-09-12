@@ -54,6 +54,7 @@ export default function NovoPlanoPage() {
   const [sellerCount, setSellerCount] = useState("");
   const [websiteUrl, setWebsiteUrl] = useState("");
   const [files, setFiles] = useState<File[]>([]);
+  const [dragging, setDragging] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [progress, setProgress] = useState<string | null>(null);
 
@@ -61,7 +62,15 @@ export default function NovoPlanoPage() {
   const [analysisDraft, setAnalysisDraft] = useState(DEFAULT_TRAIL_ANALYSIS_PROMPT);
   const [planDraft, setPlanDraft] = useState(DEFAULT_TRAIL_PLAN_PROMPT);
 
-  function addFiles(list: FileList | null) {
+  // hash SHA-256 por arquivo adicionado — detecta cópias (ex.: "x.txt" e "x (1).txt")
+  const fileHashes = useRef(new Map<File, string>());
+
+  async function sha256(file: File): Promise<string> {
+    const digest = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
+    return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
+  }
+
+  async function addFiles(list: FileList | null) {
     if (!list) return;
     const incoming = Array.from(list);
     const unsupported = incoming.filter((f) => !isSupported(f));
@@ -72,7 +81,27 @@ export default function NovoPlanoPage() {
         color: "warning",
       });
     }
-    setFiles((prev) => [...prev, ...incoming.filter(isSupported)]);
+    const accepted: File[] = [];
+    const duplicated: string[] = [];
+    for (const file of incoming.filter(isSupported)) {
+      const hash = await sha256(file);
+      const isDup = [...fileHashes.current.values()].includes(hash);
+      if (isDup) {
+        duplicated.push(file.name);
+        continue;
+      }
+      fileHashes.current.set(file, hash);
+      accepted.push(file);
+    }
+    if (duplicated.length > 0) {
+      addToast({
+        title: `Duplicado ignorado: ${duplicated.join(", ")}`,
+        description:
+          "O conteúdo é idêntico ao de um arquivo já adicionado — enviar duas vezes duplicaria o custo da análise.",
+        color: "warning",
+      });
+    }
+    setFiles((prev) => [...prev, ...accepted]);
     if (fileInput.current) fileInput.current.value = "";
   }
 
@@ -256,11 +285,32 @@ export default function NovoPlanoPage() {
           <button
             type="button"
             onClick={() => fileInput.current?.click()}
-            className="flex flex-col items-center justify-center gap-2 rounded-sm border border-dashed border-slate-300 bg-slate-50/50 px-6 py-10 text-center transition-colors hover:border-slate-400 hover:bg-slate-50"
+            onDragOver={(e) => {
+              e.preventDefault();
+              if (!submitting) setDragging(true);
+            }}
+            onDragLeave={() => setDragging(false)}
+            onDrop={(e) => {
+              e.preventDefault();
+              setDragging(false);
+              if (!submitting) addFiles(e.dataTransfer.files);
+            }}
+            disabled={submitting}
+            className={`flex flex-col items-center justify-center gap-2 rounded-sm border border-dashed px-6 py-10 text-center transition-colors disabled:opacity-60 ${
+              dragging
+                ? "border-blue-400 bg-blue-50"
+                : "border-slate-300 bg-slate-50/50 hover:border-slate-400 hover:bg-slate-50"
+            }`}
           >
-            <ArrowUpTrayIcon className="w-6 h-6 text-slate-400" />
-            <span className="text-sm font-medium text-slate-600">
-              Clique para selecionar os arquivos (múltiplos de uma vez)
+            <ArrowUpTrayIcon
+              className={`w-6 h-6 ${dragging ? "text-blue-500" : "text-slate-400"}`}
+            />
+            <span
+              className={`text-sm font-medium ${dragging ? "text-blue-700" : "text-slate-600"}`}
+            >
+              {dragging
+                ? "Solte os arquivos aqui"
+                : "Arraste os arquivos aqui (vários de uma vez), ou clique para selecionar"}
             </span>
           </button>
 
@@ -278,7 +328,10 @@ export default function NovoPlanoPage() {
                   </span>
                   <button
                     type="button"
-                    onClick={() => setFiles((prev) => prev.filter((_, i) => i !== idx))}
+                    onClick={() => {
+                      fileHashes.current.delete(file);
+                      setFiles((prev) => prev.filter((_, i) => i !== idx));
+                    }}
                     aria-label={`Remover ${file.name}`}
                     className="shrink-0 rounded-sm p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
                   >

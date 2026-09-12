@@ -9,7 +9,7 @@ Stack: **Next.js (App Router) + React 19 + Tailwind 4 + HeroUI 2** · **Supabase
 (Postgres + Auth + Edge Functions + Storage). Design espelha os tokens da Perfecting.
 
 > Escopo v1: import por **texto + PDF/DOCX**, **reuso** de ofertas/contextos (ids por conexão),
-> **export em lote**, ambiente **HML**. URL/áudio/Google Drive e PROD ficam no roadmap.
+> **export em lote**, destino **HML e produção** (conta escolhida no envio).
 
 ---
 
@@ -17,7 +17,7 @@ Stack: **Next.js (App Router) + React 19 + Tailwind 4 + HeroUI 2** · **Supabase
 
 - Node 20+, npm
 - [Supabase CLI](https://supabase.com/docs/guides/cli) (`brew install supabase/tap/supabase`)
-- Credencial **superadmin** da Perfecting (HML)
+- Credenciais **superadmin** da Perfecting (HML e, se for exportar para prod, produção)
 - `curl` + `jq` para o gate de validação (Fase 0)
 
 ## 2. Fase 0 — Validar o contrato em HML (antes de tudo)
@@ -51,10 +51,18 @@ dashboard (Authentication → Users) — o signup está desativado (uso interno)
 
 ```bash
 supabase secrets set \
-  PERFECTING_API_BASE=https://api-hml.perfecting.app \
-  PERFECTING_SUPERADMIN_EMAIL=... \
-  PERFECTING_SUPERADMIN_PASSWORD=...
+  PERFECTING_HML_API_BASE=https://api-hml.perfecting.app \
+  PERFECTING_HML_SUPERADMIN_EMAIL=... \
+  PERFECTING_HML_SUPERADMIN_PASSWORD=... \
+  PERFECTING_PROD_API_BASE=https://api.perfecting.app \
+  PERFECTING_PROD_SUPERADMIN_EMAIL=... \
+  PERFECTING_PROD_SUPERADMIN_PASSWORD=... \
+  ANTHROPIC_API_KEY=... \
+  ANTHROPIC_MODEL=claude-sonnet-5
 # SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY são injetados automaticamente.
+# ANTHROPIC_MODEL: ID exato do modelo (default no código: claude-sonnet-5).
+# Fallback legado: email/senha do trio PERFECTING_* preenchem HML e PROD se
+# os pares *_SUPERADMIN_* faltarem. PERFECTING_API_BASE legado só preenche HML.
 ```
 
 ### Deploy das funções
