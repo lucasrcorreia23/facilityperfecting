@@ -22,7 +22,6 @@ import {
 import { Card } from "@/app/components/ui/card";
 import { Button } from "@/app/components/ui/button";
 import { PageHeader } from "@/app/components/ui/page-header";
-import { BackButton } from "@/app/components/ui/back-button";
 import {
   createTrailPlan,
   invokeGenerateTrailPlan,
@@ -193,10 +192,8 @@ export default function NovoPlanoPage() {
 
   return (
     <div className="flex flex-col gap-0">
-      <div className="mb-4">
-        <BackButton href="/trilhas" />
-      </div>
       <PageHeader
+        backHref="/trilhas"
         title="Novo plano de trilhas"
         description="Envie os materiais do cliente de uma só vez — a IA executa o intake, a análise Data-to-Skill e propõe as trilhas."
       />

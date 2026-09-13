@@ -1,5 +1,7 @@
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { corsHeaders, json } from "../_shared/cors.ts";
+import { requireUser } from "../_shared/auth.ts";
+import { readAnthropicStream } from "../_shared/anthropic.ts";
 import {
   listCallContexts,
   listMethodologies,
@@ -18,6 +20,11 @@ import {
  * Uma chamada de LLM só (sem Batch API, diferente de generate-trail-plan): o
  * volume é bem menor. O waitUntil existe para não esbarrar no wall clock da
  * Edge Function com um playbook de dezenas de páginas.
+ *
+ * ⚠️ A chamada à Anthropic é SEMPRE streaming. Com max_tokens alto uma
+ * requisição não-streaming fica minutos sem receber byte nenhum e morre por
+ * timeout de HTTP — e, como o trabalho roda em waitUntil, isso falhava calado:
+ * o status ficava "generating" até o poll expirar.
  */
 
 declare const EdgeRuntime: { waitUntil(promise: Promise<unknown>): void };
@@ -32,7 +39,7 @@ const db = createClient(
 );
 
 /** Geração presa há mais que isto = execução morta; o poll libera para retry. */
-const STALE_AFTER_MS = 20 * 60_000;
+const STALE_AFTER_MS = 5 * 60_000;
 
 const SYSTEM_BASE = `Você é um especialista em playbooks de vendas estruturando o playbook de um cliente para a plataforma Perfecting.
 
@@ -231,7 +238,11 @@ async function run(playbookId: string): Promise<void> {
       body: JSON.stringify({
         model: MODEL,
         max_tokens: 32000,
+        stream: true,
         output_config: {
+          // Extração estruturada não pede raciocínio profundo; "high" (o default)
+          // só somava latência.
+          effort: "medium",
           format: {
             type: "json_schema",
             schema: buildSchema(
@@ -251,25 +262,27 @@ async function run(playbookId: string): Promise<void> {
       }),
     });
 
-    const data = await res.json().catch(() => ({}));
+    // Erro de HTTP chega antes do stream abrir: aí o corpo ainda é JSON.
     if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
       throw new Error(
         res.status === 429
           ? "Limite de tokens por minuto da Anthropic atingido. O material é grande demais para o tier atual da conta — reduza o conteúdo ou aumente o tier."
           : String(data?.error?.message ?? data?.error ?? `HTTP ${res.status}`),
       );
     }
-    if (data.stop_reason === "max_tokens") {
+    if (!res.body) throw new Error("a Anthropic respondeu sem corpo");
+
+    const { text: generated, stopReason, usage } = await readAnthropicStream(res);
+    if (stopReason === "max_tokens") {
       throw new Error(
         "O material é muito extenso para ser estruturado em uma única resposta. Reduza o conteúdo e tente de novo.",
       );
     }
-
-    const textBlock = (data.content ?? []).find((b: { type?: string }) => b?.type === "text");
-    if (!textBlock?.text) throw new Error("resposta sem conteúdo estruturado");
+    if (!generated.trim()) throw new Error("resposta sem conteúdo estruturado");
     let result: { name?: string; call_types?: GeneratedCallType[] };
     try {
-      result = JSON.parse(textBlock.text);
+      result = JSON.parse(generated);
     } catch {
       throw new Error("A IA retornou um resultado incompleto. Tente reduzir o material.");
     }
@@ -278,19 +291,27 @@ async function run(playbookId: string): Promise<void> {
     await setPlaybook(playbookId, {
       status: "ready",
       error_detail: null,
-      usage: data.usage ?? null,
+      usage: usage ?? null,
       // Só assume o nome sugerido se o usuário não escreveu um.
       ...(result.name && !playbook.name?.trim() ? { name: result.name } : {}),
     });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     console.error("generate-playbook falhou:", message);
-    await setPlaybook(playbookId, { status: "error", error_detail: { message } }).catch(() => {});
+    // O builder do supabase-js não tem .catch(): erro aqui virava rejeição solta e o
+    // playbook ficava "generating" até o poll expirar.
+    const { error: saveErr } = await setPlaybook(playbookId, {
+      status: "error",
+      error_detail: { message },
+    });
+    if (saveErr) console.error("generate-playbook: falha ao gravar erro:", saveErr.message);
   }
 }
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+  const denied = await requireUser(req);
+  if (denied) return denied;
 
   try {
     if (!ANTHROPIC_API_KEY) {

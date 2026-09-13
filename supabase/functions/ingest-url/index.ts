@@ -1,6 +1,7 @@
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { parseHTML } from "npm:linkedom@0.18.5";
 import { corsHeaders, json } from "../_shared/cors.ts";
+import { requireUser } from "../_shared/auth.ts";
 
 const db = createClient(
   Deno.env.get("SUPABASE_URL")!,
@@ -61,6 +62,8 @@ async function fetchAsText(url: string): Promise<{ text: string; title: string }
  */
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+  const denied = await requireUser(req);
+  if (denied) return denied;
 
   try {
     const body = await req.json().catch(() => ({}));

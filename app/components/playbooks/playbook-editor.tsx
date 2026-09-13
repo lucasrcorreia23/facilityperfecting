@@ -325,7 +325,7 @@ function CallTypeEditor({
           <div className="grid gap-3 sm:grid-cols-2">
             <Select
               label="Tipo de chamada"
-              labelPlacement="outside"
+              labelPlacement="outside-top"
               selectedKeys={callType.call_context_slug ? [callType.call_context_slug] : []}
               onSelectionChange={(keys) => {
                 const slug = Array.from(keys)[0] as string | undefined;
@@ -346,7 +346,7 @@ function CallTypeEditor({
             </Select>
             <Select
               label="Metodologia"
-              labelPlacement="outside"
+              labelPlacement="outside-top"
               selectedKeys={callType.methodology_slug ? [callType.methodology_slug] : []}
               onSelectionChange={(keys) => {
                 const slug = Array.from(keys)[0] as string | undefined;

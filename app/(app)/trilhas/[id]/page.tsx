@@ -20,7 +20,6 @@ import {
 import { Card } from "@/app/components/ui/card";
 import { Button } from "@/app/components/ui/button";
 import { PageHeader } from "@/app/components/ui/page-header";
-import { BackButton } from "@/app/components/ui/back-button";
 import { LoadingView } from "@/app/components/ui/loading-view";
 import { ConfirmDialog, type ConfirmConfig } from "@/app/components/ui/confirm-dialog";
 import { SendStatusModal, type SendStatus } from "@/app/components/ui/send-status-modal";
@@ -254,9 +253,8 @@ export default function PlanoTrilhasPage() {
   }
   if (!plan) {
     return (
-      <div className="flex flex-col gap-4">
-        <BackButton href="/trilhas" />
-        <p className="text-sm text-slate-600">Plano não encontrado.</p>
+      <div className="flex flex-col gap-0">
+        <PageHeader backHref="/trilhas" title="Plano não encontrado" />
       </div>
     );
   }
@@ -266,10 +264,8 @@ export default function PlanoTrilhasPage() {
 
   return (
     <div className="flex flex-col gap-0">
-      <div className="mb-4">
-        <BackButton href="/trilhas" />
-      </div>
       <PageHeader
+        backHref="/trilhas"
         title={`Plano de trilhas — ${plan.client_name}`}
         description={
           plan.sales_methodology

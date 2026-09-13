@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { EvaluatorRow } from "@/app/components/evaluation/evaluator-row";
 import { displayNameFor, formatScore5, REQUIRED_EVALUATIONS_PER_ROLEPLAY, type RoleplayAggregate } from "@/app/lib/evaluation";
 import type { EvalWeights, Profile, RoleplayEvaluation } from "@/app/lib/types";
@@ -35,9 +35,13 @@ export function EvaluationsTabView({
     [profiles],
   );
 
-  useEffect(() => {
+  // Outro roleplay selecionado: fecha o avaliador aberto. Ajustado durante a
+  // renderização (padrão do React para "resetar estado quando a prop muda").
+  const [prevReadinessId, setPrevReadinessId] = useState(readinessId);
+  if (readinessId !== prevReadinessId) {
+    setPrevReadinessId(readinessId);
     setExpandedProfileId(null);
-  }, [readinessId]);
+  }
 
   return (
     <div className="flex flex-col gap-4">

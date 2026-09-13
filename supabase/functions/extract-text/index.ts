@@ -4,6 +4,7 @@ import { extractText as extractPdf, getDocumentProxy } from "npm:unpdf@0.12.1";
 import mammoth from "npm:mammoth@1.8.0";
 import * as XLSX from "npm:xlsx@0.18.5";
 import { corsHeaders, json } from "../_shared/cors.ts";
+import { requireUser } from "../_shared/auth.ts";
 
 const db = createClient(
   Deno.env.get("SUPABASE_URL")!,
@@ -24,6 +25,8 @@ function suggestOfferName(filename: string | undefined, text: string): string {
  */
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+  const denied = await requireUser(req);
+  if (denied) return denied;
 
   try {
     const { filePath, filename, mime } = await req.json();

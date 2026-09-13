@@ -1,4 +1,5 @@
 import { corsHeaders, json } from "../_shared/cors.ts";
+import { requireUser } from "../_shared/auth.ts";
 import { listMethodologies, loginSuperadmin, PerfectingError } from "../_shared/perfecting.ts";
 
 /**
@@ -8,6 +9,8 @@ import { listMethodologies, loginSuperadmin, PerfectingError } from "../_shared/
  */
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+  const denied = await requireUser(req);
+  if (denied) return denied;
 
   try {
     const saToken = await loginSuperadmin("hml");

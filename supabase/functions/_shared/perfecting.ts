@@ -85,6 +85,20 @@ export class PerfectingError extends Error {
   }
 }
 
+/**
+ * Teto de caracteres para texto livre mandado a endpoints de IA da Perfecting
+ * (offer/generate, context/generate). Material colado pelo usuário pode ter
+ * dezenas de milhares de caracteres — acima disso a API deles quebra com um
+ * 500 genérico ("Internal server error.", sem detalhe) em vez de validar.
+ * O texto completo continua salvo no nosso banco; só o payload de saída é cortado.
+ */
+export const MAX_API_TEXT_CHARS = 12_000;
+
+export function truncateForApi(text: string, max = MAX_API_TEXT_CHARS): string {
+  if (text.length <= max) return text;
+  return `${text.slice(0, max).trim()}\n\n[...material truncado — o original tem ${text.length} caracteres]`;
+}
+
 function stripBearer(token: unknown): string {
   const t = String(token ?? "");
   return t.toLowerCase().startsWith("bearer ") ? t.slice(7).trim() : t.trim();
@@ -100,16 +114,23 @@ async function fetchWithTimeout(url: string, init: RequestInit): Promise<Respons
   }
 }
 
-/** POST JSON com retries/backoff em 5xx/timeout. NUNCA retenta 422 (validação). */
-async function postJson<T = unknown>(url: string, token: string, body: unknown): Promise<T> {
+/** POST/PUT JSON com retries/backoff em 5xx/timeout. NUNCA retenta 422 (validação). */
+async function sendJson<T = unknown>(
+  method: "POST" | "PUT" | "PATCH",
+  url: string,
+  token: string,
+  body: unknown,
+  /** 0 para operações que não podem repetir (ex.: criar agente, regenerar com IA). */
+  maxRetries = MAX_RETRIES,
+): Promise<T> {
   let attempt = 0;
   // deno-lint-ignore no-explicit-any
   let lastErr: any;
-  while (attempt <= MAX_RETRIES) {
+  while (attempt <= maxRetries) {
     attempt++;
     try {
       const res = await fetchWithTimeout(url, {
-        method: "POST",
+        method,
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
@@ -138,31 +159,52 @@ async function postJson<T = unknown>(url: string, token: string, body: unknown):
           (typeof det === "string" && det.trim() === "");
         return empty ? raw || d : det;
       };
+      // Em 5xx o `.detail` costuma ser um genérico "Internal server error." sem
+      // pista nenhuma — guarda também endpoint + corpo bruto pra dar pra investigar
+      // qual chamada específica quebrou (offer/generate vs offer/create etc.).
+      const detail5xx = (): unknown => ({
+        endpoint: url.replace(/^https?:\/\/[^/]+/, ""),
+        apiDetail: detailOf(data),
+        raw: raw.slice(0, 4000),
+      });
       // 422 = validação → não retenta
       if (res.status === 422) {
         throw new PerfectingError(422, detailOf(data));
       }
       // 5xx → retenta
-      if (res.status >= 500 && attempt <= MAX_RETRIES) {
-        lastErr = new PerfectingError(res.status, detailOf(data));
+      if (res.status >= 500 && attempt <= maxRetries) {
+        lastErr = new PerfectingError(res.status, detail5xx());
         await new Promise((r) => setTimeout(r, 1200 * attempt));
         continue;
       }
-      throw new PerfectingError(res.status, detailOf(data));
+      throw new PerfectingError(res.status, res.status >= 500 ? detail5xx() : detailOf(data));
     } catch (e) {
       const isAbort = e instanceof DOMException && e.name === "AbortError";
-      if (isAbort && attempt <= MAX_RETRIES) {
+      if (isAbort && attempt <= maxRetries) {
         lastErr = new PerfectingError(408, "timeout");
         await new Promise((r) => setTimeout(r, 1200 * attempt));
         continue;
       }
       if (e instanceof PerfectingError) throw e;
-      if (attempt > MAX_RETRIES) throw lastErr ?? e;
+      if (attempt > maxRetries) throw lastErr ?? e;
       lastErr = e;
       await new Promise((r) => setTimeout(r, 1200 * attempt));
     }
   }
   throw lastErr;
+}
+
+function postJson<T = unknown>(url: string, token: string, body: unknown): Promise<T> {
+  return sendJson<T>("POST", url, token, body);
+}
+
+/** PUT idempotente: mesma política de retry do POST (seguro em PUT). */
+function putJson<T = unknown>(url: string, token: string, body: unknown): Promise<T> {
+  return sendJson<T>("PUT", url, token, body);
+}
+
+function patchJson<T = unknown>(url: string, token: string, body: unknown): Promise<T> {
+  return sendJson<T>("PATCH", url, token, body);
 }
 
 // ── Auth ────────────────────────────────────────────────────────────────
@@ -309,6 +351,125 @@ export async function listCallContexts(
   return out;
 }
 
+// ── Conteúdo context-wide: objeções e guardrails ──────────────────────────
+//
+// A IA da Perfecting gera objeções sozinha durante a implementação, mas genéricas.
+// Quando o material do cliente já traz objeções reais (com a fala do comprador e a
+// condição de cedência) ou regras de comportamento validadas, é muito melhor mandar
+// as dele. Ambos os recursos são criados NO CONTEXTO, uma vez: todo case_setup
+// daquele context_id os herda (`GET /case_setup_{id}/objections?include_context_wide=true`),
+// então valem para todas as etapas do playbook sem competir com o que cada etapa gera.
+
+export interface ObjectionType {
+  id: number;
+  slug: string;
+  name: string;
+}
+
+/** Tipos de objeção da plataforma (preço, timing, autoridade…), para resolver slug → id. */
+export async function listObjectionTypes(
+  env: PerfectingEnv,
+  token: string,
+): Promise<ObjectionType[]> {
+  const data = await getJson<unknown>(`${rp(env)}/objection_types`, token);
+  const items = Array.isArray(data) ? data : [];
+  return items
+    .filter((o): o is Record<string, unknown> => Boolean(o) && typeof o === "object")
+    .filter((o) => typeof o.id === "number" && typeof o.slug === "string")
+    .map((o) => ({
+      id: o.id as number,
+      slug: o.slug as string,
+      name: typeof o.name === "string" ? o.name : (o.slug as string),
+    }));
+}
+
+/** IDs de `role_plays.difficulty_level` na Perfecting (1=Fácil, 2=Moderado, 3=Difícil). */
+export const DIFFICULTY_LEVEL_IDS = [1, 2, 3] as const;
+
+export interface ContextObjectionInput {
+  objection_type_id: number;
+  /**
+   * Obrigatório na prática: o prompt do roleplay só inclui objeções com
+   * `difficulty_level_id` IGUAL ao do case_setup — NULL nunca casa, e a objeção
+   * fica cadastrada sem nunca chegar ao comprador.
+   */
+  difficulty_level_id: number;
+  title: string;
+  description?: string | null;
+  details?: string | null;
+  /** A condição de cedência ("Ceda se") — sem ela o comprador repete a objeção sem fim. */
+  to_give_in_if?: string | null;
+}
+
+/** Objeções context-wide já cadastradas — base da idempotência (título + nível). */
+export async function listContextObjections(
+  env: PerfectingEnv,
+  token: string,
+  contextId: number,
+): Promise<Array<{ id: number; title: string; difficulty_level_id: number | null }>> {
+  const data = await getJson<unknown>(`${rp(env)}/context_${contextId}/objections`, token);
+  const items = Array.isArray(data) ? data : [];
+  return items
+    .filter((o): o is Record<string, unknown> => Boolean(o) && typeof o === "object")
+    .filter((o) => typeof o.id === "number")
+    .map((o) => ({
+      id: o.id as number,
+      title: typeof o.title === "string" ? o.title : "",
+      difficulty_level_id: typeof o.difficulty_level_id === "number" ? o.difficulty_level_id : null,
+    }));
+}
+
+export async function createContextObjection(
+  env: PerfectingEnv,
+  token: string,
+  contextId: number,
+  input: ContextObjectionInput,
+): Promise<number | null> {
+  const data = await postJson<{ id?: number }>(
+    `${rp(env)}/context_${contextId}/objections`,
+    token,
+    input,
+  );
+  return typeof data.id === "number" ? data.id : null;
+}
+
+export interface ContextGuardrailInput {
+  name: string;
+  prompt: string;
+}
+
+export async function listContextGuardrails(
+  env: PerfectingEnv,
+  token: string,
+  contextId: number,
+): Promise<Array<{ id: number; name: string }>> {
+  const data = await getJson<unknown>(`${rp(env)}/context_${contextId}/guardrails`, token);
+  const items = Array.isArray(data) ? data : [];
+  return items
+    .filter((g): g is Record<string, unknown> => Boolean(g) && typeof g === "object")
+    .filter((g) => typeof g.id === "number")
+    .map((g) => ({
+      id: g.id as number,
+      name: typeof g.name === "string" ? g.name : "",
+    }));
+}
+
+export async function createContextGuardrail(
+  env: PerfectingEnv,
+  token: string,
+  contextId: number,
+  input: ContextGuardrailInput,
+): Promise<number | null> {
+  // `rubrics` é obrigatório no schema da API; vazio = o guardrail não pontua rubrica,
+  // só orienta o comportamento do comprador.
+  const data = await postJson<{ id?: number }>(
+    `${rp(env)}/context_${contextId}/guardrails`,
+    token,
+    { name: input.name, prompt: input.prompt, rubrics: [] },
+  );
+  return typeof data.id === "number" ? data.id : null;
+}
+
 // ── Cadeia generate/create ────────────────────────────────────────────────
 export interface GeneratedOffer {
   [k: string]: unknown;
@@ -399,11 +560,29 @@ export async function createOffer(
     env === "hml"
       ? buildHmlOfferCreate(generated, offerName, description, url)
       : buildProdOfferCreate(generated, offerName, description, url);
-  const data = await postJson<{ id?: number; offer_id?: number }>(
-    `${rp(env)}/offer/create`,
-    token,
-    payload,
-  );
+  let data: { id?: number; offer_id?: number };
+  try {
+    data = await postJson<{ id?: number; offer_id?: number }>(
+      `${rp(env)}/offer/create`,
+      token,
+      payload,
+    );
+  } catch (e) {
+    // 500 genérico aqui não diz nada — anexa o tamanho de cada campo do payload
+    // que mandamos, pra achar qual campo (provavelmente vindo do /offer/generate
+    // da própria Perfecting) está grande/estranho o suficiente pra quebrar o create.
+    if (e instanceof PerfectingError) {
+      const fieldLengths = Object.fromEntries(
+        Object.entries(payload).map(([k, v]) => [
+          k,
+          typeof v === "string" ? v.length : typeof v,
+        ]),
+      );
+      const base = typeof e.detail === "object" && e.detail !== null ? e.detail : { detail: e.detail };
+      throw new PerfectingError(e.status, { ...base, payloadFieldLengths: fieldLengths });
+    }
+    throw e;
+  }
   const id = typeof data.id === "number" ? data.id : data.offer_id;
   if (typeof id !== "number") throw new PerfectingError(502, "offer/create sem id");
   return id;
@@ -490,6 +669,230 @@ export async function generatePersonaFromContext(
     throw new PerfectingError(502, "persona/generate_from_context sem persona.id");
   }
   return { id, name: data.persona?.name ?? null };
+}
+
+export interface PersonaSummary {
+  id: number;
+  name: string | null;
+  job_title: string | null;
+}
+
+/**
+ * Personas já existentes num contexto. Espelha listCaseSetupIdsByContext: é a
+ * fonte de verdade quando o stream do lote (openPersonaBatchStream) cair antes
+ * de emitir `batch_ready`, e também o que permite reusar um contexto sem
+ * recriar personas que um envio anterior já deixou lá.
+ */
+export async function listPersonasByContext(
+  env: PerfectingEnv,
+  token: string,
+  contextId: number,
+): Promise<PersonaSummary[]> {
+  const data = await getJson<unknown>(`${rp(env)}/persona/list?context_id=${contextId}`, token);
+  const items = Array.isArray(data) ? data : [];
+  return items
+    .filter((p): p is Record<string, unknown> => Boolean(p) && typeof p === "object")
+    .filter((p) => typeof p.id === "number")
+    .map((p) => ({
+      id: p.id as number,
+      name: typeof p.name === "string" ? p.name : null,
+      job_title: typeof p.job_title === "string" ? p.job_title : null,
+    }));
+}
+
+export interface PersonaBatchOptions {
+  companyCreationQuantity?: number;
+  existingCompanyIds?: number[];
+  genderIds?: number[];
+  ageGroupIds?: number[];
+  additionalInstructions?: string | null;
+}
+
+/**
+ * Abre o stream SSE do lote de geração de personas (até 10 por chamada).
+ *
+ * ⚠️ De propósito FORA de postJson/fetchWithTimeout, mesmo motivo de
+ * openPlaybookImplementationStream (mais abaixo neste arquivo): o job é longo — o
+ * S3 do pipeline gera conteúdo de etapa/bloco para cada persona nova em CADA
+ * case_setup já existente no contexto, então o tempo cresce com o histórico do
+ * contexto, não só com a quantidade pedida — e um retry criaria um SEGUNDO
+ * lote de N personas (não há chave de dedupe no endpoint). Quem chama
+ * reconcilia por listPersonasByContext, nunca reabrindo o stream.
+ */
+export async function openPersonaBatchStream(
+  env: PerfectingEnv,
+  token: string,
+  contextId: number,
+  personaQuantity: number,
+  options: PersonaBatchOptions = {},
+): Promise<Response> {
+  const url = new URL(`${rp(env)}/persona/generate_batch/sse`);
+  url.searchParams.set("context_id", String(contextId));
+  url.searchParams.set("persona_quantity", String(personaQuantity));
+  if (options.companyCreationQuantity) {
+    url.searchParams.set("company_creation_quantity", String(options.companyCreationQuantity));
+  }
+  for (const id of options.existingCompanyIds ?? []) {
+    url.searchParams.append("existing_company_ids", String(id));
+  }
+  for (const id of options.genderIds ?? []) url.searchParams.append("gender_ids", String(id));
+  for (const id of options.ageGroupIds ?? []) url.searchParams.append("age_group_ids", String(id));
+  const instructions = options.additionalInstructions?.trim();
+  if (instructions) url.searchParams.set("additional_instructions", instructions);
+
+  const res = await fetch(url.toString(), {
+    method: "GET",
+    headers: { Authorization: `Bearer ${token}`, Accept: "text/event-stream" },
+  });
+  if (!res.ok || !res.body) {
+    const detail = await res.text().catch(() => "");
+    throw new PerfectingError(res.status, detail || "persona/generate_batch/sse sem corpo");
+  }
+  return res;
+}
+
+/**
+ * Trava (personaId) ou destrava (null) a persona de um case_setup.
+ *
+ * ⚠️ `?generate_case_prompt=false` é OBRIGATÓRIO: com o default (true) a API
+ * tenta regenerar o case_prompt na mesma chamada e quebra. O corpo é merge
+ * parcial — mandar só `{ persona_id }` não apaga nenhum outro campo do
+ * case_setup. A API NÃO valida se a persona pertence ao contexto do
+ * case_setup; é responsabilidade de quem chama.
+ */
+export async function setCaseSetupPersona(
+  env: PerfectingEnv,
+  token: string,
+  caseSetupId: number,
+  personaId: number | null,
+): Promise<void> {
+  await putJson(
+    `${rp(env)}/case_setup_${caseSetupId}?generate_case_prompt=false`,
+    token,
+    { persona_id: personaId },
+  );
+}
+
+/** Quais personas um roleplay aceita, já resolvido da árvore do catálogo. */
+export interface CaseSetupPersonas {
+  case_setup_id: number;
+  training_name: string | null;
+  /** true = travado nesta persona só; false = genérico (aceita todas do contexto). */
+  has_specific_persona: boolean;
+  personas: Array<{ id: number; name: string | null }>;
+}
+
+/**
+ * Personas que cada roleplay de um contexto aceita — o read-back honesto do modo
+ * multi-persona: é o MESMO endpoint que a tela de pré-chamada da Perfecting usa
+ * para montar o seletor de persona, então o que vem aqui é o que o vendedor vai
+ * ver (ela mostra o seletor quando há mais de uma persona aplicável).
+ *
+ * A API devolve `offer → contexts → personas → case_setups`, com o case_setup
+ * genérico REPLICADO sob todas as personas do contexto; aqui a árvore é invertida
+ * para `case_setup → personas`, que é o que a UI precisa.
+ *
+ * ⚠️ `/persona/catalog` não existe na API de produção — some junto com o resto do
+ * modo playbook. Quem chama trata a falha como "sem catálogo", não como erro.
+ */
+export async function listCaseSetupPersonas(
+  env: PerfectingEnv,
+  token: string,
+  contextId: number,
+): Promise<CaseSetupPersonas[]> {
+  const data = await getJson<unknown>(
+    `${rp(env)}/persona/catalog?context_id=${contextId}`,
+    token,
+  );
+  const offers = Array.isArray(data) ? data : [];
+  const byCaseSetup = new Map<number, CaseSetupPersonas>();
+
+  for (const offer of offers) {
+    const contexts = (offer as { contexts?: unknown[] })?.contexts ?? [];
+    for (const context of contexts) {
+      const personas = (context as { personas?: unknown[] })?.personas ?? [];
+      for (const persona of personas) {
+        const p = persona as {
+          id?: unknown;
+          name?: unknown;
+          case_setups?: unknown[];
+        };
+        if (typeof p.id !== "number") continue;
+        const personaRef = { id: p.id, name: typeof p.name === "string" ? p.name : null };
+        for (const cs of p.case_setups ?? []) {
+          const c = cs as {
+            id?: unknown;
+            training_name?: unknown;
+            has_specific_persona?: unknown;
+          };
+          if (typeof c.id !== "number") continue;
+          const entry = byCaseSetup.get(c.id) ?? {
+            case_setup_id: c.id,
+            training_name: typeof c.training_name === "string" ? c.training_name : null,
+            has_specific_persona: c.has_specific_persona === true,
+            personas: [],
+          };
+          entry.personas.push(personaRef);
+          byCaseSetup.set(c.id, entry);
+        }
+      }
+    }
+  }
+  return Array.from(byCaseSetup.values()).sort((a, b) => a.case_setup_id - b.case_setup_id);
+}
+
+/** Campos mínimos de um case_setup lido de volta — casar etapa↔roleplay e ver se terminou. */
+export async function getCaseSetup(
+  env: PerfectingEnv,
+  token: string,
+  caseSetupId: number,
+): Promise<{
+  id: number;
+  playbook_call_type_id: number | null;
+  persona_id: number | null;
+  /** Último passo do ciclo de montagem da Perfecting: null = ciclo não terminou (ou falhou). */
+  elevenlabs_agent_id: string | null;
+}> {
+  const data = await getJson<Record<string, unknown>>(`${rp(env)}/case_setup_${caseSetupId}`, token);
+  return {
+    id: caseSetupId,
+    playbook_call_type_id:
+      typeof data.playbook_call_type_id === "number" ? data.playbook_call_type_id : null,
+    persona_id: typeof data.persona_id === "number" ? data.persona_id : null,
+    elevenlabs_agent_id:
+      typeof data.elevenlabs_agent_id === "string" && data.elevenlabs_agent_id
+        ? data.elevenlabs_agent_id
+        : null,
+  };
+}
+
+// Passos isolados do ciclo de montagem de um roleplay na Perfecting — para completar
+// um roleplay cujo ciclo falhou no meio (o worker deles pula a etapa e segue). Sem
+// retry: são gerações com IA ou criação de agente de voz, que não podem duplicar.
+
+export type CaseSetupRepairStep =
+  | "behavior_guidance"
+  | "objections"
+  | "update_prompt"
+  | "elevenlabs_agent"
+  | "last_call_info";
+
+const CASE_SETUP_REPAIR_PATHS: Record<CaseSetupRepairStep, { path: string; body: unknown }> = {
+  behavior_guidance: { path: "behavior_guidance/regenerate", body: {} },
+  objections: { path: "objections/generate", body: { scope: "global", overwrite: false } },
+  update_prompt: { path: "unitary_cycle/update_case_prompt", body: {} },
+  elevenlabs_agent: { path: "unitary_cycle/create_elevenlabs_agent", body: {} },
+  last_call_info: { path: "playbook_last_call_info/regenerate", body: {} },
+};
+
+export async function runCaseSetupRepairStep(
+  env: PerfectingEnv,
+  token: string,
+  caseSetupId: number,
+  step: CaseSetupRepairStep,
+): Promise<unknown> {
+  const { path, body } = CASE_SETUP_REPAIR_PATHS[step];
+  return sendJson("POST", `${rp(env)}/case_setup_${caseSetupId}/${path}`, token, body, 0);
 }
 
 export interface ScenarioInput {
@@ -892,6 +1295,12 @@ export interface PlaybookCallTypeInput {
   description: string; // obrigatório na API
   call_context_type_id?: number | null;
   order?: number | null;
+  /**
+   * Etapa anterior da jornada. Sem ela a Perfecting não sabe o que veio antes e gera o
+   * "resumo da chamada anterior" como uma história de primeiro contato inventada — o
+   * backend não infere a sequência pela `order`.
+   */
+  precedent_call_type_id?: number | null;
 }
 
 export async function createPlaybookCallType(
@@ -910,10 +1319,47 @@ export async function createPlaybookCallType(
         call_context_type_id: input.call_context_type_id,
       }),
       ...(input.order != null && { order: input.order }),
+      ...(input.precedent_call_type_id != null && {
+        precedent_call_type_id: input.precedent_call_type_id,
+      }),
     },
   );
   if (typeof data.id !== "number") throw new PerfectingError(502, "call_types sem id");
   return data.id;
+}
+
+/** Define (ou limpa, com null) a etapa anterior de uma etapa já criada. */
+export async function setPlaybookCallTypePrecedent(
+  env: PerfectingEnv,
+  token: string,
+  playbookId: number,
+  callTypeId: number,
+  precedentCallTypeId: number | null,
+): Promise<void> {
+  await patchJson(`${rp(env)}/playbook_${playbookId}/call_types/${callTypeId}`, token, {
+    precedent_call_type_id: precedentCallTypeId,
+  });
+}
+
+/**
+ * Gera com IA as rubricas estruturadas dos blocos de uma etapa. É nelas que a avaliação
+ * de uma sessão de playbook se apoia (lidas na hora da sessão, então valem também para
+ * roleplays já criados). `overwrite: false` pula blocos que já têm rubrica. Sem retry:
+ * é geração com IA e pode levar mais de um minuto.
+ */
+export async function generatePlaybookCallTypeRubrics(
+  env: PerfectingEnv,
+  token: string,
+  playbookId: number,
+  callTypeId: number,
+): Promise<unknown> {
+  return sendJson(
+    "POST",
+    `${rp(env)}/playbook_${playbookId}/call_types/${callTypeId}/feedback_rubrics/generate`,
+    token,
+    { overwrite: false },
+    0,
+  );
 }
 
 /**
@@ -968,9 +1414,120 @@ export async function createPlaybookCallBlock(
   return data.id;
 }
 
+export interface PlaybookCallBlock {
+  id: number;
+  name: string;
+  description: string | null;
+  objective: string | null;
+  what_to_do: string[];
+  order: number | null;
+}
+
+export async function listPlaybookCallBlocks(
+  env: PerfectingEnv,
+  token: string,
+  playbookId: number,
+  callTypeId: number,
+): Promise<PlaybookCallBlock[]> {
+  const data = await getJson<unknown>(
+    `${rp(env)}/playbook_${playbookId}/call_types/${callTypeId}/call_blocks`,
+    token,
+  );
+  const items = Array.isArray(data) ? data : [];
+  return items
+    .filter((b): b is Record<string, unknown> => Boolean(b) && typeof b === "object")
+    .filter((b) => typeof b.id === "number")
+    .map((b) => ({
+      id: b.id as number,
+      name: typeof b.name === "string" ? b.name : `Bloco ${b.id}`,
+      description: typeof b.description === "string" ? b.description : null,
+      objective: typeof b.objective === "string" ? b.objective : null,
+      what_to_do: Array.isArray(b.what_to_do)
+        ? b.what_to_do.filter((w): w is string => typeof w === "string")
+        : [],
+      order: typeof b.order === "number" ? b.order : null,
+    }))
+    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+}
+
+// Objeções do CATÁLOGO do playbook (por bloco). Diferente das context-wide: não vão
+// para o prompt do comprador — aparecem no painel do vendedor durante a call, como
+// sub-opções de cada item do bloco (ver AgentCallDataBuilder no backend). E valem para
+// toda implementação desse playbook, de qualquer oferta.
+
+export async function listPlaybookCallBlockObjections(
+  env: PerfectingEnv,
+  token: string,
+  playbookId: number,
+  callTypeId: number,
+  callBlockId: number,
+): Promise<Array<{ id: number; title: string }>> {
+  const data = await getJson<unknown>(
+    `${rp(env)}/playbook_${playbookId}/call_types/${callTypeId}/call_blocks/${callBlockId}/objections`,
+    token,
+  );
+  const items = Array.isArray(data) ? data : [];
+  return items
+    .filter((o): o is Record<string, unknown> => Boolean(o) && typeof o === "object")
+    .filter((o) => typeof o.id === "number")
+    .map((o) => ({ id: o.id as number, title: typeof o.title === "string" ? o.title : "" }));
+}
+
+/** Quantas rubricas estruturadas o bloco tem (as que a avaliação da sessão usa). */
+export async function countPlaybookCallBlockRubrics(
+  env: PerfectingEnv,
+  token: string,
+  playbookId: number,
+  callTypeId: number,
+  callBlockId: number,
+): Promise<number> {
+  const data = await getJson<unknown>(
+    `${rp(env)}/playbook_${playbookId}/call_types/${callTypeId}/call_blocks/${callBlockId}/feedback_rubrics`,
+    token,
+  );
+  return Array.isArray(data) ? data.length : 0;
+}
+
+export interface PlaybookCallBlockObjectionInput {
+  objection_type_id: number;
+  title: string;
+  description?: string | null;
+  details?: string | null;
+  to_give_in_if?: string | null;
+}
+
+export async function createPlaybookCallBlockObjection(
+  env: PerfectingEnv,
+  token: string,
+  playbookId: number,
+  callTypeId: number,
+  callBlockId: number,
+  input: PlaybookCallBlockObjectionInput,
+): Promise<number | null> {
+  // Sem difficulty_level_id: o painel do vendedor lista por bloco sem filtrar nível, e
+  // uma cópia por nível apareceria triplicada ali.
+  const data = await postJson<{ id?: number }>(
+    `${rp(env)}/playbook_${playbookId}/call_types/${callTypeId}/call_blocks/${callBlockId}/objections`,
+    token,
+    input,
+  );
+  return typeof data.id === "number" ? data.id : null;
+}
+
 /**
  * Abre o stream SSE do Engine de Implementação por Playbook: cria UM case_setup
- * por PlaybookCallType do playbook, ancorado em context_id/persona_id.
+ * por PlaybookCallType do playbook, ancorado em context_id e, opcionalmente, numa
+ * persona.
+ *
+ * `personaId`:
+ *  - informado  → todo case_setup criado nasce travado nessa persona (comportamento
+ *    de sempre, usado quando o contexto tem 1 persona só).
+ *  - omitido/null → `cases_setup.persona_id` fica NULL em todos: etapa GENÉRICA,
+ *    aplicável a qualquer persona do context_id — o vendedor escolhe na hora da
+ *    call. É o caminho usado quando o contexto tem mais de uma persona (ver
+ *    openPersonaBatchStream); o Ciclo Unitário embutido faz fan-out de conteúdo
+ *    por etapa para CADA persona já existente no contexto, então elas precisam
+ *    ter sido criadas ANTES de abrir este stream.
  *
  * ⚠️ De propósito fora de postJson/fetchWithTimeout: o job leva minutos (o
  * timeout de 180s mataria o stream) e um retry recriaria a jornada inteira de

@@ -1,5 +1,6 @@
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { corsHeaders, json } from "../_shared/cors.ts";
+import { requireUser } from "../_shared/auth.ts";
 import { authenticateConnection } from "../_shared/destination.ts";
 import {
   listPlaybookCallTypes,
@@ -22,6 +23,8 @@ const db = createClient(
  */
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+  const denied = await requireUser(req);
+  if (denied) return denied;
 
   try {
     const body = await req.json().catch(() => ({}));

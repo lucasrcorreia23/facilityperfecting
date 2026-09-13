@@ -16,7 +16,6 @@ import { Card } from "@/app/components/ui/card";
 import { Button } from "@/app/components/ui/button";
 import { PageHeader } from "@/app/components/ui/page-header";
 import { LoadingView } from "@/app/components/ui/loading-view";
-import { BackButton } from "@/app/components/ui/back-button";
 import { invokeIngestUrl, listMethodologySources, updateMethodologySource } from "@/app/lib/db";
 import type { MethodologySource } from "@/app/lib/types";
 
@@ -136,10 +135,8 @@ export default function BaseMetodologiaPage() {
 
   return (
     <div className="flex flex-col gap-0">
-      <div className="mb-4">
-        <BackButton href="/trilhas" />
-      </div>
       <PageHeader
+        backHref="/trilhas"
         title="Base de metodologia"
         description="Conteúdo dos artigos de sales enablement usado como referência na geração dos planos de trilhas."
         action={

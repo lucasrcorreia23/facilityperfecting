@@ -15,7 +15,6 @@ import {
 import { PaperAirplaneIcon } from "@heroicons/react/24/outline";
 import { Button } from "@/app/components/ui/button";
 import { PageHeader } from "@/app/components/ui/page-header";
-import { BackButton } from "@/app/components/ui/back-button";
 import { LoadingView } from "@/app/components/ui/loading-view";
 import { ConfirmDialog, type ConfirmConfig } from "@/app/components/ui/confirm-dialog";
 import { SendStatusModal, type SendStatus } from "@/app/components/ui/send-status-modal";
@@ -175,8 +174,8 @@ export default function PlaybookDetailPage() {
 
   return (
     <div className="flex flex-col gap-0">
-      <BackButton href="/playbooks" />
       <PageHeader
+        backHref="/playbooks"
         title={playbook.name}
         description="Revise as etapas e subetapas antes de criar o playbook na conta do cliente."
         action={
@@ -211,8 +210,13 @@ export default function PlaybookDetailPage() {
         )}
 
         {callTypes.length === 0 && playbook.status !== "generating" ? (
-          <div className="rounded-sm border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center text-sm text-slate-600">
-            Nenhuma etapa ainda. Use “Retomar geração” acima ou adicione etapas manualmente.
+          <div className="flex flex-col items-center gap-4 rounded-sm border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center">
+            <p className="text-sm text-slate-600">
+              Nenhuma etapa ainda — a estruturação não chegou a rodar.
+            </p>
+            <Button variant="secondary" onPress={retryGeneration} isLoading={retrying}>
+              Retomar geração
+            </Button>
           </div>
         ) : (
           <PlaybookEditor

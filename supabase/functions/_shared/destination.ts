@@ -19,6 +19,7 @@ import {
   parsePerfectingEnv,
   type PerfectingEnv,
   PerfectingError,
+  truncateForApi,
 } from "./perfecting.ts";
 
 export interface DestinationConnection {
@@ -83,15 +84,37 @@ export async function resolveOfferContext(
   if (offerBridge?.perfecting_offer_id) {
     perfectingOfferId = offerBridge.perfecting_offer_id;
   } else {
-    const gen = await generateOffer(env, token, offer.offer_name, offer.general_description);
-    perfectingOfferId = await createOffer(
-      env,
-      token,
-      gen,
-      offer.offer_name,
-      offer.general_description,
-      offer.url ?? "",
-    );
+    // Material colado pode ter dezenas de milhares de caracteres — sem isso o
+    // /offer/generate da Perfecting quebra com 500 genérico (ver truncateForApi).
+    const description = truncateForApi(offer.general_description);
+    const gen = await generateOffer(env, token, offer.offer_name, description);
+    try {
+      perfectingOfferId = await createOffer(
+        env,
+        token,
+        gen,
+        offer.offer_name,
+        description,
+        offer.url ?? "",
+      );
+    } catch (e) {
+      // /offer/create responde 500 genérico (sem detalhe) quando já existe uma
+      // oferta com esse nome exato na org — conflito de unicidade mal tratado do
+      // lado da Perfecting. Não dá pra distinguir isso de outro erro pelo corpo
+      // da resposta, então tenta 1x com o nome desambiguado antes de desistir.
+      // `gen.offer_name` é sobrescrito explicitamente: o build do payload prioriza
+      // esse campo (quando presente) sobre o `offerName` passado como argumento.
+      if (!(e instanceof PerfectingError)) throw e;
+      const retryName = `${offer.offer_name} (${offer.id.slice(0, 6)})`;
+      perfectingOfferId = await createOffer(
+        env,
+        token,
+        { ...gen, offer_name: retryName },
+        retryName,
+        description,
+        offer.url ?? "",
+      );
+    }
     await db.from("offer_perfecting_ids").insert({
       offer_id: offer.id,
       connection_id: connId,
@@ -114,7 +137,12 @@ export async function resolveOfferContext(
   if (ctxBridge?.perfecting_context_id) {
     perfectingContextId = ctxBridge.perfecting_context_id;
   } else {
-    const gen = await generateContext(env, token, perfectingOfferId, context?.target_notes ?? "");
+    const gen = await generateContext(
+      env,
+      token,
+      perfectingOfferId,
+      truncateForApi(context?.target_notes ?? ""),
+    );
     perfectingContextId = await createContext(env, token, gen, perfectingOfferId);
     if (localContextId) {
       await db.from("context_perfecting_ids").insert({

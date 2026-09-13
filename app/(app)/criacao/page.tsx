@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
 import {
+  Checkbox,
   Tabs,
   Tab,
   Textarea,
@@ -45,7 +46,9 @@ import type {
   CallContextType,
   Connection,
   GenerationMode,
+  GuardrailSeed,
   ImportGap,
+  ObjectionSeed,
   Playbook,
   PlaybookCallType,
 } from "@/app/lib/types";
@@ -62,7 +65,42 @@ const DIFFICULTIES = [
   { key: "hard", label: "Difícil" },
 ];
 
+/** Quantidade de personas no modo playbook. 1 = comportamento antigo (persona única). */
+const PERSONA_COUNTS = Array.from({ length: 10 }, (_, i) => String(i + 1));
+
 const PROMPT_STORAGE_KEY = "import_prompt";
+const PROMPT_VERSION_KEY = "import_prompt_version";
+/** Avisa a própria aba: o evento "storage" do navegador só dispara nas OUTRAS abas. */
+const PROMPT_CHANGE_EVENT = "import-prompt-change";
+
+function subscribeSavedPrompt(onChange: () => void) {
+  window.addEventListener("storage", onChange);
+  window.addEventListener(PROMPT_CHANGE_EVENT, onChange);
+  return () => {
+    window.removeEventListener("storage", onChange);
+    window.removeEventListener(PROMPT_CHANGE_EVENT, onChange);
+  };
+}
+
+/** Snapshot em string (o useSyncExternalStore compara por ===): [prompt, versão]. */
+function readSavedPrompt(): string {
+  try {
+    return JSON.stringify([
+      localStorage.getItem(PROMPT_STORAGE_KEY) ?? "",
+      localStorage.getItem(PROMPT_VERSION_KEY) ?? "",
+    ]);
+  } catch {
+    return '["",""]'; // localStorage indisponível — usa o prompt padrão
+  }
+}
+/**
+ * Suba a cada mudança no DEFAULT_IMPORT_PROMPT. Um prompt personalizado fica no
+ * localStorage e continua valendo depois do deploy — sem isto, quem personalizou
+ * seguiria com um prompt velho sem saber que o padrão evoluiu.
+ * v2: realinhado ao modo playbook, às 13 dimensões do contexto e ao B2B/B2C.
+ * v3: extrai objeções (com "Ceda se") e guardrails do material.
+ */
+const PROMPT_VERSION = 3;
 
 /** Prompt padrão de processamento (instruções de extração). O app adiciona, depois,
  *  a lista de call_contexts disponíveis e o formato JSON automaticamente. */
@@ -70,24 +108,59 @@ const DEFAULT_IMPORT_PROMPT = `Você é um especialista em criação de Roleplay
 
 Sua tarefa: a partir de QUALQUER material fornecido (sites, PDFs, propostas, transcrições, playbooks, anotações), EXTRAIR e ORGANIZAR as informações para preencher um roleplay na Perfecting. Você NÃO conversa e NÃO pergunta — você sempre devolve o resultado estruturado.
 
+COMO O RESULTADO É USADO. O roleplay pode ser gerado de dois jeitos, e o usuário só escolhe DEPOIS de você processar — então preencha todos os campos, mas saiba onde cada um pesa:
+- Pelo PLAYBOOK da conta: cada etapa do playbook vira um roleplay. Tipo de chamada, comportamento e rubricas vêm das etapas, então "call_context_slug", "dificuldade", "cenario_instrucoes", "objetivo" e "habilidades" são IGNORADOS. Só "oferta_nome", "perfil" e "personas_variacao" chegam à plataforma.
+- Por METODOLOGIA: um roleplay só, e aí todos os campos são usados.
+"perfil", "personas_variacao", "objecoes" e "guardrails" alimentam o roleplay nos DOIS modos — são eles que carregam o material do cliente até a plataforma. Priorize-os.
+
 ETAPA 1 — EXTRAÇÃO. Extraia tudo que conseguir sobre:
 - Oferta: nome, produto/serviço, proposta de valor, problema principal resolvido, diferenciais competitivos, ticket médio, ciclo de vendas, concorrentes, casos de uso, ROI, público-alvo.
-- Buyer Persona: cargo, área, responsabilidades, KPIs, metas, medos, motivações, critérios de decisão, influenciadores, nível de autoridade, estilo de comunicação, perfil comportamental (DISC quando possível).
+- Quem compra: cargos/perfis, responsabilidades, KPIs, metas, medos, motivações, critérios de decisão, influenciadores, nível de autoridade, estilos de comunicação.
 - Cenário: tipo de conversa (cold call, discovery, demo, proposta, negociação, renovação, expansão), como o lead chegou, nível de consciência, momento da jornada, urgência, situação atual.
 - Objeções: preço, timing, prioridade, concorrente, autoridade, implementação, integração, segurança, ROI, troca de fornecedor, falta de necessidade. Use frases reais quando houver.
 
-ETAPA 2 — ORGANIZAÇÃO. Separe o conteúdo em blocos distintos, prontos para alimentar a Perfecting:
-- perfil (Grupo 2 – Buyer Persona): cargo, empresa, estrutura, prioridades, consciência do problema/soluções, comportamento (DISC) e as objeções esperadas — com o MÁXIMO de detalhe e frases reais do material. Usado como instrução de contexto para gerar a persona.
-- cenário (Grupo 3): tipo de chamada, dificuldade e as instruções de COMPORTAMENTO da persona durante a conversa — como reage, testes de fogo/objeções que aplica, critério de fechamento. Se o material já trouxer instruções ou prompts de comportamento prontos, PRESERVE-OS na íntegra (transcreva, não resuma).
-- rubricas (Grupo 4): objetivo de treino e habilidades de venda a treinar.
+ETAPA 2 — ORGANIZAÇÃO. Separe o conteúdo nos blocos abaixo.
 
-ETAPA 3 — LACUNAS. Liste tudo que ainda falta para um roleplay de alta qualidade, classificando cada item como "critico", "importante" ou "opcional".
+perfil (markdown) — O CAMPO MAIS IMPORTANTE. Não é o retrato de uma pessoa: é a instrução com que a Perfecting monta o CONTEXTO, e é do contexto que saem uma ou várias personas. Use subtítulos e cubra tudo que o material permitir:
+- Público-alvo: quem compra (empresa/segmento se B2B; perfil de pessoa se B2C)
+- Gatilhos de urgência: o que faz agir agora, e não daqui a seis meses
+- Prioridades e objetivos do período
+- Dores mensuráveis: com números, prazos ou custos quando houver
+- Estado futuro desejado: como é o "depois" que eles querem
+- O que de fato motiva a compra (receita, risco, segurança, reconhecimento…)
+- Processo de decisão: quem decide, quem influencia, quantas etapas, prazo típico
+- Aversão a risco: o quanto temem mudar, o que preferem manter como está
+- Objeções e receios — com frases reais quando houver
+- Consciência do problema: sabem que têm? subestimam? que sintomas percebem?
+- Consciência das soluções: já pesquisaram? o que acham do que existe no mercado?
+- O que usam hoje para resolver isso e por que não basta
+Se o material indicar cargos ou áreas típicas, cite-os como EXEMPLOS do espectro — não feche numa pessoa só, porque as personas são geradas a partir deste texto.
+
+personas_variacao (texto curto) — como as personas devem variar entre si quando o usuário pedir mais de uma: cargos e áreas diferentes, senioridade, estilos de comunicação, graus de consciência e de resistência. Só o que o material sustentar; sem base, devolva "".
+
+objecoes (lista) — USADO NOS DOIS MODOS. As objeções que o comprador levanta. São criadas no contexto da Perfecting e herdadas por todos os roleplays. Para cada uma:
+- "titulo": nome curto (ex.: "Orçamento comprometido")
+- "tipo": um dos slugs disponíveis
+- "fala_exemplo": como o comprador diz isso, na primeira pessoa — TRANSCREVA a frase real do material quando houver, em vez de reescrever
+- "detalhes": o que está por trás, quando aparece na conversa, o que ele teme
+- "ceder_se": a condição que faz o comprador ceder. SEMPRE preencha: sem ela o comprador repete a objeção até o fim e o treino não tem desfecho possível
+Extraia todas as que o material trouxer, sem inventar. Lista vazia se não houver nenhuma.
+
+guardrails (lista) — USADO NOS DOIS MODOS. Regras de comportamento do comprador simulado, quando o material as definir: o que ele nunca deve fazer, como reagir a promessa indevida ou a termo proibido ao vendedor, o que exigir antes de encerrar. Cada item tem "nome" (curto) e "instrucao" (a regra em segunda pessoa, dirigida ao comprador — ex.: "Se o vendedor prometer que a verba será aprovada, reaja com desconfiança e endureça pelo resto da conversa"). Lista vazia se o material não definir regras.
+
+cenario_instrucoes (markdown) — IGNORADO no modo playbook. Comportamento da persona durante a conversa: como reage, testes de fogo/objeções que aplica, critério de fechamento. Se o material já trouxer instruções ou prompts de comportamento prontos, PRESERVE-OS na íntegra (transcreva, não resuma). Sem base no material, seja breve em vez de inventar.
+
+objetivo e habilidades — IGNORADOS no modo playbook (as rubricas vêm das etapas). Objetivo de treino do roleplay e habilidades de venda a treinar.
+
+call_context_slug e dificuldade — IGNORADOS no modo playbook. Escolha o slug mais adequado entre os disponíveis e a dificuldade (easy/medium/hard) coerente com o cenário.
+
+ETAPA 3 — LACUNAS. Liste o que ainda falta para um roleplay de alta qualidade, classificando cada item como "critico", "importante" ou "opcional". Use o campo "grupo" para separar o que vale sempre ("Oferta", "Contexto", "Personas") do que só importa fora do playbook ("Cenário (sem playbook)", "Rubricas (sem playbook)") — assim quem usa playbook não persegue lacuna que as etapas já resolvem.
 
 REGRAS:
 - SEJA COMPLETO E FIEL ao material. Preserve o detalhe que o cliente preparou; transcreva instruções, exemplos e prompts existentes em vez de resumir. NÃO comprima conteúdo intencional — é melhor um bloco longo e fiel do que um resumo curto.
 - Priorize dados reais extraídos do material. Quando precisar inferir, marque o trecho com "(Hipótese Assumida)".
-- Escolha o call_context mais adequado entre os disponíveis e a dificuldade (easy/medium/hard) coerente com o cenário.
-- Linguagem comercial B2B. Responda SEMPRE no formato estruturado pedido (JSON).`;
+- B2B ou B2C: infira da oferta e NUNCA assuma B2B por padrão. Um curso vendido a interessados individuais tem como público-alvo a PESSOA FÍSICA que quer se qualificar, não a instituição que oferece o curso. Linguagem e exemplos seguem o que a oferta realmente vende.
+- Responda SEMPRE no formato estruturado pedido (JSON).`;
 
 export default function CriacaoPage() {
   const router = useRouter();
@@ -103,6 +176,10 @@ export default function CriacaoPage() {
   const [playbookId, setPlaybookId] = useState<string>("");
   const [playbookCallTypes, setPlaybookCallTypes] = useState<PlaybookCallType[]>([]);
   const [loadingPlaybooks, setLoadingPlaybooks] = useState(false);
+  const [personaCount, setPersonaCount] = useState<string>("1");
+  const [personaInstructions, setPersonaInstructions] = useState("");
+  /** PlaybookCallType.id das etapas travadas na persona principal. */
+  const [fixedCallTypeIds, setFixedCallTypeIds] = useState<Set<number>>(new Set());
   const [difficulty, setDifficulty] = useState<string>("medium");
   const [perfil, setPerfil] = useState("");
   const [cenarioInstrucoes, setCenarioInstrucoes] = useState("");
@@ -112,13 +189,22 @@ export default function CriacaoPage() {
   const [dragging, setDragging] = useState(false);
   const [processing, setProcessing] = useState(false);
   const [gaps, setGaps] = useState<ImportGap[]>([]);
+  /** Objeções/guardrails extraídos do material — vão para o contexto na Perfecting. */
+  const [objections, setObjections] = useState<ObjectionSeed[]>([]);
+  const [guardrails, setGuardrails] = useState<GuardrailSeed[]>([]);
   const [aiProcessed, setAiProcessed] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [fileName, setFileName] = useState<string | null>(null);
   const [fileNames, setFileNames] = useState<string[]>([]);
   const [filePath, setFilePath] = useState<string | null>(null);
   const [extractMsg, setExtractMsg] = useState("Extraindo texto…");
-  const [customPrompt, setCustomPrompt] = useState<string>("");
+  const savedPromptSnapshot = useSyncExternalStore(
+    subscribeSavedPrompt,
+    readSavedPrompt,
+    () => '["",""]',
+  );
+  const [customPrompt, savedPromptVersion] = JSON.parse(savedPromptSnapshot) as [string, string];
+  /** Prompt salvo veio de uma versão anterior do padrão — vale avisar. */
+  const promptOutdated = Boolean(customPrompt) && Number(savedPromptVersion || "1") < PROMPT_VERSION;
   const [promptModalOpen, setPromptModalOpen] = useState(false);
   const [promptDraft, setPromptDraft] = useState("");
   const [confirm, setConfirm] = useState<ConfirmConfig | null>(null);
@@ -142,16 +228,29 @@ export default function CriacaoPage() {
     setPlaybookId("");
     setPlaybookCallTypes([]);
     setGenerationMode("methodology");
+    setPersonaCount("1");
+    setFixedCallTypeIds(new Set());
+    // personaInstructions NÃO é resetado: ele descreve a variação de personas extraída
+    // do MATERIAL (a IA preenche em handleProcess), não algo preso à conta/playbook.
     setLoadingPlaybooks(Boolean(id));
   }
 
+  /** Edita um campo de uma objeção extraída, preservando as demais. */
+  function updateObjection(index: number, patch: Partial<ObjectionSeed>) {
+    setObjections((prev) => prev.map((o, i) => (i === index ? { ...o, ...patch } : o)));
+  }
+
+  /** Marca/desmarca uma etapa como "persona fixa". */
+  function toggleFixedCallType(callTypeId: number) {
+    setFixedCallTypeIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(callTypeId)) next.delete(callTypeId);
+      else next.add(callTypeId);
+      return next;
+    });
+  }
+
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem(PROMPT_STORAGE_KEY);
-      if (saved) setCustomPrompt(saved);
-    } catch {
-      // localStorage indisponível — usa o prompt padrão
-    }
     listConnections().then(setConnections).catch(() => {});
     listCallContexts()
       .then(setCallContexts)
@@ -248,7 +347,6 @@ export default function CriacaoPage() {
       }
       setText((prev) => (prev.trim() ? `${prev.trim()}\n\n${combined}` : combined));
       setFileNames((prev) => [...prev, ...names]);
-      setFileName(names.length === 1 ? names[0] : `${names.length} arquivos`);
       setFilePath(supported.length === 1 ? lastPath : null);
       addToast({
         title: supported.length > 1 ? `${supported.length} arquivos extraídos` : "Texto extraído",
@@ -282,7 +380,6 @@ export default function CriacaoPage() {
 
   function clearFiles() {
     setFileNames([]);
-    setFileName(null);
     setFilePath(null);
     if (fileInput.current) fileInput.current.value = "";
   }
@@ -316,11 +413,13 @@ export default function CriacaoPage() {
     const keep = mode === "merge";
     setProcessing(true);
     try {
-      const r = await processImport(text.trim(), customPrompt || null);
+      const r = await processImport(text.trim(), customPrompt || null, generationMode);
       const fill = (cur: string, next: string) => (keep && cur.trim() ? cur : next || cur);
       // O material cru em "Dados para o Roleplay" é preservado (vira a descrição da
       // oferta no envio). A IA preenche só os blocos derivados + lacunas.
       setPerfil((c) => fill(c, r.perfil || ""));
+      // Sugestão de variação das personas — só tem efeito no modo playbook com 2+.
+      setPersonaInstructions((c) => fill(c, r.personas_variacao || ""));
       setCenarioInstrucoes((c) => fill(c, r.cenario_instrucoes || ""));
       setObjetivo((c) => fill(c, r.objetivo || ""));
       setHabilidades((c) => fill(c, r.habilidades || ""));
@@ -328,6 +427,9 @@ export default function CriacaoPage() {
       setCallContextSlug((c) => (keep && c ? c : r.call_context_slug || c));
       if (!keep && r.dificuldade) setDifficulty(r.dificuldade);
       setGaps(r.lacunas ?? []);
+      // Só substitui em "reset": em "merge" o que já foi revisado à mão permanece.
+      if (!keep || objections.length === 0) setObjections(r.objecoes ?? []);
+      if (!keep || guardrails.length === 0) setGuardrails(r.guardrails ?? []);
       const wasProcessed = aiProcessed;
       setAiProcessed(true);
       const criticos = (r.lacunas ?? []).filter((g) => g.severidade === "critico").length;
@@ -361,12 +463,23 @@ export default function CriacaoPage() {
   function savePrompt() {
     const v = promptDraft.trim();
     const isCustom = v.length > 0 && v !== DEFAULT_IMPORT_PROMPT;
-    setCustomPrompt(isCustom ? v : "");
     try {
-      if (isCustom) localStorage.setItem(PROMPT_STORAGE_KEY, v);
-      else localStorage.removeItem(PROMPT_STORAGE_KEY);
+      if (isCustom) {
+        localStorage.setItem(PROMPT_STORAGE_KEY, v);
+        // Salvou agora: fica na versão atual do padrão (tira o aviso de desatualizado).
+        localStorage.setItem(PROMPT_VERSION_KEY, String(PROMPT_VERSION));
+      } else {
+        localStorage.removeItem(PROMPT_STORAGE_KEY);
+        localStorage.removeItem(PROMPT_VERSION_KEY);
+      }
+      window.dispatchEvent(new Event(PROMPT_CHANGE_EVENT));
     } catch {
-      // ignore
+      addToast({
+        title: "Não foi possível salvar o prompt",
+        description: "O armazenamento do navegador está indisponível.",
+        color: "danger",
+      });
+      return;
     }
     setPromptModalOpen(false);
     addToast({
@@ -420,6 +533,15 @@ export default function CriacaoPage() {
         generation_mode: generationMode,
         playbook_id: isPlaybookMode ? Number(playbookId) : null,
         playbook_name: isPlaybookMode ? (selectedPlaybook?.name ?? null) : null,
+        persona_count: isPlaybookMode ? Number(personaCount) : null,
+        persona_instructions: isPlaybookMode ? personaInstructions.trim() || null : null,
+        // Com 1 persona não há o que travar — zera para o rascunho não guardar
+        // intenção incoerente se o usuário marcar etapas e depois voltar para 1.
+        fixed_persona_call_type_ids:
+          isPlaybookMode && Number(personaCount) > 1 ? Array.from(fixedCallTypeIds) : null,
+        // Context-wide: valem nos dois modos, por isso sem condicional de modo.
+        objections: objections.length > 0 ? objections : null,
+        guardrails: guardrails.length > 0 ? guardrails : null,
       },
     };
   }
@@ -501,14 +623,43 @@ export default function CriacaoPage() {
     // Playbook cria vários roleplays de uma vez na conta do cliente — confirma antes.
     if (isPlaybookMode) {
       const total = playbookCallTypes.length;
+      const personas = Number(personaCount) || 1;
       setConfirm({
-        title: total ? `Criar ${total} roleplay(s) nesta conta?` : "Iniciar a implementação?",
+        title: total
+          ? `Criar ${total} roleplay(s)${personas > 1 ? ` e ${personas} personas` : ""} nesta conta?`
+          : "Iniciar a implementação?",
         message: (
           <>
             A Perfecting vai criar <b>um roleplay por etapa</b> do playbook{" "}
             <b>{selectedPlaybook?.name ?? ""}</b>
-            {total ? ` (${total} no total)` : ""}, usando a oferta, o contexto e a persona
-            extraídos do material. Leva alguns minutos — dá para acompanhar na Biblioteca.
+            {total ? ` (${total} no total)` : ""}, usando a oferta e o contexto extraídos do
+            material.{" "}
+            {personas > 1 ? (
+              <>
+                Serão criadas <b>{personas} personas</b> nesse contexto — as etapas aceitam
+                qualquer uma delas, e quem escolhe é o vendedor, na hora da call.
+                {fixedCallTypeIds.size > 0 && (
+                  <>
+                    {" "}
+                    <b>
+                      {fixedCallTypeIds.size}{" "}
+                      {fixedCallTypeIds.size === 1 ? "etapa" : "etapas"}
+                    </b>{" "}
+                    {fixedCallTypeIds.size === 1 ? "fica" : "ficam"} travada
+                    {fixedCallTypeIds.size === 1 ? "" : "s"} na persona principal.
+                  </>
+                )}
+              </>
+            ) : (
+              <>A persona também é extraída do material.</>
+            )}{" "}
+            {objections.length > 0 && (
+              <>
+                As <b>{objections.length} objeções</b> revisadas acima entram no contexto e valem
+                para todas as etapas.{" "}
+              </>
+            )}
+            Leva alguns minutos — dá para acompanhar na Biblioteca.
           </>
         ),
         confirmLabel: "Criar roleplays",
@@ -633,8 +784,9 @@ export default function CriacaoPage() {
         <div className="flex flex-col items-end gap-2 -mt-5 sm:flex-row sm:items-center sm:justify-end">
           <p className="flex items-center gap-1.5 text-xs text-slate-500 sm:mr-auto">
             <span>
-              A IA estrutura o material nos 4 grupos da Perfecting e sugere oferta, tipo de chamada e
-              dificuldade.
+              {isPlaybookMode
+                ? "A IA estrutura o material: oferta, perfil do público (base das personas), objeções e regras. Cenário e rubricas são pulados — vêm das etapas do playbook."
+                : "A IA estrutura o material: oferta, perfil do público (base das personas), objeções, cenário e rubricas."}
             </span>
             <button
               type="button"
@@ -646,8 +798,17 @@ export default function CriacaoPage() {
               <PencilSquareIcon className="w-4 h-4" />
             </button>
             {customPrompt && (
-              <span className="shrink-0 rounded-sm bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-700">
-                prompt personalizado
+              <span
+                className={`shrink-0 rounded-sm px-1.5 py-0.5 text-[10px] font-medium ${
+                  promptOutdated ? "bg-amber-50 text-amber-700" : "bg-blue-50 text-blue-700"
+                }`}
+                title={
+                  promptOutdated
+                    ? "O prompt padrão foi atualizado. O seu continua valendo — abra o editor e use 'Restaurar padrão' para adotar a versão nova."
+                    : undefined
+                }
+              >
+                {promptOutdated ? "prompt personalizado (padrão atualizado)" : "prompt personalizado"}
               </span>
             )}
           </p>
@@ -736,6 +897,105 @@ export default function CriacaoPage() {
           </div>
         )}
 
+        {(objections.length > 0 || guardrails.length > 0) && (
+          <div className="flex flex-col gap-3 rounded-sm border border-slate-200 p-4">
+            <div>
+              <p className="text-sm font-medium text-slate-700">
+                Objeções e regras do comprador
+              </p>
+              <p className="text-xs text-slate-500">
+                Vão para o contexto na Perfecting e valem para <b>todos</b> os roleplays deste
+                envio — inclusive todas as etapas do playbook. Revise antes de enviar: é conteúdo
+                que vai direto para a conta do cliente.
+              </p>
+            </div>
+
+            {objections.map((o, i) => (
+              <div key={i} className="flex flex-col gap-2 rounded-sm bg-slate-50 p-3">
+                <div className="flex items-center gap-2">
+                  <Input
+                    aria-label={`Título da objeção ${i + 1}`}
+                    value={o.titulo}
+                    onValueChange={(v) => updateObjection(i, { titulo: v })}
+                    radius="sm"
+                    variant="bordered"
+                    size="sm"
+                    classNames={{ inputWrapper: "bg-white" }}
+                  />
+                  <span className="shrink-0 rounded-sm bg-slate-200 px-1.5 py-0.5 text-[10px] font-medium text-slate-600">
+                    {o.tipo}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setObjections((prev) => prev.filter((_, j) => j !== i))}
+                    title="Remover objeção"
+                    aria-label="Remover objeção"
+                    className="shrink-0 rounded-sm p-1 text-slate-400 hover:bg-slate-200 hover:text-slate-600"
+                  >
+                    <XMarkIcon className="w-4 h-4" />
+                  </button>
+                </div>
+                <Textarea
+                  label="Como o comprador diz"
+                  labelPlacement="outside"
+                  value={o.fala_exemplo}
+                  onValueChange={(v) => updateObjection(i, { fala_exemplo: v })}
+                  radius="sm"
+                  variant="bordered"
+                  minRows={2}
+                  classNames={{ inputWrapper: "bg-white" }}
+                />
+                <Textarea
+                  label="Ceda se"
+                  labelPlacement="outside"
+                  value={o.ceder_se}
+                  onValueChange={(v) => updateObjection(i, { ceder_se: v })}
+                  radius="sm"
+                  variant="bordered"
+                  minRows={2}
+                  description="Sem isto o comprador repete a objeção até o fim e o treino não fecha."
+                  classNames={{ inputWrapper: "bg-white" }}
+                />
+              </div>
+            ))}
+
+            {guardrails.length > 0 && (
+              <div className="flex flex-col gap-2">
+                <p className="text-sm font-medium text-slate-700">
+                  Regras de comportamento ({guardrails.length})
+                </p>
+                {guardrails.map((g, i) => (
+                  <div key={i} className="flex items-start gap-2">
+                    <Textarea
+                      aria-label={`Regra ${i + 1}: ${g.nome}`}
+                      label={g.nome}
+                      labelPlacement="outside"
+                      value={g.instrucao}
+                      onValueChange={(v) =>
+                        setGuardrails((prev) =>
+                          prev.map((x, j) => (j === i ? { ...x, instrucao: v } : x)),
+                        )
+                      }
+                      radius="sm"
+                      variant="bordered"
+                      minRows={2}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setGuardrails((prev) => prev.filter((_, j) => j !== i))}
+                      title="Remover regra"
+                      aria-label="Remover regra"
+                      className="mt-6 shrink-0 rounded-sm p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+                    >
+                      <XMarkIcon className="w-4 h-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         <Input
           label="Nome da oferta"
           labelPlacement="outside"
@@ -764,7 +1024,7 @@ export default function CriacaoPage() {
         {/* Antes do modo: playbook é por organização, então depende do destino. */}
         <Select
           label={isPlaybookMode ? "Conta de destino" : "Conta de destino (opcional)"}
-          labelPlacement="outside"
+          labelPlacement="outside-top"
           placeholder="Definir depois, no envio"
           selectedKeys={connectionId ? [connectionId] : []}
           onSelectionChange={(keys) => handleConnectionChange(String(Array.from(keys)[0] ?? ""))}
@@ -811,6 +1071,7 @@ export default function CriacaoPage() {
               selectedKeys={playbookId ? [playbookId] : []}
               onSelectionChange={(keys) => {
                 setPlaybookCallTypes([]);
+                setFixedCallTypeIds(new Set()); // etapas são outras: marcações não valem mais
                 setPlaybookId(String(Array.from(keys)[0] ?? ""));
               }}
               radius="sm"
@@ -833,17 +1094,69 @@ export default function CriacaoPage() {
               {playbookCallTypes.length > 0 && (
                 <ol className="flex flex-col gap-1 text-sm text-slate-600">
                   {playbookCallTypes.map((ct, i) => (
-                    <li key={ct.id}>
-                      <span className="text-slate-400">{i + 1}.</span> {ct.name}
+                    <li key={ct.id} className="flex items-center justify-between gap-3">
+                      <span>
+                        <span className="text-slate-400">{i + 1}.</span> {ct.name}
+                      </span>
+                      {Number(personaCount) > 1 && (
+                        <Checkbox
+                          size="sm"
+                          isSelected={fixedCallTypeIds.has(ct.id)}
+                          onValueChange={() => toggleFixedCallType(ct.id)}
+                          classNames={{ label: "text-xs text-slate-500" }}
+                        >
+                          persona fixa
+                        </Checkbox>
+                      )}
                     </li>
                   ))}
                 </ol>
               )}
               <p className="text-xs text-slate-500">
                 O tipo de chamada, as rubricas e o comportamento vêm de cada etapa do playbook. O
-                material acima é usado para a oferta, o contexto e a persona.
+                material acima é usado para a oferta e o contexto.
               </p>
+              {Number(personaCount) > 1 && (
+                <p className="text-xs text-slate-500">
+                  Etapas sem marcação aceitam <b>qualquer uma das {personaCount} personas</b> — a
+                  escolha acontece na hora da call. As marcadas ficam travadas na persona principal
+                  (a primeira do contexto). Qual persona fica em cada etapa é ajustável depois, na
+                  Perfecting.
+                </p>
+              )}
             </div>
+            <Select
+              label="Quantas personas?"
+              labelPlacement="outside-top"
+              selectedKeys={[personaCount]}
+              onSelectionChange={(keys) => setPersonaCount(String(Array.from(keys)[0] ?? "1"))}
+              radius="sm"
+              variant="bordered"
+              classNames={managerSelectClassNames}
+              description={
+                Number(personaCount) > 1
+                  ? "O vendedor escolhe qual persona enfrentar na hora da call."
+                  : "Uma persona só, travada em todas as etapas — comportamento de sempre."
+              }
+            >
+              {PERSONA_COUNTS.map((n) => (
+                <SelectItem key={n} textValue={n}>
+                  {n}
+                </SelectItem>
+              ))}
+            </Select>
+            {Number(personaCount) > 1 && (
+              <Textarea
+                label="Instruções para as personas (opcional)"
+                labelPlacement="outside"
+                placeholder="Ex.: metade das personas mais cética, metade mais colaborativa"
+                value={personaInstructions}
+                onValueChange={setPersonaInstructions}
+                radius="sm"
+                variant="bordered"
+                minRows={2}
+              />
+            )}
           </div>
         ) : (
           <>
@@ -981,6 +1294,14 @@ export default function CriacaoPage() {
               automaticamente a lista de tipos de chamada disponíveis e o formato de saída — você não
               precisa incluí-los aqui.
             </p>
+            {promptOutdated && (
+              <p className="rounded-sm bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                O prompt padrão foi atualizado desde que você personalizou o seu — agora ele cobre o
+                modo playbook, as dimensões que a Perfecting espera do contexto e a variação de
+                personas. O seu texto continua valendo; para adotar o novo, use{" "}
+                <b>Restaurar padrão</b> abaixo.
+              </p>
+            )}
             <Textarea
               value={promptDraft}
               onValueChange={setPromptDraft}

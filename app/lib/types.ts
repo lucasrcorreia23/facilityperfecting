@@ -60,6 +60,25 @@ export interface ScenarioConfig {
   generation_mode?: GenerationMode | null;
   playbook_id?: number | null;
   playbook_name?: string | null;
+  // Modo playbook, múltiplas personas: 1..10 (default 1 = comportamento antigo,
+  // uma persona travada em todas as etapas). > 1 gera um lote no contexto ANTES
+  // da implementação e as etapas nascem genéricas (persona_id NULL) — o vendedor
+  // escolhe qual enfrentar na hora da call.
+  persona_count?: number | null;
+  /** Grounding livre repassado ao lote (additional_instructions da API). */
+  persona_instructions?: string | null;
+  /**
+   * PlaybookCallType.id das etapas que devem ficar travadas numa persona só (a
+   * primeira do contexto). As não listadas ficam genéricas — aceitam qualquer
+   * persona. Só tem efeito com persona_count > 1.
+   */
+  fixed_persona_call_type_ids?: number[] | null;
+  /**
+   * Objeções e guardrails do material, criados no contexto da Perfecting no envio.
+   * Valem nos DOIS modos: um case_setup herda as objeções do seu context_id.
+   */
+  objections?: ObjectionSeed[] | null;
+  guardrails?: GuardrailSeed[] | null;
   // Payload de case_setup escrito à mão. Em produção o export manda VERBATIM.
   // Em HML, se faltar company_profile/persona_profile/persona_voice_model_id,
   // completa via /generate e sobrepõe só training_* / instruções.
@@ -109,10 +128,74 @@ export interface PlaybookRun {
   started_at?: string;
   finished_at?: string | null;
   context_id?: number;
+  /** @deprecated drafts anteriores ao modo multi-persona — leia via runPersonaIds(). */
   persona_id?: number | null;
+  /** Todas as personas do contexto ao final do estágio de personas (1 ou mais). */
+  persona_ids?: number[];
+  persona_names?: string[];
+  /** Persona usada nas etapas marcadas como "persona fixa" (a 1ª do contexto). */
+  primary_persona_id?: number | null;
+  /** Quantas personas a Criação pediu (eco de scenario.persona_count). */
+  personas_requested?: number | null;
+  /** job_id do lote de personas (batch_started), telemetria. */
+  persona_job_id?: string | number | null;
+  /** Progresso do lote de personas — item i/N (empresa ou persona), não etapa. */
+  item_index?: number | null;
+  item_total?: number | null;
   before_case_setup_ids?: number[];
   case_setup_ids?: number[];
+  /** Etapas que devem travar na persona principal (eco do scenario). */
+  fixed_call_type_ids?: number[];
+  /** playbook_call_type_id → case_setup_id criado. Sobrevive à queda do processo. */
+  call_type_case_setups?: Record<string, number>;
+  /** case_setups já travados — permite o poll retomar sem repetir. */
+  locked_case_setup_ids?: number[];
+  /** Avisos não-fatais (ex.: persona fixa não aplicada numa etapa). */
+  warnings?: string[];
+  /** Quantas objeções/guardrails do material foram criados no contexto. */
+  context_content?: {
+    objections_created: number;
+    objections_skipped: number;
+    guardrails_created: number;
+    guardrails_skipped: number;
+  };
+  /** Lote avulso de personas num rascunho já exportado (ação "Adicionar personas"). */
+  persona_topup?: PersonaTopUp;
   results?: unknown[];
+}
+
+/**
+ * Quais personas um roleplay aceita, lido de `GET /persona/catalog` (o mesmo que
+ * a pré-chamada da Perfecting usa para montar o seletor de persona).
+ */
+export interface CaseSetupPersonas {
+  case_setup_id: number;
+  training_name: string | null;
+  /** true = travado nesta persona só; false = genérico (aceita todas do contexto). */
+  has_specific_persona: boolean;
+  personas: Array<{ id: number; name: string | null }>;
+}
+
+/** Estado do lote avulso de personas disparado depois do envio. */
+export interface PersonaTopUp {
+  requested?: number;
+  stage?: string;
+  item_index?: number | null;
+  item_total?: number | null;
+  started_at?: string;
+  finished_at?: string | null;
+  error?: string | null;
+}
+
+/**
+ * Ids de persona de um run, tolerante a drafts anteriores ao modo multi-persona
+ * (jsonb livre, sem migration possível: `persona_id` singular convive com
+ * `persona_ids` plural indefinidamente).
+ */
+export function runPersonaIds(run: PlaybookRun | null | undefined): number[] {
+  if (!run) return [];
+  if (run.persona_ids && run.persona_ids.length > 0) return run.persona_ids;
+  return typeof run.persona_id === "number" ? [run.persona_id] : [];
 }
 
 // ── Playbooks autorados aqui (tabelas locais), antes de virarem playbook na conta ──
@@ -191,15 +274,46 @@ export interface ImportGap {
   grupo: string;
 }
 
+/**
+ * Objeção extraída do material — criada no CONTEXTO da Perfecting e herdada por todos
+ * os roleplays daquele contexto. `ceder_se` é o que dá desfecho ao treino: sem ela o
+ * comprador simulado repete a objeção indefinidamente.
+ */
+export interface ObjectionSeed {
+  titulo: string;
+  /** slug de `/objection_types` (preço, timing, autoridade…). */
+  tipo: string;
+  fala_exemplo: string;
+  detalhes: string;
+  ceder_se: string;
+}
+
+/** Regra de comportamento do comprador simulado, criada no contexto. */
+export interface GuardrailSeed {
+  nome: string;
+  instrucao: string;
+}
+
 export interface ProcessImportResult {
   oferta_nome: string;
+  /** Instrução do CONTEXTO (não de uma persona): é dele que a Perfecting gera as personas. */
   perfil: string;
-  call_context_slug: string;
-  dificuldade: string;
-  cenario_instrucoes: string;
-  objetivo: string;
-  habilidades: string;
+  /** Como as personas devem variar entre si — vira `scenario.persona_instructions`. */
+  personas_variacao?: string;
+  /** Objeções e guardrails do material — usados nos dois modos (context-wide). */
+  objecoes?: ObjectionSeed[];
+  guardrails?: GuardrailSeed[];
   lacunas: ImportGap[];
+  /**
+   * Ignorados no modo playbook (vêm das etapas) — e, por isso, nem são pedidos à
+   * IA quando o processamento já sabe que o destino é playbook. Opcionais: vêm
+   * ausentes nesse caso.
+   */
+  call_context_slug?: string;
+  dificuldade?: string;
+  cenario_instrucoes?: string;
+  objetivo?: string;
+  habilidades?: string;
 }
 
 export interface RoleplayDraft {

@@ -7,7 +7,6 @@ import { ArrowUpTrayIcon, SparklesIcon, XMarkIcon } from "@heroicons/react/24/ou
 import { Card } from "@/app/components/ui/card";
 import { Button } from "@/app/components/ui/button";
 import { PageHeader } from "@/app/components/ui/page-header";
-import { BackButton } from "@/app/components/ui/back-button";
 import { createPlaybookDraft, invokeGeneratePlaybook, uploadAndExtract } from "@/app/lib/db";
 import type { TrailInputFile } from "@/app/lib/types";
 
@@ -102,8 +101,8 @@ export default function NovoPlaybookPage() {
 
   return (
     <div className="flex flex-col gap-0">
-      <BackButton href="/playbooks" />
       <PageHeader
+        backHref="/playbooks"
         title="Novo playbook"
         description="Suba o playbook do cliente e a IA estrutura a jornada em etapas e subetapas para você revisar."
       />

@@ -3,10 +3,12 @@
 import { createClient } from "@/app/lib/supabase/client";
 import type {
   CallContextType,
+  CaseSetupPersonas,
   Connection,
   CriteriaWeights,
   DraftRow,
   EvalWeights,
+  GenerationMode,
   EvaluationRound,
   Methodology,
   MethodologySource,
@@ -158,6 +160,27 @@ export async function setDraftConnection(draftId: string, connectionId: string) 
   if (error) throw error;
 }
 
+/**
+ * Mescla campos no scenario (jsonb) de um rascunho — usado quando o modo
+ * (metodologia/playbook) só é decidido depois da criação, ex.: no modal de
+ * "Conta de destino" da Biblioteca, para rascunhos salvos sem conta.
+ */
+export async function updateDraftScenario(draftId: string, patch: Partial<ScenarioConfig>) {
+  const supabase = createClient();
+  const { data: current, error: readErr } = await supabase
+    .from("roleplay_drafts")
+    .select("scenario")
+    .eq("id", draftId)
+    .single();
+  if (readErr) throw readErr;
+  const merged = { ...(current?.scenario ?? {}), ...patch };
+  const { error } = await supabase
+    .from("roleplay_drafts")
+    .update({ scenario: merged })
+    .eq("id", draftId);
+  if (error) throw error;
+}
+
 export async function deleteDraft(draftId: string) {
   const supabase = createClient();
   const { error } = await supabase.from("roleplay_drafts").delete().eq("id", draftId);
@@ -223,6 +246,36 @@ export async function pollPlaybookRun(
   });
   if (error) throw new Error(await functionErrorMessage(error, "Falha ao consultar a implementação"));
   return data ?? {};
+}
+
+/**
+ * Acrescenta personas ao contexto de um rascunho já exportado (202 imediato).
+ * O lote também gera o conteúdo por etapa das personas novas nos roleplays que
+ * já existem — é a única forma correta de adicionar persona depois do envio.
+ * O progresso chega por realtime em `playbook_run.persona_topup`.
+ */
+export async function invokeAddPersonas(draftId: string, quantity: number) {
+  const supabase = createClient();
+  const { data, error } = await supabase.functions.invoke("implement-playbook", {
+    body: { draftId, stage: "add_personas", quantity },
+  });
+  if (error) throw new Error(await functionErrorMessage(error, "Falha ao iniciar o lote de personas"));
+  if (!data?.ok) throw new Error(JSON.stringify(data?.error ?? data));
+  return data;
+}
+
+/** Quais personas cada roleplay do rascunho aceita (o que o vendedor vai ver). */
+export async function listPersonaCatalog(draftId: string): Promise<{
+  available: boolean;
+  items: CaseSetupPersonas[];
+}> {
+  const supabase = createClient();
+  const { data, error } = await supabase.functions.invoke("list-persona-catalog", {
+    body: { draftId },
+  });
+  if (error) throw new Error(await functionErrorMessage(error, "Falha ao ler o catálogo de personas"));
+  if (!data?.ok) throw new Error(JSON.stringify(data?.error ?? data));
+  return { available: Boolean(data.available), items: data.items ?? [] };
 }
 
 export async function invokeSyncOrgs() {
@@ -568,10 +621,13 @@ async function functionErrorMessage(error: unknown, fallback: string): Promise<s
 export async function processImport(
   text: string,
   customPrompt?: string | null,
+  /** "playbook" pula a extração de cenário/rubricas — que o playbook descarta. */
+  mode?: GenerationMode | null,
 ): Promise<ProcessImportResult> {
   const supabase = createClient();
   const body: Record<string, unknown> = { text };
   if (customPrompt?.trim()) body.prompt = customPrompt.trim();
+  if (mode) body.mode = mode;
   const { data, error } = await supabase.functions.invoke("process-import", { body });
   if (error) throw new Error(await functionErrorMessage(error, "Falha ao processar"));
   if (!data?.ok) throw new Error(JSON.stringify(data?.error ?? data));

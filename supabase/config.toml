@@ -50,3 +50,21 @@ verify_jwt = true
 
 [functions.generate-trail-plan]
 verify_jwt = true
+
+[functions.list-playbooks]
+verify_jwt = true
+
+[functions.list-methodologies]
+verify_jwt = true
+
+[functions.generate-playbook]
+verify_jwt = true
+
+[functions.export-playbook]
+verify_jwt = true
+
+[functions.implement-playbook]
+verify_jwt = true
+
+[functions.list-persona-catalog]
+verify_jwt = true

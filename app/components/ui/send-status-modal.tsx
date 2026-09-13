@@ -8,8 +8,12 @@ export type SendStatus = "sending" | "success" | "error";
 
 /**
  * Modal de progresso do envio para a conta de destino. Estado controlado pelo
- * pai: `sending` (loading, não dismissável) → `success` (o pai redireciona) ou
- * `error` (mostra a mensagem + "Tentar novamente"; fechar volta à tela).
+ * pai: `sending` (loading, não dismissável) → `success` ou `error`.
+ *
+ * Só `sending` prende o usuário — ali a requisição está em voo e fechar não
+ * cancelaria nada. Assim que termina, sempre há saída (X, ESC, backdrop e o
+ * botão no rodapé): nem todo pai redireciona ou fecha sozinho no sucesso, e
+ * sem isso a tela do playbook ficava sem escapatória.
  */
 export function SendStatusModal({
   open,
@@ -31,7 +35,7 @@ export function SendStatusModal({
   successTitle?: string;
   successHint?: string;
 }) {
-  const dismissable = status === "error";
+  const dismissable = status !== "sending";
   return (
     <Modal
       isOpen={open}
@@ -72,9 +76,20 @@ export function SendStatusModal({
             )}
           </div>
         </ModalBody>
-        {status === "error" && (
+        {status !== "sending" && (
           <ModalFooter>
-            <Button onPress={onRetry}>Tentar novamente</Button>
+            {status === "error" ? (
+              <>
+                <Button variant="secondary" onPress={onClose}>
+                  Fechar
+                </Button>
+                <Button onPress={onRetry}>Tentar novamente</Button>
+              </>
+            ) : (
+              <Button variant="secondary" onPress={onClose}>
+                Fechar
+              </Button>
+            )}
           </ModalFooter>
         )}
       </ModalContent>

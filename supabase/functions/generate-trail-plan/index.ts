@@ -1,6 +1,7 @@
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { listCallContexts, loginSuperadmin } from "../_shared/perfecting.ts";
 import { corsHeaders, json } from "../_shared/cors.ts";
+import { requireUser } from "../_shared/auth.ts";
 
 /**
  * Geração do plano de trilhas em 2 estágios via Anthropic Message Batches
@@ -608,6 +609,8 @@ async function run(planId: string, stage: "analysis" | "plan") {
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+  const denied = await requireUser(req);
+  if (denied) return denied;
 
   try {
     if (!ANTHROPIC_API_KEY) {

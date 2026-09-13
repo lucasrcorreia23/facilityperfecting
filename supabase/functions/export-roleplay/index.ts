@@ -1,8 +1,15 @@
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { corsHeaders, json } from "../_shared/cors.ts";
+import { requireUser } from "../_shared/auth.ts";
 import { authenticateConnection, resolveOfferContext } from "../_shared/destination.ts";
 import {
+  applyContextContent,
+  type GuardrailSeed,
+  type ObjectionSeed,
+} from "../_shared/context-content.ts";
+import {
   createCaseSetup,
+  DIFFICULTY_LEVEL_IDS,
   generateCaseSetup,
   generatePersonaFromContext,
   isHmlCaseSetupComplete,
@@ -10,6 +17,7 @@ import {
   overlayVerbatimOnGenerated,
   PerfectingError,
   resolveCallContextTypeId,
+  truncateForApi,
 } from "../_shared/perfecting.ts";
 
 const VALID_DIFFICULTIES = new Set(["easy", "medium", "hard"]);
@@ -76,6 +84,27 @@ async function exportDraft(draftId: string): Promise<{ caseSetupId: number }> {
     setJob({ step }),
   );
 
+  // 3a) Objeções/guardrails do material — context-wide, herdados pelo case_setup.
+  // Mesmo helper do modo playbook; nunca derruba o envio (falha vira aviso).
+  const seedObjections = (draft.scenario?.objections ?? []) as ObjectionSeed[];
+  const seedGuardrails = (draft.scenario?.guardrails ?? []) as GuardrailSeed[];
+  if (seedObjections.length > 0 || seedGuardrails.length > 0) {
+    await setJob({ step: "context_content" });
+    // Os três níveis: o prompt é montado na hora da call com o nível escolhido pelo
+    // vendedor naquela call, que pode diferir do nível do roleplay.
+    const applied = await applyContextContent(
+      env,
+      token,
+      perfectingContextId,
+      seedObjections,
+      seedGuardrails,
+      DIFFICULTY_LEVEL_IDS,
+    );
+    if (applied.warnings.length > 0) {
+      console.warn("export-roleplay[context_content]:", JSON.stringify(applied.warnings));
+    }
+  }
+
   // 3b) PERSONA (só HML — a API persiste e o roleplay entra no catálogo novo)
   let personaId: number | null = null;
   if (env === "hml") {
@@ -100,7 +129,10 @@ async function exportDraft(draftId: string): Promise<{ caseSetupId: number }> {
     scenario_difficulty_level: difficulty,
     training_objective: draft.scenario?.objective ?? undefined,
     training_targeted_sales_skills: draft.scenario?.skill ?? undefined,
-    aditional_instructions: draft.scenario?.aditional_instructions ?? undefined,
+    // /role_plays/generate quebra (500 genérico) com instruções longas demais.
+    aditional_instructions: draft.scenario?.aditional_instructions
+      ? truncateForApi(draft.scenario.aditional_instructions)
+      : undefined,
   };
   let genCase: Record<string, unknown>;
   if (verbatim) {
@@ -150,6 +182,8 @@ async function exportDraft(draftId: string): Promise<{ caseSetupId: number }> {
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+  const denied = await requireUser(req);
+  if (denied) return denied;
 
   let draftIds: string[] = [];
   try {
