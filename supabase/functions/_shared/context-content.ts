@@ -11,9 +11,10 @@ import {
  * Injeta no contexto da Perfecting as objeções e os guardrails extraídos do material
  * do cliente.
  *
- * Por que context-wide e não por case_setup: um case_setup herda as objeções do seu
- * context_id, então uma passada aqui cobre TODAS as etapas do playbook — sem competir
- * com o conteúdo que cada etapa gera e sem multiplicar chamadas por roleplay.
+ * Context-wide vale para TODOS os case_setups do context_id. Serve para guardrails (nos
+ * dois modos) e para as objeções do roleplay único por metodologia. No modo playbook as
+ * objeções NÃO passam por aqui: entrariam em todas as etapas, e o comprador levantaria
+ * objeção de preço na descoberta — elas vão por etapa (ver step-objections.ts).
  *
  * Por que existe: a implementação já gera objeções sozinha, mas genéricas. Quando o
  * material traz a fala real do comprador e a condição de cedência ("Ceda se"), mandar

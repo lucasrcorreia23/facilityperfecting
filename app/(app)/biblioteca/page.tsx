@@ -75,6 +75,7 @@ const PLAYBOOK_STAGE_LABELS: Record<string, string> = {
   call_type_skipped: "etapa pulada",
   // O acompanhamento ao vivo caiu (limite da Edge Function); progresso vem da contagem.
   tracking_remote: "gerando na Perfecting",
+  step_objections: "objeções por etapa",
   done: "concluído",
 };
 
@@ -871,6 +872,19 @@ export default function BibliotecaPage() {
                         criada(s)
                         {detailDraft.playbook_run.context_content.guardrails_skipped > 0 &&
                           ` (${detailDraft.playbook_run.context_content.guardrails_skipped} já existiam)`}
+                      </dd>
+                    </div>
+                  )}
+                  {detailDraft.playbook_run?.step_objections && (
+                    <div className="col-span-2">
+                      <dt className="text-xs text-slate-500">Objeções nas etapas</dt>
+                      <dd className="text-slate-700">
+                        {detailDraft.playbook_run.step_objections.state === "waiting_assignment"
+                          ? "aguardando a IA encaixar as objeções nas etapas"
+                          : `${detailDraft.playbook_run.step_objections.objections_created ?? 0} objeção(ões) criada(s)` +
+                            ((detailDraft.playbook_run.step_objections.objections_skipped ?? 0) > 0
+                              ? ` (${detailDraft.playbook_run.step_objections.objections_skipped} já existiam)`
+                              : "")}
                       </dd>
                     </div>
                   )}

@@ -75,10 +75,20 @@ export interface ScenarioConfig {
   fixed_persona_call_type_ids?: number[] | null;
   /**
    * Objeções e guardrails do material, criados no contexto da Perfecting no envio.
-   * Valem nos DOIS modos: um case_setup herda as objeções do seu context_id.
+   * Guardrails vão para o contexto nos dois modos. Objeções: no contexto por
+   * metodologia; no modo playbook, no roleplay de cada etapa (ver objection_steps).
    */
   objections?: ObjectionSeed[] | null;
   guardrails?: GuardrailSeed[] | null;
+  /**
+   * Modo playbook: em quais etapas cada objeção entra, decidido pela IA no envio
+   * (implement-playbook, estágio assign_objection_steps). Chave = playbook_call_type_id.
+   */
+  objection_steps?: {
+    playbook_id: number;
+    call_types: Record<string, string[]>;
+    assigned_at: string;
+  } | null;
   // Payload de case_setup escrito à mão. Em produção o export manda VERBATIM.
   // Em HML, se faltar company_profile/persona_profile/persona_voice_model_id,
   // completa via /generate e sobrepõe só training_* / instruções.
@@ -158,6 +168,14 @@ export interface PlaybookRun {
     objections_skipped: number;
     guardrails_created: number;
     guardrails_skipped: number;
+  };
+  /** Objeções do material criadas no roleplay de cada etapa (não no contexto). */
+  step_objections?: {
+    state: "waiting_assignment" | "done";
+    objections_created?: number;
+    objections_skipped?: number;
+    /** Objeções que a IA não encaixou em etapa nenhuma. */
+    unassigned?: string[];
   };
   /** Lote avulso de personas num rascunho já exportado (ação "Adicionar personas"). */
   persona_topup?: PersonaTopUp;
@@ -296,6 +314,8 @@ export interface GuardrailSeed {
 
 export interface ProcessImportResult {
   oferta_nome: string;
+  /** Descrição da oferta só com o lado do comprador — vira `offers.general_description`. */
+  oferta_descricao?: string;
   /** Instrução do CONTEXTO (não de uma persona): é dele que a Perfecting gera as personas. */
   perfil: string;
   /** Como as personas devem variar entre si — vira `scenario.persona_instructions`. */

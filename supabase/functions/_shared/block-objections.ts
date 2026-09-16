@@ -1,4 +1,4 @@
-import { readAnthropicStream } from "./anthropic.ts";
+import { askStructured } from "./anthropic.ts";
 import { messageOf, type ObjectionSeed } from "./context-content.ts";
 import {
   createPlaybookCallBlockObjection,
@@ -19,12 +19,8 @@ import {
  * (sub-opções de cada item do bloco) e vale para TODA implementação desse playbook, de
  * qualquer oferta. Por isso só blocos vazios são tocados — o que já foi curado na
  * Perfecting fica como está — e reexecutar não faz nada depois que os blocos têm objeção.
- * O que o comprador fala vem das objeções do contexto (ver context-content.ts).
+ * O que o comprador fala vem das objeções de cada etapa (ver step-objections.ts).
  */
-
-const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY") ?? "";
-const MODEL = Deno.env.get("ANTHROPIC_MODEL") ?? "claude-sonnet-5";
-const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 
 export interface BlockObjectionsResult {
   blocks_total: number;
@@ -97,31 +93,13 @@ async function assignObjections(
     },
   };
 
-  const res = await fetch(ANTHROPIC_URL, {
-    method: "POST",
-    headers: {
-      "x-api-key": ANTHROPIC_API_KEY,
-      "anthropic-version": "2023-06-01",
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      model: MODEL,
-      max_tokens: 8000,
-      stream: true,
-      output_config: { format: { type: "json_schema", schema } },
-      system: SYSTEM,
-      messages: [{ role: "user", content: JSON.stringify(payload) }],
-    }),
+  const parsed = await askStructured<{ blocos: Array<{ bloco_id: number; objecoes: number[] }> }>({
+    system: SYSTEM,
+    user: JSON.stringify(payload),
+    schema,
+    maxTokens: 8000,
+    what: "ao distribuir objeções",
   });
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({}));
-    throw new Error(
-      `IA falhou ao distribuir objeções (${res.status}): ${data?.error?.message ?? "sem detalhe"}`,
-    );
-  }
-  const { text, stopReason } = await readAnthropicStream(res);
-  if (stopReason === "max_tokens") throw new Error("resposta da IA cortada ao distribuir objeções");
-  const parsed = JSON.parse(text) as { blocos: Array<{ bloco_id: number; objecoes: number[] }> };
 
   const byBlock = new Map<number, number[]>();
   for (const b of parsed.blocos ?? []) {

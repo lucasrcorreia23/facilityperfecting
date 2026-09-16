@@ -43,6 +43,12 @@ const DEFAULT_WEIGHTS: CriteriaWeights = {
 export async function createDraftFromText(params: {
   text: string;
   offerName: string;
+  /**
+   * Descrição processada da oferta. É ela que vai para a Perfecting: o material cru
+   * mistura o lado do vendedor, e o que chega lá vira conhecimento do comprador. O
+   * cru continua em sources.raw_text; sem descrição (material não processado), cai nele.
+   */
+  offerDescription?: string | null;
   sourceType: "paste" | "file";
   filePath?: string | null;
   meta?: Record<string, unknown>;
@@ -69,7 +75,7 @@ export async function createDraftFromText(params: {
     .from("offers")
     .insert({
       offer_name: params.offerName,
-      general_description: params.text,
+      general_description: params.offerDescription?.trim() || params.text,
       source_id: source.id,
     })
     .select("id")

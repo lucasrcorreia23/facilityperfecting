@@ -5,6 +5,11 @@ import { authenticateConnection, resolveOfferContext } from "../_shared/destinat
 import { sseEvents } from "../_shared/sse.ts";
 import { applyBlockObjections } from "../_shared/block-objections.ts";
 import {
+  applyStepObjections,
+  assignObjectionsToCallTypes,
+  type ObjectionStepAssignment,
+} from "../_shared/step-objections.ts";
+import {
   type CallTypeState,
   type CaseSetupCheck,
   computeCallTypeStates,
@@ -129,6 +134,17 @@ interface PlaybookRun {
     objections_skipped: number;
     guardrails_created: number;
     guardrails_skipped: number;
+  };
+  /**
+   * Objeções do material criadas no case_setup de cada etapa (ver step-objections.ts).
+   * "waiting_assignment" = a implementação fechou antes do encaixe da IA; quem termina o
+   * encaixe aplica.
+   */
+  step_objections?: {
+    state: "waiting_assignment" | "done";
+    objections_created?: number;
+    objections_skipped?: number;
+    unassigned?: string[];
   };
   /** case_setup_id → etapa e se já tem agente de voz (cache da classificação). */
   case_setup_checks?: Record<string, CaseSetupCheck>;
@@ -276,6 +292,86 @@ async function lockFixedPersonas(
   }
 }
 
+/**
+ * Cria as objeções do material no roleplay de cada etapa, conforme o encaixe salvo em
+ * `scenario.objection_steps`. Relê o scenario do banco: o encaixe é gravado por outra
+ * invocação, depois que este run começou.
+ *
+ * Sem IA e idempotente, então o poll pode completar este passo como faz com a persona
+ * fixa. Falha nunca derruba o envio: vira aviso.
+ */
+async function applyObjectionsToSteps(
+  env: PerfectingEnv,
+  token: string,
+  draftId: string,
+  run: PlaybookRun,
+): Promise<void> {
+  const { data } = await db.from("roleplay_drafts").select("scenario").eq("id", draftId).single();
+  const seeds = (data?.scenario?.objections ?? []) as ObjectionSeed[];
+  if (seeds.length === 0) return;
+  const assignment = data?.scenario?.objection_steps as ObjectionStepAssignment | undefined;
+  if (!assignment || assignment.playbook_id !== run.playbook_id) {
+    run.step_objections = { state: "waiting_assignment" };
+    return;
+  }
+
+  run.stage = "step_objections";
+  await saveRun(draftId, run);
+  const applied = await applyStepObjections(
+    env,
+    token,
+    assignment,
+    run.call_type_case_setups ?? {},
+    seeds,
+    DIFFICULTY_LEVEL_IDS,
+  );
+  run.step_objections = {
+    state: "done",
+    objections_created: applied.objections_created,
+    objections_skipped: applied.objections_skipped,
+    unassigned: applied.unassigned,
+  };
+  for (const w of applied.warnings) addWarning(run, w);
+  if (applied.unassigned.length > 0) {
+    addWarning(
+      run,
+      `objeções sem etapa, não foram para nenhum roleplay: ${applied.unassigned.join(", ")}`,
+    );
+  }
+  await saveRun(draftId, run);
+}
+
+/** Grava o encaixe objeção → etapa no scenario, sem tocar no resto do rascunho. */
+async function saveObjectionSteps(draftId: string, assignment: ObjectionStepAssignment) {
+  const { data, error } = await db
+    .from("roleplay_drafts")
+    .select("scenario")
+    .eq("id", draftId)
+    .single();
+  if (error) throw error;
+  await db
+    .from("roleplay_drafts")
+    .update({ scenario: { ...(data?.scenario ?? {}), objection_steps: assignment } })
+    .eq("id", draftId);
+}
+
+/** Dispara outra invocação desta função, para a IA não gastar o limite de ~150s desta. */
+function invokeSelf(body: Record<string, unknown>): void {
+  const label = String(body.stage);
+  EdgeRuntime.waitUntil(
+    fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/implement-playbook`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    })
+      .then((r) => r.ok || console.error(`${label}[auto] não disparou:`, r.status))
+      .catch((e) => console.error(`${label}[auto] não disparou:`, String(e))),
+  );
+}
+
 /** Fecha o rascunho com os ids criados (diff contra o snapshot inicial). */
 async function finish(
   draftId: string,
@@ -331,21 +427,19 @@ async function run(draftId: string): Promise<void> {
     );
     playbookRun.context_id = perfectingContextId;
 
-    // Objeções e guardrails do material do cliente, ANTES da implementação: são
-    // context-wide, então todo roleplay criado a seguir já nasce com eles. Nunca
-    // derruba o envio — falha aqui vira aviso (ver applyContextContent).
-    const seedObjections = (draft.scenario?.objections ?? []) as ObjectionSeed[];
+    // Guardrails do material, ANTES da implementação: são context-wide, então todo
+    // roleplay criado a seguir já nasce com eles. Objeções NÃO vão para o contexto —
+    // entrariam em todas as etapas; vão para o roleplay de cada etapa no fim (ver
+    // applyObjectionsToSteps). Nunca derruba o envio — falha aqui vira aviso.
     const seedGuardrails = (draft.scenario?.guardrails ?? []) as GuardrailSeed[];
-    if (seedObjections.length > 0 || seedGuardrails.length > 0) {
+    if (seedGuardrails.length > 0) {
       playbookRun.stage = "context_content";
       await saveRun(draftId, playbookRun);
-      // Os três níveis: as etapas ainda não existem, e o nível de cada roleplay é
-      // decidido pela implementação (e editável depois na Perfecting).
       const applied = await applyContextContent(
         env,
         token,
         perfectingContextId,
-        seedObjections,
+        [],
         seedGuardrails,
         DIFFICULTY_LEVEL_IDS,
       );
@@ -490,6 +584,9 @@ async function run(draftId: string): Promise<void> {
     });
     warnIncompleteCallTypes(playbookRun, states);
     await lockFixedPersonas(env, token, draftId, playbookRun, created);
+    await applyObjectionsToSteps(env, token, draftId, playbookRun).catch((e) =>
+      addWarning(playbookRun, `objeções das etapas não aplicadas: ${messageOf(e)}`),
+    );
     await finish(draftId, playbookRun, created);
   } catch (e) {
     const detail =
@@ -628,6 +725,9 @@ async function runPoll(draftId: string): Promise<{ done: boolean; created?: numb
       warnIncompleteCallTypes(playbookRun, states);
       // Idempotente e sem IA — completa o que o run não alcançou antes de morrer.
       await lockFixedPersonas(env, token, draftId, playbookRun, created).catch(() => {});
+      await applyObjectionsToSteps(env, token, draftId, playbookRun).catch((e) =>
+        addWarning(playbookRun, `objeções das etapas não aplicadas: ${messageOf(e)}`),
+      );
       await finish(draftId, playbookRun, created);
       return { done: true, created: created.length, total };
     }
@@ -675,6 +775,7 @@ Deno.serve(async (req) => {
       body.stage === "add_personas" ||
       body.stage === "apply_context_content" ||
       body.stage === "apply_block_objections" ||
+      body.stage === "assign_objection_steps" ||
       body.stage === "repair_run"
         ? body.stage
         : "start";
@@ -792,9 +893,55 @@ Deno.serve(async (req) => {
       return json({ ok: true, playbookId, ...(await apply()) }, 200);
     }
 
-    // Reaplica objeções/guardrails do rascunho no contexto de um envio já feito — sem
-    // IA, idempotente (pula o que já existe) e sem mexer em roleplays: o prompt é
-    // montado na hora da call, então vale a partir da próxima.
+    // Encaixa as objeções do rascunho nas etapas do playbook (IA) e grava em
+    // scenario.objection_steps. Se a implementação já fechou, aplica na hora — senão
+    // quem fechar aplica. `auto: true` é o disparo do envio: responde 202 e reusa um
+    // encaixe já feito para o mesmo playbook. Manual: `recompute: true` refaz o encaixe.
+    if (stage === "assign_objection_steps") {
+      const draft = await loadDraft(draftId);
+      const playbookId = draft.scenario?.playbook_id;
+      if (typeof playbookId !== "number") {
+        return json({ ok: false, error: "rascunho sem playbook selecionado" }, 400);
+      }
+      const objections = (draft.scenario?.objections ?? []) as ObjectionSeed[];
+      const work = async () => {
+        const { env, token } = await authenticateConnection(draft.connections);
+        const previous = draft.scenario?.objection_steps as ObjectionStepAssignment | undefined;
+        let assignment = previous;
+        if (!previous || previous.playbook_id !== playbookId || body.recompute === true) {
+          assignment = await assignObjectionsToCallTypes(env, token, playbookId, objections);
+          await saveObjectionSteps(draftId, assignment);
+        }
+
+        const fresh = await loadDraft(draftId);
+        const run: PlaybookRun = { ...(fresh.playbook_run ?? {}) };
+        if (fresh.status !== "exported" || (run.case_setup_ids ?? []).length === 0) {
+          return { assignment, applied: null };
+        }
+        // Envio anterior à classificação por etapa: monta o mapa etapa → roleplay agora.
+        if (Object.keys(run.call_type_case_setups ?? {}).length === 0) {
+          await classifyCallTypes(env, token, playbookId, run.case_setup_ids ?? [], run);
+        }
+        await applyObjectionsToSteps(env, token, draftId, run);
+        run.stage = "done";
+        await saveRun(draftId, run);
+        return { assignment, applied: run.step_objections ?? null };
+      };
+      if (body.auto === true) {
+        EdgeRuntime.waitUntil(
+          work()
+            .then((r) => console.log("objection_steps[auto]:", JSON.stringify(r)))
+            .catch((e) => console.error("objection_steps[auto] falhou:", messageOf(e))),
+        );
+        return json({ ok: true, playbookId }, 202);
+      }
+      return json({ ok: true, playbookId, ...(await work()) }, 200);
+    }
+
+    // Reaplica os guardrails do rascunho no contexto de um envio já feito — sem IA,
+    // idempotente (pula o que já existe) e sem mexer em roleplays: o prompt é montado
+    // na hora da call, então vale a partir da próxima. Objeções não vão para o contexto
+    // no modo playbook: ver o estágio "assign_objection_steps".
     if (stage === "apply_context_content") {
       const draft = await loadDraft(draftId);
       const contextId = (draft.playbook_run as PlaybookRun | null)?.context_id;
@@ -806,7 +953,7 @@ Deno.serve(async (req) => {
         env,
         token,
         contextId,
-        (draft.scenario?.objections ?? []) as ObjectionSeed[],
+        [],
         (draft.scenario?.guardrails ?? []) as GuardrailSeed[],
         DIFFICULTY_LEVEL_IDS,
       );
@@ -875,22 +1022,13 @@ Deno.serve(async (req) => {
     await saveRun(draftId, playbookRun, { status: "exporting", error_detail: null });
 
     EdgeRuntime.waitUntil(run(draftId));
-    // Invocação separada: a IA dos blocos não pode consumir o limite de ~150s desta,
-    // que o run() precisa para abrir o stream da implementação. Falha aqui nunca
-    // derruba o envio.
+    // Invocações separadas: a IA não pode consumir o limite de ~150s desta, que o
+    // run() precisa para abrir o stream da implementação. Falha nelas nunca derruba o
+    // envio. O encaixe nas etapas leva segundos; a implementação, minutos — então ele
+    // quase sempre está pronto quando o run fecha.
     if (Array.isArray(draft.scenario?.objections) && draft.scenario.objections.length > 0) {
-      EdgeRuntime.waitUntil(
-        fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/implement-playbook`, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ draftId, stage: "apply_block_objections", auto: true }),
-        })
-          .then((r) => r.ok || console.error("block_objections[auto] não disparou:", r.status))
-          .catch((e) => console.error("block_objections[auto] não disparou:", String(e))),
-      );
+      invokeSelf({ draftId, stage: "assign_objection_steps", auto: true });
+      invokeSelf({ draftId, stage: "apply_block_objections", auto: true });
     }
     return json({ ok: true, draftId, playbookId }, 202);
   } catch (e) {

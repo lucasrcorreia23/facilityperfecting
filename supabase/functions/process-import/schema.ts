@@ -5,19 +5,26 @@
  * formato de saída) e ficam testáveis sem importar o módulo que chama Deno.serve.
  */
 
+/**
+ * `today` entra pelo código, e não pelo texto base, para valer também com prompt
+ * personalizado: sem ele o modelo copia prazos vencidos do material como vigentes.
+ */
 export function buildSystem(
   contexts: Array<{ slug: string; name: string; stage?: string }>,
   objectionTypes: Array<{ slug: string; name: string }>,
   base: string,
+  today: Date = new Date(),
 ): string {
   const list = contexts
     .map((c) => `- ${c.slug} → ${c.name}${c.stage ? ` (${c.stage})` : ""}`)
     .join("\n");
   const objList = objectionTypes.map((o) => `- ${o.slug} → ${o.name}`).join("\n");
+  const date = today.toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" });
   return [
     base,
     `CALL CONTEXTS DISPONÍVEIS (use exatamente um destes slugs em call_context_slug):\n${list}`,
     `TIPOS DE OBJEÇÃO DISPONÍVEIS (use exatamente um destes slugs em objecoes[].tipo):\n${objList}`,
+    `DATA DE HOJE: ${date}. Prazos e condições do material anteriores a esta data já venceram.`,
   ].join("\n\n");
 }
 
@@ -29,7 +36,7 @@ export function buildSystem(
  *  - scenario  → cenário (que pode ser transcrição integral) e rubricas
  */
 export const SCHEMA_PARTS = {
-  core: ["oferta_nome", "perfil", "personas_variacao"],
+  core: ["oferta_nome", "oferta_descricao", "perfil", "personas_variacao"],
   // `lacunas` mora aqui, e não em `scenario`, porque vale nos dois modos — é o
   // checklist do que falta no material, e `scenario` é pulável (ver PARTS_FOR_MODE).
   objections: ["objecoes", "guardrails", "lacunas"],
@@ -81,10 +88,15 @@ export function buildSchema(
     additionalProperties: false,
     properties: {
       oferta_nome: { type: "string", description: "Nome curto da oferta/produto." },
+      oferta_descricao: {
+        type: "string",
+        description:
+          "Descrição da oferta (markdown curto) — usada nos dois modos, vira a descrição da oferta na Perfecting. O que é vendido e para quem, proposta de valor, problema resolvido, diferenciais, formato, preço e condições VIGENTES. Sem metodologia de venda, roteiro, argumentos do vendedor, CRM ou processo interno.",
+      },
       perfil: {
         type: "string",
         description:
-          "O CAMPO MAIS IMPORTANTE (markdown) — usado nos dois modos. NÃO é o retrato de uma pessoa: é a instrução com que a Perfecting monta o CONTEXTO, do qual saem uma ou várias personas. Cubra público-alvo (B2B ou B2C, conforme a oferta), gatilhos de urgência, prioridades, dores mensuráveis, estado futuro desejado, motivadores de compra, processo de decisão, aversão a risco, objeções e receios, consciência do problema, consciência das soluções e o que usam hoje.",
+          "O CAMPO MAIS IMPORTANTE (markdown) — usado nos dois modos. NÃO é o retrato de uma pessoa: é a instrução com que a Perfecting monta o CONTEXTO, do qual saem uma ou várias personas. Cubra público-alvo (B2B ou B2C, conforme a oferta), gatilhos de urgência, prioridades, dores mensuráveis, estado futuro desejado, motivadores de compra, processo de decisão, aversão a risco, objeções e receios, consciência do problema, consciência das soluções e o que usam hoje. Só o lado do comprador: nada de método, roteiro, perguntas do vendedor ou CRM.",
       },
       personas_variacao: {
         type: "string",
@@ -119,7 +131,7 @@ export function buildSchema(
       objecoes: {
         type: "array",
         description:
-          "Objeções que o comprador levanta, extraídas do material. São criadas no CONTEXTO da Perfecting e herdadas por todos os roleplays — use as falas REAIS do material quando existirem, em vez de inventar. Array vazio se o material não trouxer objeções.",
+          "Objeções que o comprador levanta, extraídas do material. No modo playbook vão só para as etapas em que o comprador as levantaria; por metodologia, valem para o roleplay inteiro. Use as falas REAIS do material quando existirem, em vez de inventar. Array vazio se o material não trouxer objeções.",
         items: {
           type: "object",
           additionalProperties: false,
@@ -132,12 +144,12 @@ export function buildSchema(
             },
             detalhes: {
               type: "string",
-              description: "O que está por trás da objeção: contexto, quando ela aparece na conversa, o que o comprador teme.",
+              description: "O que está por trás da objeção: contexto e o que o comprador teme.",
             },
             ceder_se: {
               type: "string",
               description:
-                "A condição que faz o comprador ceder. SEM isto ele repete a objeção indefinidamente e o treino não tem desfecho — sempre preencha.",
+                "A condição que faz o comprador ceder, do ponto de vista dele: o que ele precisa ouvir, ver ou receber. Sem técnica, etapa ou método do vendedor. SEM isto ele repete a objeção indefinidamente e o treino não tem desfecho — sempre preencha.",
             },
           },
           required: ["titulo", "tipo", "fala_exemplo", "detalhes", "ceder_se"],
@@ -147,7 +159,7 @@ export function buildSchema(
       guardrails: {
         type: "array",
         description:
-          "Regras de comportamento do comprador simulado, quando o material as trouxer (o que ele nunca deve fazer, como reage a promessas indevidas, termos proibidos ao vendedor). Criadas no CONTEXTO. Array vazio se o material não definir regras.",
+          "Regras de comportamento do comprador simulado, quando o material as trouxer (o que ele nunca deve fazer, como reage a promessas indevidas, termos proibidos ao vendedor). Criadas no CONTEXTO, valem em todas as etapas: nada específico de uma etapa e nunca mandar encerrar ou desligar a ligação. Array vazio se o material não definir regras.",
         items: {
           type: "object",
           additionalProperties: false,
@@ -155,7 +167,7 @@ export function buildSchema(
             nome: { type: "string", description: "Nome curto da regra." },
             instrucao: {
               type: "string",
-              description: "A regra em segunda pessoa, dirigida ao comprador simulado. Ex.: 'Se o vendedor prometer que a verba será aprovada, reaja com desconfiança e endureça pelo resto da conversa.'",
+              description: "A regra em segunda pessoa, dirigida ao comprador simulado. Ex.: 'Se o vendedor prometer que a verba será aprovada, desconfie e peça que ele mostre como isso seria garantido.'",
             },
           },
           required: ["nome", "instrucao"],
@@ -179,6 +191,7 @@ export function buildSchema(
     },
     required: [
       "oferta_nome",
+      "oferta_descricao",
       "perfil",
       "personas_variacao",
       "call_context_slug",

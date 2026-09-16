@@ -356,9 +356,9 @@ export async function listCallContexts(
 // A IA da Perfecting gera objeções sozinha durante a implementação, mas genéricas.
 // Quando o material do cliente já traz objeções reais (com a fala do comprador e a
 // condição de cedência) ou regras de comportamento validadas, é muito melhor mandar
-// as dele. Ambos os recursos são criados NO CONTEXTO, uma vez: todo case_setup
-// daquele context_id os herda (`GET /case_setup_{id}/objections?include_context_wide=true`),
-// então valem para todas as etapas do playbook sem competir com o que cada etapa gera.
+// as dele. O que é criado NO CONTEXTO vale para todo case_setup daquele context_id
+// (`GET /case_setup_{id}/objections?include_context_wide=true`) — ou seja, para todas as
+// etapas do playbook. Por isso, no modo playbook, objeção vai por case_setup (abaixo).
 
 export interface ObjectionType {
   id: number;
@@ -427,6 +427,42 @@ export async function createContextObjection(
 ): Promise<number | null> {
   const data = await postJson<{ id?: number }>(
     `${rp(env)}/context_${contextId}/objections`,
+    token,
+    input,
+  );
+  return typeof data.id === "number" ? data.id : null;
+}
+
+// Objeções de UM case_setup (uma etapa do playbook). É o escopo certo para objeção que
+// só faz sentido num momento da jornada: a context-wide entra no prompt de TODAS as
+// etapas, e o comprador passa a levantar objeção de fechamento na descoberta.
+
+/** Só as objeções específicas do case_setup (a API omite as context-wide por padrão). */
+export async function listCaseSetupObjections(
+  env: PerfectingEnv,
+  token: string,
+  caseSetupId: number,
+): Promise<Array<{ id: number; title: string; difficulty_level_id: number | null }>> {
+  const data = await getJson<unknown>(`${rp(env)}/case_setup_${caseSetupId}/objections`, token);
+  const items = Array.isArray(data) ? data : [];
+  return items
+    .filter((o): o is Record<string, unknown> => Boolean(o) && typeof o === "object")
+    .filter((o) => typeof o.id === "number")
+    .map((o) => ({
+      id: o.id as number,
+      title: typeof o.title === "string" ? o.title : "",
+      difficulty_level_id: typeof o.difficulty_level_id === "number" ? o.difficulty_level_id : null,
+    }));
+}
+
+export async function createCaseSetupObjection(
+  env: PerfectingEnv,
+  token: string,
+  caseSetupId: number,
+  input: ContextObjectionInput,
+): Promise<number | null> {
+  const data = await postJson<{ id?: number }>(
+    `${rp(env)}/case_setup_${caseSetupId}/objections`,
     token,
     input,
   );

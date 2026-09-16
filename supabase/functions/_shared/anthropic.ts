@@ -40,3 +40,45 @@ export async function readAnthropicStream(res: Response): Promise<{
   }
   return { text, stopReason, usage };
 }
+
+/**
+ * Chamada curta com saída JSON garantida por schema. `what` descreve a tarefa nas
+ * mensagens de erro ("ao distribuir objeções").
+ */
+export async function askStructured<T>({
+  system,
+  user,
+  schema,
+  maxTokens,
+  what,
+}: {
+  system: string;
+  user: string;
+  schema: Record<string, unknown>;
+  maxTokens: number;
+  what: string;
+}): Promise<T> {
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "x-api-key": Deno.env.get("ANTHROPIC_API_KEY") ?? "",
+      "anthropic-version": "2023-06-01",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      model: Deno.env.get("ANTHROPIC_MODEL") ?? "claude-sonnet-5",
+      max_tokens: maxTokens,
+      stream: true,
+      output_config: { format: { type: "json_schema", schema } },
+      system,
+      messages: [{ role: "user", content: user }],
+    }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(`IA falhou ${what} (${res.status}): ${data?.error?.message ?? "sem detalhe"}`);
+  }
+  const { text, stopReason } = await readAnthropicStream(res);
+  if (stopReason === "max_tokens") throw new Error(`resposta da IA cortada ${what}`);
+  return JSON.parse(text) as T;
+}
