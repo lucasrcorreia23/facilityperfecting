@@ -16,7 +16,8 @@
  *
  * Create: produção usa o payload legado (spread + voice null). HML usa
  * builders estritos (Offer/Context/CaseSetup CRUD.Create.Input) e,
- * no export, cria persona via /persona/generate_from_context.
+ * no export, cria persona via /persona/generate_from_context. Produção
+ * cria a persona depois, copiando o comprador (buildPersonaFromCaseSetup).
  */
 
 export type PerfectingEnv = "hml" | "prod";
@@ -705,6 +706,70 @@ export async function generatePersonaFromContext(
     throw new PerfectingError(502, "persona/generate_from_context sem persona.id");
   }
   return { id, name: data.persona?.name ?? null };
+}
+
+/** Início do `PROMPT_INTERNAL_USE_MARKER` do backend: depois dele vem `{{ref_token}}`. */
+const CASE_PROMPT_INTERNAL_MARKER = "### USO INTERNO";
+
+/** persona_prompt a partir do case_prompt gravado: sem a parte de uso interno e sem `{{placeholders}}`. */
+export function personaPromptFromCasePrompt(casePrompt: unknown): string {
+  if (typeof casePrompt !== "string") return "";
+  const cut = casePrompt.indexOf(CASE_PROMPT_INTERNAL_MARKER);
+  const body = cut >= 0 ? casePrompt.slice(0, cut) : casePrompt;
+  return body.replace(/\{\{[^}]*\}\}/g, "").trim();
+}
+
+/**
+ * Payload do persona/create que copia o comprador de um case_setup já criado
+ * (receita da migração da org 59 em PROD). O montador da chamada põe o
+ * `persona_prompt` literalmente na seção de personalidade, então ele carrega o
+ * case_prompt inteiro. Sem voz: os agentes de PROD recusam override de voz e a
+ * chamada cai ao conectar (1008); sem voice_id a chamada usa a voz do próprio
+ * agente, que é a do comprador. null quando o case_prompt ainda não existe.
+ */
+export function buildPersonaFromCaseSetup(
+  caseSetup: Record<string, unknown>,
+  contextId: number,
+): Record<string, unknown> | null {
+  const personaPrompt = personaPromptFromCasePrompt(caseSetup.case_prompt);
+  if (!personaPrompt) return null;
+  const profile = asObject(caseSetup.persona_profile) ?? {};
+  const text = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : null);
+  return {
+    context_id: contextId,
+    name: text(profile.name),
+    job_title: text(profile.job_title),
+    department: text(profile.department),
+    description: text(profile.description),
+    persona_prompt: personaPrompt,
+    voice_id: null,
+  };
+}
+
+/** Criação manual (sem IA). Sem retry: o endpoint não tem dedupe e duplicaria a persona. */
+export async function createPersona(
+  env: PerfectingEnv,
+  token: string,
+  payload: Record<string, unknown>,
+): Promise<{ id: number; name: string | null }> {
+  const data = await sendJson<{ id?: number; name?: string | null }>(
+    "POST",
+    `${rp(env)}/persona/create`,
+    token,
+    payload,
+    0,
+  );
+  if (typeof data.id !== "number") throw new PerfectingError(502, "persona/create sem id");
+  return { id: data.id, name: data.name ?? null };
+}
+
+/** case_setup cru (todos os campos), para quem precisa do case_prompt/persona_profile. */
+export function getCaseSetupRaw(
+  env: PerfectingEnv,
+  token: string,
+  caseSetupId: number,
+): Promise<Record<string, unknown>> {
+  return getJson<Record<string, unknown>>(`${rp(env)}/case_setup_${caseSetupId}`, token);
 }
 
 export interface PersonaSummary {

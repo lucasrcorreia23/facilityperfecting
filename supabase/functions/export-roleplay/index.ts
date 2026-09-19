@@ -8,15 +8,22 @@ import {
   type ObjectionSeed,
 } from "../_shared/context-content.ts";
 import {
+  buildPersonaFromCaseSetup,
   createCaseSetup,
+  createPersona,
   DIFFICULTY_LEVEL_IDS,
   generateCaseSetup,
   generatePersonaFromContext,
+  getCaseSetup,
+  getCaseSetupRaw,
   isHmlCaseSetupComplete,
   listCallContexts,
+  listCaseSetupIdsByContext,
   overlayVerbatimOnGenerated,
+  type PerfectingEnv,
   PerfectingError,
   resolveCallContextTypeId,
+  setCaseSetupPersona,
   truncateForApi,
 } from "../_shared/perfecting.ts";
 
@@ -28,8 +35,65 @@ const db = createClient(
 );
 
 /**
+ * PROD: persona copiada do comprador do case_setup recém-criado, sem voz, travada
+ * nele. Sem persona no contexto o catálogo da org vem vazio e a Perfecting mostra a
+ * tela antiga de roleplays.
+ *
+ * Não cria se outro roleplay do contexto estiver sem persona: o backend sorteia uma
+ * persona do contexto a cada chamada desses, e eles passariam a ser atendidos por esta
+ * (com o roteiro deste roleplay). Nunca derruba o envio — o case_setup já existe e
+ * funciona no formato antigo; a falha volta como aviso.
+ */
+async function attachProdPersona(
+  env: PerfectingEnv,
+  token: string,
+  contextId: number,
+  caseSetupId: number,
+): Promise<{ personaId: number | null; warning: string | null }> {
+  let personaId: number | null = null;
+  try {
+    const otherIds = (await listCaseSetupIdsByContext(env, token, contextId)).filter(
+      (id) => id !== caseSetupId,
+    );
+    const unlocked: number[] = [];
+    for (const id of otherIds) {
+      if ((await getCaseSetup(env, token, id)).persona_id == null) unlocked.push(id);
+    }
+    if (unlocked.length > 0) {
+      return {
+        personaId: null,
+        warning:
+          `persona não criada: o contexto ${contextId} tem roleplays sem persona ` +
+          `(${unlocked.join(", ")}), que passariam a ser atendidos por ela`,
+      };
+    }
+
+    const payload = buildPersonaFromCaseSetup(
+      await getCaseSetupRaw(env, token, caseSetupId),
+      contextId,
+    );
+    if (!payload) {
+      return { personaId: null, warning: `persona não criada: roleplay ${caseSetupId} sem case_prompt` };
+    }
+    personaId = (await createPersona(env, token, payload)).id;
+    await setCaseSetupPersona(env, token, caseSetupId, personaId);
+    return { personaId, warning: null };
+  } catch (e) {
+    const reason = e instanceof PerfectingError ? JSON.stringify(e.detail) : String(e);
+    return {
+      personaId,
+      warning:
+        personaId != null
+          ? `persona ${personaId} criada, mas não travada no roleplay ${caseSetupId}: ${reason}`
+          : `persona não criada: ${reason}`,
+    };
+  }
+}
+
+/**
  * Exporta um rascunho para a org de destino na Perfecting.
- * Fluxo: superadmin login → login_as_user → offer → context → (persona HML) → case_setup.
+ * Fluxo: superadmin login → login_as_user → offer → context → (persona HML) → case_setup
+ * → (persona PROD).
  * Reuso por conexão: pula offer/context se já existe id na ponte. Idempotente.
  */
 async function exportDraft(draftId: string): Promise<{ caseSetupId: number }> {
@@ -105,7 +169,8 @@ async function exportDraft(draftId: string): Promise<{ caseSetupId: number }> {
     }
   }
 
-  // 3b) PERSONA (só HML — a API persiste e o roleplay entra no catálogo novo)
+  // 3b) PERSONA HML — gerada do contexto, com voz v2 (HML aceita override de voz).
+  // Em PROD a persona vem depois do case_setup (passo 5).
   let personaId: number | null = null;
   if (env === "hml") {
     await setJob({ step: "persona" });
@@ -162,19 +227,36 @@ async function exportDraft(draftId: string): Promise<{ caseSetupId: number }> {
     // normais: a Perfecting monta o case prompt a partir dos nossos campos exatos.
   );
 
+  // 5) PERSONA PROD
+  let personaWarning: string | null = null;
+  if (env === "prod") {
+    await setJob({ step: "persona" });
+    const attached = await attachProdPersona(env, token, perfectingContextId, caseSetupId);
+    personaId = attached.personaId;
+    personaWarning = attached.warning;
+    if (personaWarning) console.warn("export-roleplay[persona]:", personaWarning);
+  }
+
+  const detail =
+    personaId != null || personaWarning
+      ? {
+          ...(personaId != null && { persona_id: personaId }),
+          ...(personaWarning && { persona_warning: personaWarning }),
+        }
+      : null;
   await db
     .from("roleplay_drafts")
     .update({
       status: "exported",
       perfecting_case_setup_id: caseSetupId,
       elevenlabs_agent_id,
-      error_detail: null,
+      error_detail: personaWarning ? detail : null,
     })
     .eq("id", draftId);
   await setJob({
     state: "done",
     finished_at: new Date().toISOString(),
-    error_detail: personaId != null ? { persona_id: personaId } : null,
+    error_detail: detail,
   });
 
   return { caseSetupId };
