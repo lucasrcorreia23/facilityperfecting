@@ -105,6 +105,50 @@ export interface ScenarioConfig {
   // Em HML, se faltar company_profile/persona_profile/persona_voice_model_id,
   // completa via /generate e sobrepõe só training_* / instruções.
   case_setup_payload?: Record<string, unknown> | null;
+  /** Modo metodologia: o comprador concreto do material (dores × portfólio). */
+  dossier?: RoleplayDossier | null;
+}
+
+// ── Dossiê do comprador (espelha supabase/functions/_shared/dossier.ts) ──
+
+export type DossierRevealLevel = "superficie" | "sondada" | "oculta";
+
+export interface DossierProduct {
+  nome: string;
+  descricao: string;
+  problema_resolvido: string;
+  beneficios: string;
+}
+
+export interface DossierPain {
+  titulo: string;
+  descricao: string;
+  /** Nome do produto principal que resolve a dor; "" = sem produto. */
+  produto: string;
+}
+
+export interface DossierTopic {
+  titulo: string;
+  texto: string;
+}
+
+export interface RoleplayDossier {
+  produtos: DossierProduct[];
+  dores: DossierPain[];
+  persona: {
+    nome: string;
+    genero: "masculino" | "feminino" | "";
+    cargo: string;
+    area: string;
+    empresa_nome: string;
+    empresa_perfil: string;
+    prompt: string;
+    dores: Array<{ dor: string; revelacao: DossierRevealLevel; detalhe: string }>;
+    produtos: Array<{ produto: string; postura: string }>;
+  };
+  conhecimento: { previo: string; fatos: DossierTopic[]; briefing: DossierTopic[] };
+  abertura: string[];
+  rubricas: Array<{ criterio: string; descricao: string; dica: string }>;
 }
 
 export interface CallContextType {
@@ -136,6 +180,7 @@ export type CompletionStepName =
   | "methodology"
   | "rubrics"
   | "step_knowledge"
+  | "dossier"
   | "behavior_guidance"
   | "update_prompt";
 
@@ -398,6 +443,8 @@ export interface ProcessImportResult {
   cenario_instrucoes?: string;
   objetivo?: string;
   habilidades?: string;
+  /** Só por metodologia; vazio quando o material não descreve um comprador concreto. */
+  dossie?: RoleplayDossier;
 }
 
 export interface RoleplayDraft {

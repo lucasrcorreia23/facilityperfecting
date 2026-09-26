@@ -74,7 +74,7 @@ describe("nextCompletionStep", () => {
         step_knowledge: { status: "skipped", attempts: 1 },
       },
     });
-    expect(nextCompletionStep(run)).toEqual({ kind: "run", step: "behavior_guidance" });
+    expect(nextCompletionStep(run)).toEqual({ kind: "run", step: "dossier" });
   });
 
   it("manda para o gate quando todos terminaram", () => {
@@ -83,6 +83,7 @@ describe("nextCompletionStep", () => {
         methodology: { status: "done", attempts: 1 },
         rubrics: { status: "done", attempts: 1 },
         step_knowledge: { status: "done", attempts: 1 },
+        dossier: { status: "skipped", attempts: 0 },
         behavior_guidance: { status: "done", attempts: 1 },
         update_prompt: { status: "done", attempts: 1 },
       },

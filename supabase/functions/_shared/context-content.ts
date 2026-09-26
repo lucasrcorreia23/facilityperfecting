@@ -64,6 +64,11 @@ export async function applyContextContent(
   objections: ObjectionSeed[],
   guardrails: GuardrailSeed[],
   difficultyLevelIds: readonly number[],
+  /**
+   * Objeções só deste comprador (dossiê). Regra do backend: quando a persona da call
+   * tem objeções próprias, as do contexto sem persona são ignoradas.
+   */
+  personaId: number | null = null,
 ): Promise<ContextContentResult> {
   const out: ContextContentResult = {
     objections_created: 0,
@@ -81,8 +86,11 @@ export async function applyContextContent(
       ]);
       const typeBySlug = new Map(types.map((t) => [norm(t.slug), t.id]));
       // Chave título+nível: as linhas antigas sem nível (NULL) não bloqueiam as novas.
-      const key = (title: string, levelId: number | null) => `${norm(title)}|${levelId}`;
-      const seen = new Set(existing.map((o) => key(o.title, o.difficulty_level_id)));
+      const key = (title: string, levelId: number | null, persona: number | null = null) =>
+        `${norm(title)}|${levelId}|${persona ?? ""}`;
+      const seen = new Set(
+        existing.map((o) => key(o.title, o.difficulty_level_id, o.persona_id ?? null)),
+      );
       // Sem tipo resolvido não dá para criar (objection_type_id é obrigatório na API);
       // o primeiro tipo serve de fallback para não perder a objeção por um slug errado.
       const fallbackTypeId = types[0]?.id;
@@ -96,7 +104,7 @@ export async function applyContextContent(
           continue;
         }
         for (const levelId of difficultyLevelIds) {
-          if (seen.has(key(title, levelId))) {
+          if (seen.has(key(title, levelId, personaId))) {
             out.objections_skipped++;
             continue;
           }
@@ -108,8 +116,9 @@ export async function applyContextContent(
               description: o.fala_exemplo?.trim() || null,
               details: o.detalhes?.trim() || null,
               to_give_in_if: o.ceder_se?.trim() || null,
+              ...(personaId != null && { persona_id: personaId }),
             });
-            seen.add(key(title, levelId));
+            seen.add(key(title, levelId, personaId));
             out.objections_created++;
           } catch (e) {
             out.warnings.push(`objeção "${title}" (nível ${levelId}) não criada: ${messageOf(e)}`);

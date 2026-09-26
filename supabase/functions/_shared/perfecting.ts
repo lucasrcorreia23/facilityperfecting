@@ -425,6 +425,11 @@ export interface ContextObjectionInput {
   details?: string | null;
   /** A condição de cedência ("Ceda se") — sem ela o comprador repete a objeção sem fim. */
   to_give_in_if?: string | null;
+  /**
+   * Objeção só desta persona. Atenção à regra do backend: se a persona da call tem
+   * objeções próprias, as sem persona do contexto são IGNORADAS (nunca mistura).
+   */
+  persona_id?: number | null;
 }
 
 /** Objeções context-wide já cadastradas — base da idempotência (título + nível). */
@@ -432,7 +437,9 @@ export async function listContextObjections(
   env: PerfectingEnv,
   token: string,
   contextId: number,
-): Promise<Array<{ id: number; title: string; difficulty_level_id: number | null }>> {
+): Promise<
+  Array<{ id: number; title: string; difficulty_level_id: number | null; persona_id: number | null }>
+> {
   const data = await getJson<unknown>(`${rp(env)}/context_${contextId}/objections`, token);
   const items = Array.isArray(data) ? data : [];
   return items
@@ -442,6 +449,7 @@ export async function listContextObjections(
       id: o.id as number,
       title: typeof o.title === "string" ? o.title : "",
       difficulty_level_id: typeof o.difficulty_level_id === "number" ? o.difficulty_level_id : null,
+      persona_id: typeof o.persona_id === "number" ? o.persona_id : null,
     }));
 }
 
@@ -1959,3 +1967,241 @@ export async function openPlaybookImplementationStream(
   }
   return res;
 }
+
+// ── Dores × portfólio (HML desde 2026-09-25; PROD ainda não tem as rotas) ──
+// Produtos e dores ficam na OFERTA; a persona liga as dores dela (com a camada de
+// revelação) e a postura diante dos produtos. O comprador recebe só as dores e a
+// postura — nunca o nome do produto (isolamento feito pelo backend).
+
+async function deleteReq(url: string, token: string): Promise<void> {
+  const res = await fetchWithTimeout(url, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok && res.status !== 404) {
+    const raw = await res.text().catch(() => "");
+    throw new PerfectingError(res.status, raw || `DELETE ${res.status}`);
+  }
+}
+
+function records(data: unknown): Array<Record<string, unknown>> {
+  return (Array.isArray(data) ? data : []).filter(
+    (r): r is Record<string, unknown> => Boolean(r) && typeof r === "object",
+  );
+}
+
+/** null = o ambiente não tem as rotas de portfólio (404/405): quem chama degrada. */
+export async function listOfferProducts(
+  env: PerfectingEnv,
+  token: string,
+  offerId: number,
+): Promise<Array<{ id: number; name: string }> | null> {
+  try {
+    const data = await getJson<unknown>(`${rp(env)}/offer_${offerId}/products`, token);
+    return records(data)
+      .filter((r) => typeof r.id === "number")
+      .map((r) => ({ id: r.id as number, name: String(r.name ?? "") }));
+  } catch (e) {
+    if (e instanceof PerfectingError && (e.status === 404 || e.status === 405)) return null;
+    throw e;
+  }
+}
+
+export async function createOfferProduct(
+  env: PerfectingEnv,
+  token: string,
+  offerId: number,
+  input: {
+    name: string;
+    description?: string | null;
+    problem_solved?: string | null;
+    key_benefits?: string | null;
+    order?: number | null;
+  },
+): Promise<number> {
+  const data = await postJson<{ id?: number }>(`${rp(env)}/offer_${offerId}/products`, token, input);
+  if (typeof data.id !== "number") throw new PerfectingError(502, "offer products sem id");
+  return data.id;
+}
+
+export async function listOfferPains(
+  env: PerfectingEnv,
+  token: string,
+  offerId: number,
+): Promise<Array<{ id: number; title: string }>> {
+  const data = await getJson<unknown>(`${rp(env)}/offer_${offerId}/pains`, token);
+  return records(data)
+    .filter((r) => typeof r.id === "number")
+    .map((r) => ({ id: r.id as number, title: String(r.title ?? "") }));
+}
+
+export async function createOfferPain(
+  env: PerfectingEnv,
+  token: string,
+  offerId: number,
+  input: { title: string; description?: string | null; offer_product_id?: number | null },
+): Promise<number> {
+  const data = await postJson<{ id?: number }>(`${rp(env)}/offer_${offerId}/pains`, token, input);
+  if (typeof data.id !== "number") throw new PerfectingError(502, "offer pains sem id");
+  return data.id;
+}
+
+export async function createPersonaCompany(
+  env: PerfectingEnv,
+  token: string,
+  input: { slug: string; name: string; context_id: number; company_profile: string },
+): Promise<number> {
+  const data = await postJson<{ id?: number }>(`${rp(env)}/persona_company/create`, token, input);
+  if (typeof data.id !== "number") throw new PerfectingError(502, "persona_company/create sem id");
+  return data.id;
+}
+
+export interface PersonaPainLinkInput {
+  offer_pain_id: number;
+  reveal_level: "surface" | "probed" | "hidden";
+  persona_specific_detail?: string | null;
+}
+
+export interface PersonaProductLinkInput {
+  offer_product_id: number;
+  buyer_product_stance?: string | null;
+}
+
+/**
+ * Persona gerada do contexto, já com empresa, nome, dores e produtos. Sem retry:
+ * geração com IA sem dedupe (duplicaria a persona).
+ */
+export async function generateDossierPersona(
+  env: PerfectingEnv,
+  token: string,
+  input: {
+    context_id: number;
+    persona_company_id?: number | null;
+    persona_name?: string | null;
+    additional_instructions?: string | null;
+    pains?: PersonaPainLinkInput[];
+    products?: PersonaProductLinkInput[];
+  },
+): Promise<{ id: number; name: string | null }> {
+  const data = await sendJson<{ persona?: { id?: number; name?: string | null } }>(
+    "POST",
+    `${rp(env)}/persona/generate_from_context`,
+    token,
+    input,
+    0,
+  );
+  const id = data.persona?.id;
+  if (typeof id !== "number") {
+    throw new PerfectingError(502, "persona/generate_from_context sem persona.id");
+  }
+  return { id, name: data.persona?.name ?? null };
+}
+
+/** PUT parcial da persona (o schema é todo opcional). */
+export async function updatePersona(
+  env: PerfectingEnv,
+  token: string,
+  personaId: number,
+  patch: Record<string, unknown>,
+): Promise<void> {
+  await putJson(`${rp(env)}/persona_${personaId}`, token, patch);
+}
+
+export async function setPersonaPains(
+  env: PerfectingEnv,
+  token: string,
+  personaId: number,
+  pains: PersonaPainLinkInput[],
+): Promise<void> {
+  await putJson(`${rp(env)}/persona_${personaId}/pains`, token, { pains });
+}
+
+export async function setPersonaOfferProducts(
+  env: PerfectingEnv,
+  token: string,
+  personaId: number,
+  products: PersonaProductLinkInput[],
+): Promise<void> {
+  await putJson(`${rp(env)}/persona_${personaId}/offer_products`, token, { products });
+}
+
+/** PATCH da whitelist do case_setup (nomes, abertura, critérios, nível, tipo de chamada). */
+export async function patchCaseSetup(
+  env: PerfectingEnv,
+  token: string,
+  caseSetupId: number,
+  patch: Record<string, unknown>,
+): Promise<void> {
+  await patchJson(`${rp(env)}/case_setup_${caseSetupId}`, token, patch);
+}
+
+export async function listFeedbackRubricTypes(
+  env: PerfectingEnv,
+  token: string,
+): Promise<Array<{ id: number; name: string }>> {
+  const data = await getJson<unknown>(`${rp(env)}/feedback_rubrics_types`, token);
+  return records(data)
+    .filter((r) => typeof r.id === "number")
+    .map((r) => ({ id: r.id as number, name: String(r.name ?? "") }));
+}
+
+export async function listCaseSetupRubricsFull(
+  env: PerfectingEnv,
+  token: string,
+  caseSetupId: number,
+): Promise<Array<{ id: number; feedback_rubric_type_id: number; statement: string }>> {
+  const data = await getJson<unknown>(`${rp(env)}/case_setup_${caseSetupId}/feedback_rubrics`, token);
+  return records(data)
+    .filter((r) => typeof r.id === "number")
+    .map((r) => ({
+      id: r.id as number,
+      feedback_rubric_type_id: Number(r.feedback_rubric_type_id),
+      statement: String(r.statement ?? ""),
+    }));
+}
+
+export async function createCaseSetupRubric(
+  env: PerfectingEnv,
+  token: string,
+  caseSetupId: number,
+  input: { feedback_rubric_type_id: number; statement: string; description?: string | null; tips?: string | null },
+): Promise<void> {
+  await postJson(`${rp(env)}/case_setup_${caseSetupId}/feedback_rubrics`, token, input);
+}
+
+export async function deleteCaseSetupRubric(
+  env: PerfectingEnv,
+  token: string,
+  caseSetupId: number,
+  rubricId: number,
+): Promise<void> {
+  await deleteReq(`${rp(env)}/case_setup_${caseSetupId}/feedback_rubrics/${rubricId}`, token);
+}
+
+export async function listStepKnowledgeItems(
+  env: PerfectingEnv,
+  token: string,
+  caseSetupId: number,
+  personaId?: number | null,
+): Promise<Array<{ id: number; title: string; persona_id: number | null }>> {
+  const qs = personaId != null ? `?persona_id=${personaId}` : "";
+  const data = await getJson<unknown>(`${rp(env)}/case_setup_${caseSetupId}/step_knowledge${qs}`, token);
+  return records(data)
+    .filter((r) => typeof r.id === "number")
+    .map((r) => ({
+      id: r.id as number,
+      title: String(r.title ?? ""),
+      persona_id: typeof r.persona_id === "number" ? r.persona_id : null,
+    }));
+}
+
+export async function patchStepKnowledge(
+  env: PerfectingEnv,
+  token: string,
+  caseSetupId: number,
+  itemId: number,
+  patch: Record<string, unknown>,
+): Promise<void> {
+  await patchJson(`${rp(env)}/case_setup_${caseSetupId}/step_knowledge/${itemId}`, token, patch);
+}
+

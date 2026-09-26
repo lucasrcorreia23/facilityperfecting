@@ -17,6 +17,7 @@
  * prompt do zero e nunca lê o case_prompt persistido, então um agente novo só
  * deixaria o antigo órfão.
  */
+import { applyDossierToCaseSetup, hasDossier, type RoleplayDossier } from "./dossier.ts";
 import {
   generateCaseSetupRubrics,
   generateStepKnowledge,
@@ -35,14 +36,20 @@ export type CompletionStepName =
   | "methodology"
   | "rubrics"
   | "step_knowledge"
+  | "dossier"
   | "behavior_guidance"
   | "update_prompt";
 
-/** Ordem do ciclo: vínculo → rubricas → conteúdo → comportamento → prompt. */
+/**
+ * Ordem do ciclo: vínculo → rubricas → conteúdo → dossiê → comportamento → prompt.
+ * O dossiê vem depois do que a IA gera (para sobrescrever) e antes do comportamento
+ * (que é montado a partir das rubricas).
+ */
 export const COMPLETION_STEPS: CompletionStepName[] = [
   "methodology",
   "rubrics",
   "step_knowledge",
+  "dossier",
   "behavior_guidance",
   "update_prompt",
 ];
@@ -51,6 +58,7 @@ export const COMPLETION_STEP_LABELS: Record<CompletionStepName, string> = {
   methodology: "vinculando metodologia",
   rubrics: "gerando rubricas",
   step_knowledge: "gerando conteúdo por etapa",
+  dossier: "aplicando o dossiê do material",
   behavior_guidance: "gerando comportamento",
   update_prompt: "montando prompt",
 };
@@ -74,6 +82,8 @@ export interface CompletionRun {
   difficulty_level_id?: number | null;
   /** O material tinha objeções? Sem isso, "sem objeções" não é defeito. */
   objections_seeded?: boolean;
+  /** Dossiê do comprador (abertura, rubricas e conhecimento que substituem os gerados). */
+  dossier?: RoleplayDossier | null;
   stage?: CompletionStepName | "queued" | "pre_gate" | "gate" | "done";
   steps: Partial<Record<CompletionStepName, CompletionStepState>>;
   gate?: RolePlayPromptGate | null;
@@ -96,6 +106,7 @@ const STEP_STALE_MS: Record<CompletionStepName, number> = {
   rubrics: 5 * 60_000,
   // nº de personas × (nº de etapas + 1) chamadas de IA em série.
   step_knowledge: 12 * 60_000,
+  dossier: 3 * 60_000,
   behavior_guidance: 5 * 60_000,
   update_prompt: 2 * 60_000,
 };
@@ -333,6 +344,23 @@ async function execute(
     const skipReason = first?.skip_reason ?? "nenhum conteúdo gerado";
     finishStep(run, step, "skipped", { ...result, skip_reason: skipReason });
     addCompletionWarning(run, `conteúdo por etapa não gerado: ${skipReason}`);
+    return;
+  }
+
+  if (step === "dossier") {
+    if (!hasDossier(run.dossier)) {
+      finishStep(run, step, "skipped", { skip_reason: "sem dossiê no material" });
+      return;
+    }
+    const { detail, warnings } = await applyDossierToCaseSetup(
+      env,
+      token,
+      caseSetupId,
+      run.persona_id ?? null,
+      run.dossier,
+    );
+    for (const w of warnings) addCompletionWarning(run, w);
+    finishStep(run, step, "done", detail);
     return;
   }
 

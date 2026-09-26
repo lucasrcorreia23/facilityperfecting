@@ -31,6 +31,7 @@ import { PageHeader } from "@/app/components/ui/page-header";
 import { ConfirmDialog, type ConfirmConfig } from "@/app/components/ui/confirm-dialog";
 import { SendStatusModal, type SendStatus } from "@/app/components/ui/send-status-modal";
 import { managerSelectClassNames } from "@/app/lib/select-classnames";
+import { DossierEditor } from "@/app/components/creation/dossier-editor";
 import {
   createDraftFromText,
   invokeExport,
@@ -51,6 +52,7 @@ import type {
   ObjectionSeed,
   Playbook,
   PlaybookCallType,
+  RoleplayDossier,
 } from "@/app/lib/types";
 
 const GAP_STYLES: Record<ImportGap["severidade"], { label: string; cls: string }> = {
@@ -206,6 +208,8 @@ export default function CriacaoPage() {
   /** Objeções/guardrails extraídos do material — vão para o contexto na Perfecting. */
   const [objections, setObjections] = useState<ObjectionSeed[]>([]);
   const [guardrails, setGuardrails] = useState<GuardrailSeed[]>([]);
+  /** Comprador concreto do material (só por metodologia). null = material genérico. */
+  const [dossier, setDossier] = useState<RoleplayDossier | null>(null);
   const [aiProcessed, setAiProcessed] = useState(false);
   const [saving, setSaving] = useState(false);
   const [fileNames, setFileNames] = useState<string[]>([]);
@@ -411,6 +415,9 @@ export default function CriacaoPage() {
     setObjetivo("");
     setHabilidades("");
     setGaps([]);
+    setObjections([]);
+    setGuardrails([]);
+    setDossier(null);
     setAiProcessed(false);
     clearFiles();
   }
@@ -447,6 +454,10 @@ export default function CriacaoPage() {
       // Só substitui em "reset": em "merge" o que já foi revisado à mão permanece.
       if (!keep || objections.length === 0) setObjections(r.objecoes ?? []);
       if (!keep || guardrails.length === 0) setGuardrails(r.guardrails ?? []);
+      // O dossiê só vale quando o material descreve um comprador concreto.
+      const d = r.dossie;
+      const usable = Boolean(d?.persona?.prompt?.trim()) && (d?.persona?.dores?.length ?? 0) > 0;
+      if (!keep || !dossier) setDossier(usable ? d! : null);
       const wasProcessed = aiProcessed;
       setAiProcessed(true);
       const criticos = (r.lacunas ?? []).filter((g) => g.severidade === "critico").length;
@@ -560,6 +571,7 @@ export default function CriacaoPage() {
         // Context-wide: valem nos dois modos, por isso sem condicional de modo.
         objections: objections.length > 0 ? objections : null,
         guardrails: guardrails.length > 0 ? guardrails : null,
+        dossier: !isPlaybookMode ? dossier : null,
       },
     };
   }
@@ -929,7 +941,14 @@ export default function CriacaoPage() {
                   </>
                 ) : (
                   <>
-                    Vão para o contexto na Perfecting e valem para <b>todo</b> o roleplay.
+                    {dossier ? (
+                      <>
+                        Valem para <b>todo</b> o roleplay e só para este comprador. A Perfecting
+                        aceita até 3 objeções por nível.
+                      </>
+                    ) : (
+                      <>Vão para o contexto na Perfecting e valem para <b>todo</b> o roleplay.</>
+                    )}
                   </>
                 )}{" "}
                 Revise antes de enviar: é conteúdo que vai direto para a conta do cliente.
@@ -1268,6 +1287,9 @@ export default function CriacaoPage() {
               radius="sm"
               variant="bordered"
             />
+            {dossier && (
+              <DossierEditor value={dossier} onChange={setDossier} onRemove={() => setDossier(null)} />
+            )}
           </>
         )}
 

@@ -5,6 +5,14 @@ import { authenticateConnection, resolveOfferContext } from "../_shared/destinat
 import { invokeFunction } from "../_shared/invoke.ts";
 import type { CompletionRun } from "../_shared/roleplay-completion.ts";
 import {
+  applyDossierToPersona,
+  applyPortfolio,
+  createDossierPersona,
+  hasDossier,
+  type PortfolioIds,
+  type RoleplayDossier,
+} from "../_shared/dossier.ts";
+import {
   applyContextContent,
   type GuardrailSeed,
   type ObjectionSeed,
@@ -172,9 +180,36 @@ async function exportDraft(draftId: string): Promise<{ caseSetupId: number }> {
   }
 
   // 2/3) OFFER + CONTEXT (reuso por conexão)
-  const { perfectingContextId } = await resolveOfferContext(db, draft, env, token, (step) =>
-    setJob({ step }),
+  const { perfectingOfferId, perfectingContextId } = await resolveOfferContext(
+    db,
+    draft,
+    env,
+    token,
+    (step) => setJob({ step }),
   );
+
+  // 3) DOSSIÊ — quando o material descreve uma conta concreta: produtos e dores na
+  // oferta e o comprador criado com as dores dele. Em HML o comprador nasce aqui
+  // (antes das objeções, que passam a ser só dele); em PROD, que ainda não tem as
+  // rotas de portfólio, o prompt dele é ajustado depois do case_setup (passo 5).
+  const dossier: RoleplayDossier | null = hasDossier(draft.scenario?.dossier)
+    ? (draft.scenario.dossier as RoleplayDossier)
+    : null;
+  const dossierWarnings: string[] = [];
+  let portfolio: PortfolioIds | null = null;
+  let personaId: number | null = null;
+  if (dossier) {
+    await setJob({ step: "portfolio" });
+    portfolio = await applyPortfolio(env, token, perfectingOfferId, dossier);
+    dossierWarnings.push(...portfolio.warnings);
+    if (env === "hml") {
+      await setJob({ step: "persona" });
+      const created = await createDossierPersona(env, token, perfectingContextId, dossier, portfolio);
+      personaId = created.personaId;
+      dossierWarnings.push(...created.warnings);
+      await setJob({ error_detail: { persona_id: personaId } });
+    }
+  }
 
   // 3a) Objeções/guardrails do material — context-wide, herdados pelo case_setup.
   // Mesmo helper do modo playbook; nunca derruba o envio (falha vira aviso).
@@ -191,6 +226,9 @@ async function exportDraft(draftId: string): Promise<{ caseSetupId: number }> {
       seedObjections,
       seedGuardrails,
       DIFFICULTY_LEVEL_IDS,
+      // Com dossiê, objeções só deste comprador: o backend ignora as sem persona
+      // quando a persona tem as próprias, então as genéricas do contexto não vazam.
+      personaId,
     );
     if (applied.warnings.length > 0) {
       console.warn("export-roleplay[context_content]:", JSON.stringify(applied.warnings));
@@ -198,9 +236,8 @@ async function exportDraft(draftId: string): Promise<{ caseSetupId: number }> {
   }
 
   // 3b) PERSONA HML — gerada do contexto, com voz v2 (HML aceita override de voz).
-  // Em PROD a persona vem depois do case_setup (passo 5).
-  let personaId: number | null = null;
-  if (env === "hml") {
+  // Em PROD a persona vem depois do case_setup (passo 5). Com dossiê já foi criada.
+  if (env === "hml" && personaId == null) {
     await setJob({ step: "persona" });
     const persona = await generatePersonaFromContext(env, token, perfectingContextId);
     personaId = persona.id;
@@ -259,6 +296,16 @@ async function exportDraft(draftId: string): Promise<{ caseSetupId: number }> {
     },
   );
 
+  // 4b) Comprador do dossiê travado no roleplay: sem isso o backend sorteia entre as
+  // personas do contexto, e um contexto reusado por outro rascunho teria duas.
+  if (dossier && env === "hml" && personaId != null) {
+    try {
+      await setCaseSetupPersona(env, token, caseSetupId, personaId);
+    } catch (e) {
+      dossierWarnings.push(`persona não travada no roleplay: ${String(e)}`);
+    }
+  }
+
   // 5) PERSONA PROD
   let personaWarning: string | null = null;
   if (env === "prod") {
@@ -267,13 +314,28 @@ async function exportDraft(draftId: string): Promise<{ caseSetupId: number }> {
     personaId = attached.personaId;
     personaWarning = attached.warning;
     if (personaWarning) console.warn("export-roleplay[persona]:", personaWarning);
+    if (dossier && personaId != null) {
+      const noPortfolio: PortfolioIds = {
+        supported: false,
+        productIds: new Map(),
+        painIds: new Map(),
+        warnings: [],
+      };
+      dossierWarnings.push(
+        ...(await applyDossierToPersona(env, token, personaId, dossier, portfolio ?? noPortfolio)),
+      );
+    }
+  }
+  if (dossierWarnings.length > 0) {
+    console.warn("export-roleplay[dossie]:", JSON.stringify(dossierWarnings));
   }
 
   const detail =
-    personaId != null || personaWarning
+    personaId != null || personaWarning || dossierWarnings.length > 0
       ? {
           ...(personaId != null && { persona_id: personaId }),
           ...(personaWarning && { persona_warning: personaWarning }),
+          ...(dossierWarnings.length > 0 && { dossier_warnings: dossierWarnings }),
         }
       : null;
   // 6) FECHAMENTO — o create só monta a casca do roleplay: rubricas, conteúdo por
@@ -290,6 +352,8 @@ async function exportDraft(draftId: string): Promise<{ caseSetupId: number }> {
     methodology_slug: methodologySlug,
     difficulty_level_id: difficultyLevelId ?? null,
     objections_seeded: seedObjections.length > 0,
+    dossier,
+    ...(dossierWarnings.length > 0 && { warnings: [...dossierWarnings] }),
     stage: "queued",
     steps: {},
     attempt_round: 1,
@@ -302,7 +366,7 @@ async function exportDraft(draftId: string): Promise<{ caseSetupId: number }> {
       status: "completing",
       perfecting_case_setup_id: caseSetupId,
       elevenlabs_agent_id,
-      error_detail: personaWarning ? detail : null,
+      error_detail: personaWarning || dossierWarnings.length > 0 ? detail : null,
       completion_run: completionRun,
     })
     .eq("id", draftId);

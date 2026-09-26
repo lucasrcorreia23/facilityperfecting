@@ -72,6 +72,7 @@ supabase functions deploy extract-text
 supabase functions deploy list-orgs
 supabase functions deploy export-roleplay
 supabase functions deploy complete-roleplay
+supabase functions deploy process-import
 ```
 
 ## 4. Front local
@@ -91,6 +92,12 @@ npm run dev                        # http://localhost:3000
    para a Perfecting. "Completando" é o fechamento do roleplay (rubricas, conteúdo por etapa,
    comportamento) — se algo não entrar no prompt do comprador, o rascunho para em **incompleto**
    com a lista do que faltou e um botão para completar.
+   **Dossiê do comprador** (por metodologia): quando o material descreve um comprador concreto
+   (nome, conta, dores em camadas, ofertas que resolvem cada dor), o processamento preenche o
+   dossiê na Criação. No envio, produtos e dores vão para a oferta, o comprador nasce com as dores
+   e a camada de revelação de cada uma, as objeções ficam só dele, e o fechamento troca abertura,
+   rubricas e conhecimento por etapa gerados pela Perfecting pelos do material. Dores × portfólio
+   só existe em HML por enquanto; em produção as dores vão em texto no prompt do comprador.
 4. **Novo cenário desta oferta** reusa a oferta; no export para a mesma conta, oferta/contexto
    são **pulados** (pontes `*_perfecting_ids`).
 

@@ -1,6 +1,6 @@
 import { corsHeaders, json } from "../_shared/cors.ts";
 import { requireUser } from "../_shared/auth.ts";
-import { buildSchema, buildSystem, PARTS_FOR_MODE, type SchemaPart } from "./schema.ts";
+import { buildSchema, buildSystem, PART_NOTES, PARTS_FOR_MODE, type SchemaPart } from "./schema.ts";
 import { readAnthropicStream } from "../_shared/anthropic.ts";
 import {
   listCallContexts,
@@ -159,7 +159,10 @@ Deno.serve(async (req) => {
           output_config: {
             format: { type: "json_schema", schema: buildSchema(slugs, objectionSlugs, part) },
           },
-          system: [{ type: "text", text: system, cache_control: { type: "ephemeral" } }],
+          system: [
+            { type: "text", text: system, cache_control: { type: "ephemeral" } },
+            ...(PART_NOTES[part] ? [{ type: "text", text: PART_NOTES[part] }] : []),
+          ],
           messages: [{ role: "user", content: text }],
         }),
       });
@@ -190,7 +193,17 @@ Deno.serve(async (req) => {
     // mantém a função abaixo do teto de ~150s do gateway com material grande.
     let parts;
     try {
-      parts = await Promise.all(PARTS_FOR_MODE[mode].map((p: SchemaPart) => askFor(p)));
+      parts = await Promise.all(
+        PARTS_FOR_MODE[mode].map((p: SchemaPart) =>
+          // O dossiê é opcional: se ele falhar, o resto do processamento vale igual.
+          p === "dossier"
+            ? askFor(p).catch((e) => {
+              console.warn("process-import[dossie]:", e instanceof PartError ? JSON.stringify(e.payload) : String(e));
+              return { parsed: {} as Record<string, unknown>, usage: undefined };
+            })
+            : askFor(p)
+        ),
+      );
     } catch (e) {
       if (e instanceof PartError) return json({ ok: false, error: e.payload }, 502);
       throw e;
