@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  applyCaseSetupExtras,
   buildPersonaFromCaseSetup,
+  difficultyLevelIdFor,
+  matchMethodologySlug,
   MAX_API_TEXT_CHARS,
+  type Methodology,
   personaPromptFromCasePrompt,
   truncateForApi,
 } from "./perfecting.ts";
@@ -67,5 +71,63 @@ describe("buildPersonaFromCaseSetup", () => {
 
   it("não monta persona sem case_prompt", () => {
     expect(buildPersonaFromCaseSetup({ ...caseSetup, case_prompt: null }, 160)).toBeNull();
+  });
+});
+
+describe("difficultyLevelIdFor", () => {
+  it("mapeia os três níveis legados", () => {
+    expect(difficultyLevelIdFor("easy")).toBe(1);
+    expect(difficultyLevelIdFor("medium")).toBe(2);
+    expect(difficultyLevelIdFor("hard")).toBe(3);
+  });
+
+  it("ignora caixa e espaço", () => {
+    expect(difficultyLevelIdFor(" Hard ")).toBe(3);
+  });
+
+  it("devolve undefined no desconhecido (melhor omitir que mandar id errado)", () => {
+    expect(difficultyLevelIdFor("impossible")).toBeUndefined();
+    expect(difficultyLevelIdFor(null)).toBeUndefined();
+  });
+});
+
+describe("matchMethodologySlug", () => {
+  const items: Methodology[] = [
+    { id: 4, name: "SPIN Selling", slug: "spin_selling", description: "", application_case: "" },
+    { id: 9, name: "Venda Consultiva", slug: "venda_consultiva", description: "", application_case: "" },
+  ];
+
+  it("acha pelo slug", () => {
+    expect(matchMethodologySlug(items, "spin_selling")?.id).toBe(4);
+  });
+
+  it("normaliza acento e caixa (o slug vem do nome)", () => {
+    expect(matchMethodologySlug(items, "Venda Consultiva")?.id).toBe(9);
+  });
+
+  it("slug de outro ambiente não casa — undefined, nunca um id qualquer", () => {
+    expect(matchMethodologySlug(items, "challenger")).toBeUndefined();
+    expect(matchMethodologySlug(items, "")).toBeUndefined();
+  });
+});
+
+describe("applyCaseSetupExtras", () => {
+  const base = { context_id: 12, training_name: "Ligação fria" };
+
+  it("acrescenta metodologia e nível quando existem", () => {
+    expect(applyCaseSetupExtras(base, { methodologyIds: [7], difficultyLevelId: 2 })).toEqual({
+      ...base,
+      methodology_ids: [7],
+      difficulty_level_id: 2,
+    });
+  });
+
+  it("omite as chaves quando não há o que mandar", () => {
+    expect(applyCaseSetupExtras(base, {})).toEqual(base);
+    expect(applyCaseSetupExtras(base, { methodologyIds: [] })).toEqual(base);
+  });
+
+  it("não deixa generateCasePrompt vazar para o payload", () => {
+    expect(applyCaseSetupExtras(base, { generateCasePrompt: false })).toEqual(base);
   });
 });

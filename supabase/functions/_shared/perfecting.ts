@@ -73,6 +73,12 @@ function rp(env: PerfectingEnv): string {
   return `${apiBase(env)}/role_plays`;
 }
 
+/** Mount das SESSÕES de roleplay — outro prefixo, não é `rp(env)`. É onde mora o
+ *  endpoint que remonta o prompt da call (o gate de verificação do envio). */
+function rps(env: PerfectingEnv): string {
+  return `${apiBase(env)}/role_plays_session`;
+}
+
 const FETCH_TIMEOUT_MS = 180_000; // /generate levam minutos
 const MAX_RETRIES = 2; // 2 retries (3 tentativas) em 5xx/timeout
 
@@ -386,6 +392,25 @@ export async function listObjectionTypes(
 
 /** IDs de `role_plays.difficulty_level` na Perfecting (1=Fácil, 2=Moderado, 3=Difícil). */
 export const DIFFICULTY_LEVEL_IDS = [1, 2, 3] as const;
+
+/**
+ * Dificuldade legada (easy|medium|hard) → `difficulty_level_id` do catálogo.
+ *
+ * A API deriva sozinha quando o create não manda o id, mas mandar explícito é o
+ * que garante que o roleplay e as objeções fiquem no MESMO nível: o prompt só
+ * inclui objeção cujo `difficulty_level_id` é igual ao do case_setup, e as
+ * objeções do material são gravadas com DIFFICULTY_LEVEL_IDS (os três).
+ */
+export const DIFFICULTY_LEVEL_ID_BY_SLUG: Record<string, number> = {
+  easy: 1,
+  medium: 2,
+  hard: 3,
+};
+
+export function difficultyLevelIdFor(difficulty: string | null | undefined): number | undefined {
+  if (!difficulty) return undefined;
+  return DIFFICULTY_LEVEL_ID_BY_SLUG[difficulty.trim().toLowerCase()];
+}
 
 export interface ContextObjectionInput {
   objection_type_id: number;
@@ -761,6 +786,22 @@ export async function createPersona(
   );
   if (typeof data.id !== "number") throw new PerfectingError(502, "persona/create sem id");
   return { id: data.id, name: data.name ?? null };
+}
+
+/** Se a oferta/contexto ainda existe: ids guardados nas pontes podem ter sido apagados na Perfecting. */
+export async function perfectingEntityExists(
+  env: PerfectingEnv,
+  token: string,
+  entity: "offer" | "context",
+  id: number,
+): Promise<boolean> {
+  try {
+    await getJson(`${rp(env)}/${entity}_${id}`, token);
+    return true;
+  } catch (e) {
+    if (e instanceof PerfectingError && e.status === 404) return false;
+    throw e;
+  }
 }
 
 /** case_setup cru (todos os campos), para quem precisa do case_prompt/persona_profile. */
@@ -1236,6 +1277,36 @@ function buildHmlCaseSetupCreate(
   };
 }
 
+export interface CaseSetupCreateOptions {
+  /** undefined → omite o param (API usa default = true). */
+  generateCasePrompt?: boolean;
+  /**
+   * Metodologias a vincular no ato da criação. Sem vínculo, o conteúdo por
+   * etapa sai vazio e o roleplay nasce sem "# Conhecimento de Background".
+   * ⚠️ A API valida os ids ANTES de escrever: id inexistente = 404 e nenhum
+   * roleplay criado. Por isso só entram ids resolvidos no próprio ambiente.
+   */
+  methodologyIds?: number[];
+  /** Mesmo nível das objeções do material — senão elas nunca chegam ao comprador. */
+  difficultyLevelId?: number;
+}
+
+/** Acrescenta ao payload do create o que o contrato legado aceita mas não exige. */
+export function applyCaseSetupExtras(
+  payload: Record<string, unknown>,
+  options: CaseSetupCreateOptions,
+): Record<string, unknown> {
+  return {
+    ...payload,
+    ...(options.methodologyIds && options.methodologyIds.length > 0
+      ? { methodology_ids: options.methodologyIds }
+      : {}),
+    ...(options.difficultyLevelId != null
+      ? { difficulty_level_id: options.difficultyLevelId }
+      : {}),
+  };
+}
+
 export async function createCaseSetup(
   env: PerfectingEnv,
   token: string,
@@ -1243,12 +1314,14 @@ export async function createCaseSetup(
   contextId: number,
   callContextTypeId: number | undefined,
   userGroupId: number | null,
-  generateCasePrompt?: boolean,
+  options: CaseSetupCreateOptions = {},
 ): Promise<{ id: number; elevenlabs_agent_id: string | null }> {
-  const payload =
+  const base =
     env === "hml"
       ? buildHmlCaseSetupCreate(generated, contextId, callContextTypeId, userGroupId)
       : buildProdCaseSetupCreate(generated, contextId, callContextTypeId, userGroupId);
+  const payload = applyCaseSetupExtras(base, options);
+  const { generateCasePrompt } = options;
   // undefined → omite o param (API usa default = true), igual aos exports normais.
   // true/false → envia explícito (usado p/ isolar o crash de geração de prompt).
   const url =
@@ -1377,6 +1450,234 @@ export async function listMethodologies(
       description: typeof m.description === "string" ? m.description : "",
       application_case: typeof m.application_case === "string" ? m.application_case : "",
     }));
+}
+
+/** Acha a metodologia pelo slug (derivado do nome, como em call_contexts). */
+export function matchMethodologySlug(
+  items: Methodology[],
+  slug: string | null | undefined,
+): Methodology | undefined {
+  if (!slug || !slug.trim()) return undefined;
+  const target = slugify(slug.trim());
+  return items.find((m) => m.slug === target);
+}
+
+/**
+ * Slug da metodologia → id NO AMBIENTE DE DESTINO.
+ *
+ * Guardamos slug e não id porque o id não é portável entre HML e PROD, e um id
+ * inexistente derruba o case_setup/create inteiro com 404 (a API valida as
+ * metodologias antes de escrever qualquer coisa). Não achou → undefined, e quem
+ * chama segue sem vincular (o fechamento tenta de novo depois).
+ */
+export async function resolveMethodologyId(
+  env: PerfectingEnv,
+  token: string,
+  slug: string | null | undefined,
+): Promise<number | undefined> {
+  if (!slug || !slug.trim()) return undefined;
+  const items = await listMethodologies(env, token);
+  return matchMethodologySlug(items, slug)?.id;
+}
+
+/** Metodologias já vinculadas a um roleplay. O gate não tem flag pra isso. */
+export async function listCaseSetupMethodologies(
+  env: PerfectingEnv,
+  token: string,
+  caseSetupId: number,
+): Promise<Array<{ id: number; name: string | null }>> {
+  const data = await getJson<unknown>(`${rp(env)}/case_setup_${caseSetupId}/methodologies`, token);
+  const items = Array.isArray(data) ? data : [];
+  return items
+    .filter((m): m is Record<string, unknown> => Boolean(m) && typeof m === "object")
+    .filter((m) => typeof m.id === "number")
+    .map((m) => ({ id: m.id as number, name: typeof m.name === "string" ? m.name : null }));
+}
+
+/**
+ * Vincula metodologias a um roleplay já criado. SUBSTITUI o conjunto inteiro
+ * (manda os ids que devem ficar), e lista vazia é recusada pela API.
+ * Determinístico, sem IA — por isso mantém o retry padrão.
+ */
+export async function setCaseSetupMethodologies(
+  env: PerfectingEnv,
+  token: string,
+  caseSetupId: number,
+  methodologyIds: number[],
+): Promise<void> {
+  if (methodologyIds.length === 0) {
+    throw new PerfectingError(422, "methodologies PUT exige ao menos uma metodologia");
+  }
+  await putJson(`${rp(env)}/case_setup_${caseSetupId}/methodologies`, token, {
+    methodology_ids: methodologyIds,
+  });
+}
+
+// ── Fechamento do roleplay: rubricas, conteúdo por etapa e gate ────────────
+
+/** Rubricas de avaliação já cadastradas no roleplay (leitura barata do fechamento). */
+export async function listCaseSetupRubrics(
+  env: PerfectingEnv,
+  token: string,
+  caseSetupId: number,
+): Promise<Array<{ id: number }>> {
+  const data = await getJson<unknown>(
+    `${rp(env)}/case_setup_${caseSetupId}/feedback_rubrics`,
+    token,
+  );
+  const items = Array.isArray(data) ? data : [];
+  return items
+    .filter((r): r is Record<string, unknown> => Boolean(r) && typeof r === "object")
+    .filter((r) => typeof r.id === "number")
+    .map((r) => ({ id: r.id as number }));
+}
+
+/**
+ * Gera as rubricas do roleplay. São a primeira fonte do "# Comportamento" e do
+ * feedback da call — o case_setup/create não cria nenhuma.
+ * `overwrite: false` pula a categoria que já tem rubrica, então rechamar é barato.
+ * Sem retry: é geração com IA.
+ */
+export function generateCaseSetupRubrics(
+  env: PerfectingEnv,
+  token: string,
+  caseSetupId: number,
+  opts: { rubricType?: "seller" | "roleplay" | "both"; overwrite?: boolean } = {},
+): Promise<Record<string, unknown>> {
+  return sendJson(
+    "POST",
+    `${rp(env)}/case_setup_${caseSetupId}/feedback_rubrics/generate`,
+    token,
+    { rubric_type: opts.rubricType ?? "both", overwrite: opts.overwrite ?? false },
+    0,
+  );
+}
+
+/** Blocos de conteúdo por etapa já gerados (o "# Conhecimento de Background"). */
+export async function listStepKnowledge(
+  env: PerfectingEnv,
+  token: string,
+  caseSetupId: number,
+  personaId?: number | null,
+): Promise<Array<{ id: number }>> {
+  const qs = personaId != null ? `?persona_id=${personaId}` : "";
+  const data = await getJson<unknown>(
+    `${rp(env)}/case_setup_${caseSetupId}/step_knowledge${qs}`,
+    token,
+  );
+  const items = Array.isArray(data) ? data : [];
+  return items
+    .filter((k): k is Record<string, unknown> => Boolean(k) && typeof k === "object")
+    .filter((k) => typeof k.id === "number")
+    .map((k) => ({ id: k.id as number }));
+}
+
+export interface StepKnowledgeResult {
+  case_setup_id: number | null;
+  status: string | null;
+  skip_reason: string | null;
+  items_created: number;
+}
+
+export interface StepKnowledgeOutput {
+  case_setups_processed: number;
+  case_setups_skipped: number;
+  items_generated: number;
+  results: StepKnowledgeResult[];
+}
+
+/**
+ * Conteúdo por etapa (equivale ao passo S3 do ciclo unitário da Perfecting).
+ *
+ * ⚠️ É o passo LENTO: roda `nº de personas do contexto × (nº de etapas + 1)`
+ * chamadas de IA EM SÉRIE, sem paralelismo do lado deles — costuma estourar o
+ * wall clock da Edge Function enquanto a Perfecting continua trabalhando. Por
+ * isso: sem retry aqui, e quem chama reconcilia depois por listStepKnowledge.
+ *
+ * Só produz conteúdo com metodologia vinculada E persona no contexto; senão
+ * devolve 200 com items_generated 0 (sucesso vazio) e o motivo em skip_reason.
+ * Rechamar com conteúdo existente devolve `already_has_items` sem gastar IA.
+ */
+export async function generateStepKnowledge(
+  env: PerfectingEnv,
+  token: string,
+  caseSetupIds: number[],
+  opts: { overwrite?: boolean } = {},
+): Promise<StepKnowledgeOutput> {
+  const data = await sendJson<Record<string, unknown>>(
+    "POST",
+    `${rp(env)}/case_setup/step_knowledge/generate`,
+    token,
+    { case_setup_ids: caseSetupIds, overwrite: opts.overwrite ?? false },
+    0,
+  );
+  const rawResults = Array.isArray(data.results) ? data.results : [];
+  return {
+    case_setups_processed: typeof data.case_setups_processed === "number"
+      ? data.case_setups_processed
+      : 0,
+    case_setups_skipped: typeof data.case_setups_skipped === "number"
+      ? data.case_setups_skipped
+      : 0,
+    items_generated: typeof data.items_generated === "number" ? data.items_generated : 0,
+    results: rawResults
+      .filter((r): r is Record<string, unknown> => Boolean(r) && typeof r === "object")
+      .map((r) => ({
+        case_setup_id: typeof r.case_setup_id === "number" ? r.case_setup_id : null,
+        status: typeof r.status === "string" ? r.status : null,
+        skip_reason: typeof r.skip_reason === "string" ? r.skip_reason : null,
+        items_created: typeof r.items_created === "number" ? r.items_created : 0,
+      })),
+  };
+}
+
+/**
+ * O prompt que o comprador vai usar, REMONTADO na hora pela Perfecting, com as
+ * flags do que entrou nele. É o gate do envio: `cases_setup.case_prompt` (a
+ * coluna persistida) não serve, porque a call nem a lê.
+ *
+ * ⚠️ Todas as flags (menos has_persona_company/has_tone) vêm false quando não há
+ * persona resolvível — por isso has_persona é a primeira coisa a checar.
+ */
+export interface RolePlayPromptGate {
+  case_setup_id: number;
+  prompt: string;
+  has_persona: boolean;
+  has_persona_company: boolean;
+  has_tone: boolean;
+  has_behavior_guidance: boolean;
+  has_prior_knowledge: boolean;
+  has_conversation_history: boolean;
+  has_knowledge_blocks: boolean;
+  has_objections: boolean;
+  has_difficulty_level: boolean;
+  persona_randomly_selected: boolean;
+}
+
+export async function getRolePlayPrompt(
+  env: PerfectingEnv,
+  token: string,
+  caseSetupId: number,
+): Promise<RolePlayPromptGate> {
+  const data = await getJson<Record<string, unknown>>(
+    `${rps(env)}/role_play_prompt?case_setup_id=${caseSetupId}`,
+    token,
+  );
+  const flag = (key: string) => data[key] === true;
+  return {
+    case_setup_id: typeof data.case_setup_id === "number" ? data.case_setup_id : caseSetupId,
+    prompt: typeof data.prompt === "string" ? data.prompt : "",
+    has_persona: flag("has_persona"),
+    has_persona_company: flag("has_persona_company"),
+    has_tone: flag("has_tone"),
+    has_behavior_guidance: flag("has_behavior_guidance"),
+    has_prior_knowledge: flag("has_prior_knowledge"),
+    has_conversation_history: flag("has_conversation_history"),
+    has_knowledge_blocks: flag("has_knowledge_blocks"),
+    has_objections: flag("has_objections"),
+    has_difficulty_level: flag("has_difficulty_level"),
+    persona_randomly_selected: flag("persona_randomly_selected"),
+  };
 }
 
 // ── Criação da definição de um playbook na conta de destino ────────────────

@@ -8,7 +8,8 @@ import { PageHeader } from "@/app/components/ui/page-header";
 import { LoadingView } from "@/app/components/ui/loading-view";
 import { managerSelectClassNames } from "@/app/lib/select-classnames";
 import { createClient } from "@/app/lib/supabase/client";
-import { getEvalWeights, updateEvalWeights } from "@/app/lib/db";
+import { getEvalWeights, listMethodologies, updateEvalWeights } from "@/app/lib/db";
+import type { Methodology } from "@/app/lib/types";
 import { EVALUATION_CRITERIA, defaultEvalWeights } from "@/app/lib/evaluation-criteria";
 
 export default function ConfigPage() {
@@ -17,6 +18,10 @@ export default function ConfigPage() {
   const [difficulty, setDifficulty] = useState("medium");
   const [callContext, setCallContext] = useState("");
   const [userGroupId, setUserGroupId] = useState("");
+  // Metodologia padrão dos envios avulsos. Guardamos o SLUG: o id não é portável
+  // entre HML e PROD e um id inexistente derruba o envio com 404.
+  const [methodologySlug, setMethodologySlug] = useState("");
+  const [methodologies, setMethodologies] = useState<Methodology[]>([]);
 
   // Pesos dos critérios de avaliação (key → % como string).
   const [weights, setWeights] = useState<Record<string, string>>({});
@@ -33,7 +38,12 @@ export default function ConfigPage() {
         setDifficulty(data.default_difficulty ?? "medium");
         setCallContext(data.default_call_context_slug ?? "");
         setUserGroupId(data.default_user_group_id ? String(data.default_user_group_id) : "");
+        setMethodologySlug(data.default_methodology_slug ?? "");
       }
+      // Catálogo só para escolher: falhar aqui não impede salvar o resto.
+      listMethodologies()
+        .then(setMethodologies)
+        .catch(() => {});
       const base = defaultEvalWeights();
       setWeights(
         Object.fromEntries(
@@ -85,6 +95,7 @@ export default function ConfigPage() {
           default_difficulty: difficulty,
           default_call_context_slug: callContext || null,
           default_user_group_id: userGroupId ? Number(userGroupId) : null,
+          default_methodology_slug: methodologySlug || null,
           environment: "hml",
         },
         { onConflict: "created_by" },
@@ -132,6 +143,22 @@ export default function ConfigPage() {
           radius="sm"
           variant="bordered"
         />
+
+        <Select
+          label="Metodologia padrão"
+          labelPlacement="outside-top"
+          description="Vinculada a cada roleplay avulso. Sem ela o roleplay nasce sem o # Conhecimento de Background."
+          placeholder="Selecione a metodologia"
+          selectedKeys={methodologySlug ? [methodologySlug] : []}
+          onSelectionChange={(k) => setMethodologySlug(String(Array.from(k)[0] ?? ""))}
+          radius="sm"
+          variant="bordered"
+          classNames={managerSelectClassNames}
+        >
+          {methodologies.map((m) => (
+            <SelectItem key={m.slug}>{m.name}</SelectItem>
+          ))}
+        </Select>
 
         <Input
           label="user_group_id padrão (opcional)"

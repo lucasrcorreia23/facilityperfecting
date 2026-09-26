@@ -197,6 +197,8 @@ export default function PlanoTrilhasPage() {
   }
 
   const allItems = (plan?.trails ?? []).flatMap((t) => t.items);
+  // Whitelist de propósito: "completing" e "incomplete" já têm roleplay na conta
+  // (reenviar duplicaria). Um incompleto se resolve com "Completar", na Biblioteca.
   const sendableDrafts = allItems
     .filter((it) => it.draft && (it.draft.status === "draft" || it.draft.status === "error"))
     .map((it) => it.draft!.id);

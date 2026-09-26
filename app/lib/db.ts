@@ -242,6 +242,34 @@ export async function invokeExportPlaybook(draftId: string) {
   return data;
 }
 
+/**
+ * Fecha o roleplay avulso na Perfecting (202 imediato): vincula a metodologia e
+ * gera rubricas, conteúdo por etapa e comportamento — o que o case_setup/create
+ * não faz. O progresso chega por realtime; `pollCompletion` reconcilia.
+ * `force` é o botão "Completar" (ignora a janela de execução em andamento).
+ */
+export async function invokeCompleteRoleplay(draftId: string, opts: { force?: boolean } = {}) {
+  const supabase = createClient();
+  const { data, error } = await supabase.functions.invoke("complete-roleplay", {
+    body: { draftId, ...(opts.force ? { force: true } : {}) },
+  });
+  if (error) throw new Error(await functionErrorMessage(error, "Falha ao completar o roleplay"));
+  if (!data?.ok) throw new Error(JSON.stringify(data?.error ?? data));
+  return data;
+}
+
+/** Consulta/reconcilia o fechamento em andamento (nunca reexecuta às cegas). */
+export async function pollCompletion(
+  draftId: string,
+): Promise<{ done?: boolean; status?: string; missing?: string[] }> {
+  const supabase = createClient();
+  const { data, error } = await supabase.functions.invoke("complete-roleplay", {
+    body: { draftId, stage: "poll" },
+  });
+  if (error) throw new Error(await functionErrorMessage(error, "Falha ao consultar o fechamento"));
+  return data ?? {};
+}
+
 /** Consulta/reconcilia a implementação em andamento (nunca reexecuta). */
 export async function pollPlaybookRun(
   draftId: string,

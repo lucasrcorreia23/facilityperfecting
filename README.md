@@ -71,6 +71,7 @@ supabase secrets set \
 supabase functions deploy extract-text
 supabase functions deploy list-orgs
 supabase functions deploy export-roleplay
+supabase functions deploy complete-roleplay
 ```
 
 ## 4. Front local
@@ -86,7 +87,10 @@ npm run dev                        # http://localhost:3000
 1. **Conexões** → "Sincronizar contas" (`list-orgs`) popula as orgs da Perfecting.
 2. **Importar** → cole texto ou suba PDF/DOCX (`extract-text`) → "Salvar rascunho".
 3. **Biblioteca** → "Enviar para Perfecting" (individual ou lote) escolhendo a conta.
-   O status muda `rascunho → enviando → exportado` (realtime). Exportado vira link para a Perfecting.
+   O status muda `rascunho → enviando → completando → exportado` (realtime). Exportado vira link
+   para a Perfecting. "Completando" é o fechamento do roleplay (rubricas, conteúdo por etapa,
+   comportamento) — se algo não entrar no prompt do comprador, o rascunho para em **incompleto**
+   com a lista do que faltou e um botão para completar.
 4. **Novo cenário desta oferta** reusa a oferta; no export para a mesma conta, oferta/contexto
    são **pulados** (pontes `*_perfecting_ids`).
 

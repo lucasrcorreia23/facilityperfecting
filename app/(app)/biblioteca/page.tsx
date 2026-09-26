@@ -29,18 +29,21 @@ import { createClient } from "@/app/lib/supabase/client";
 import {
   deleteDraft,
   invokeAddPersonas,
+  invokeCompleteRoleplay,
   invokeExport,
   invokeExportPlaybook,
   listConnections,
   listDrafts,
   listPersonaCatalog,
   listPlaybooks,
+  pollCompletion,
   pollPlaybookRun,
   setDraftConnection,
   updateDraftScenario,
 } from "@/app/lib/db";
 import type {
   CaseSetupPersonas,
+  CompletionStepName,
   Connection,
   DraftRow,
   GenerationMode,
@@ -76,6 +79,19 @@ const PLAYBOOK_STAGE_LABELS: Record<string, string> = {
   // O acompanhamento ao vivo caiu (limite da Edge Function); progresso vem da contagem.
   tracking_remote: "gerando na Perfecting",
   step_objections: "objeções por etapa",
+  done: "concluído",
+};
+
+/** Estágios do fechamento do roleplay avulso (completion_run.stage). */
+const COMPLETION_STAGE_LABELS: Record<string, string> = {
+  queued: "na fila",
+  pre_gate: "conferindo o roleplay",
+  methodology: "vinculando metodologia",
+  rubrics: "gerando rubricas",
+  step_knowledge: "gerando conteúdo por etapa",
+  behavior_guidance: "gerando comportamento",
+  update_prompt: "montando prompt",
+  gate: "conferindo o prompt",
   done: "concluído",
 };
 
@@ -121,6 +137,7 @@ export default function BibliotecaPage() {
 
   // modal de detalhes do envio (progresso/erro cru de um rascunho)
   const [detailDraftId, setDetailDraftId] = useState<string | null>(null);
+  const [completing, setCompleting] = useState<Set<string>>(new Set());
 
   // modal de confirmação (envio)
   const [confirm, setConfirm] = useState<ConfirmConfig | null>(null);
@@ -210,9 +227,11 @@ export default function BibliotecaPage() {
   function startSend(ids: string[], force = false) {
     if (ids.length === 0) return;
     if (!force) {
+      // "completing"/"incomplete" também têm roleplay na conta: reenviar duplicaria.
+      // O caminho de um incompleto é "Completar", não um envio novo.
       const blocked = ids.filter((id) => {
         const s = drafts.find((x) => x.id === id)?.status;
-        return s === "exported" || s === "exporting";
+        return s === "exported" || s === "exporting" || s === "completing" || s === "incomplete";
       });
       if (blocked.length > 0) {
         addToast({
@@ -392,6 +411,50 @@ export default function BibliotecaPage() {
     return () => clearInterval(timer);
   }, [runningPlaybookIds, refresh]);
 
+  const runningCompletionIds = useMemo(
+    () =>
+      drafts
+        .filter((d) => d.status === "completing")
+        .map((d) => d.id)
+        .sort()
+        .join(","),
+    [drafts],
+  );
+
+  /** Reconcilia fechamentos em andamento (cobre invocação morta no ~150s). */
+  useEffect(() => {
+    if (!runningCompletionIds) return;
+    const ids = runningCompletionIds.split(",");
+    const timer = setInterval(() => {
+      void (async () => {
+        for (const id of ids) await pollCompletion(id).catch(() => {});
+        await refresh();
+      })();
+    }, 20_000);
+    return () => clearInterval(timer);
+  }, [runningCompletionIds, refresh]);
+
+  /** Retoma o fechamento de um roleplay que ficou incompleto. */
+  async function completeDraft(draftId: string) {
+    setCompleting((prev) => new Set(prev).add(draftId));
+    try {
+      await invokeCompleteRoleplay(draftId, { force: true });
+      await refresh();
+    } catch (err) {
+      addToast({
+        title: "Falha ao completar",
+        description: err instanceof Error ? err.message : String(err),
+        color: "danger",
+      });
+    } finally {
+      setCompleting((prev) => {
+        const next = new Set(prev);
+        next.delete(draftId);
+        return next;
+      });
+    }
+  }
+
   if (loading) return <LoadingView label="Carregando biblioteca…" />;
 
   return (
@@ -453,7 +516,10 @@ export default function BibliotecaPage() {
                   </td>
                   <td className="px-4 py-4">
                     <div className="flex items-center gap-1.5">
-                      {d.status === "exported" && d.perfecting_case_setup_id ? (
+                      {d.perfecting_case_setup_id &&
+                      (d.status === "exported" ||
+                        d.status === "incomplete" ||
+                        d.status === "completing") ? (
                         <a
                           href={perfectingRoleplayUrl(
                             d.connection?.environment,
@@ -469,7 +535,7 @@ export default function BibliotecaPage() {
                       ) : (
                         <StatusBadge status={d.status} />
                       )}
-                      {(d.playbook_run || d.error_detail) && (
+                      {(d.playbook_run || d.completion_run || d.error_detail) && (
                         <button
                           type="button"
                           onClick={() => setDetailDraftId(d.id)}
@@ -481,6 +547,27 @@ export default function BibliotecaPage() {
                         </button>
                       )}
                     </div>
+                    {!isPlaybookDraft(d) && d.status === "completing" && (
+                      <div className="mt-1 text-xs text-slate-500">
+                        {COMPLETION_STAGE_LABELS[d.completion_run?.stage ?? "queued"] ??
+                          "completando"}
+                      </div>
+                    )}
+                    {!isPlaybookDraft(d) && d.status === "incomplete" && (
+                      <div className="mt-1 flex flex-col items-start gap-1 text-xs">
+                        <span className="text-amber-700">
+                          faltou: {(d.completion_run?.missing ?? []).join(", ") || "—"}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => void completeDraft(d.id)}
+                          disabled={completing.has(d.id)}
+                          className="underline text-slate-500 hover:text-slate-700 disabled:opacity-50"
+                        >
+                          {completing.has(d.id) ? "completando…" : "Completar"}
+                        </button>
+                      </div>
+                    )}
                     {isPlaybookDraft(d) && (
                       <div className="mt-1 text-xs text-slate-500">
                         {d.status === "exporting" ? (
@@ -925,6 +1012,74 @@ export default function BibliotecaPage() {
                     <Textarea
                       value={JSON.stringify(detailDraft.error_detail, null, 2)}
                       minRows={4}
+                      isReadOnly
+                      radius="sm"
+                      variant="bordered"
+                      classNames={{ input: "font-mono text-xs" }}
+                    />
+                  </div>
+                )}
+
+                {detailDraft.completion_run && (
+                  <div className="flex flex-col gap-2">
+                    <p className="text-sm font-medium text-slate-700">Fechamento do roleplay</p>
+                    <table className="w-full text-sm">
+                      <tbody>
+                        {(
+                          [
+                            "methodology",
+                            "rubrics",
+                            "step_knowledge",
+                            "behavior_guidance",
+                            "update_prompt",
+                          ] as CompletionStepName[]
+                        ).map((step) => {
+                          const st = detailDraft.completion_run!.steps?.[step];
+                          return (
+                            <tr key={step} className="border-b border-slate-100 last:border-0">
+                              <td className="py-1.5 pr-3 text-slate-700">
+                                {COMPLETION_STAGE_LABELS[step] ?? step}
+                              </td>
+                              <td className="py-1.5 pr-3 text-slate-500">
+                                {st?.status ?? "pendente"}
+                                {(st?.attempts ?? 0) > 1 ? ` (${st!.attempts} tentativas)` : ""}
+                              </td>
+                              <td className="py-1.5 text-xs text-slate-400">
+                                {(() => {
+                                  const detail = st?.detail as
+                                    | { skip_reason?: string; error?: string }
+                                    | undefined;
+                                  return detail?.skip_reason ?? detail?.error ?? "";
+                                })()}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                    {(detailDraft.completion_run.missing?.length ?? 0) > 0 && (
+                      <div className="flex flex-col gap-1 rounded-sm bg-amber-50 p-3 text-sm text-amber-800">
+                        <p className="font-medium">Não entrou no prompt do comprador</p>
+                        <ul className="list-disc pl-4">
+                          {detailDraft.completion_run.missing!.map((m, i) => (
+                            <li key={i}>{m}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {(detailDraft.completion_run.warnings?.length ?? 0) > 0 && (
+                      <div className="flex flex-col gap-1 rounded-sm bg-slate-50 p-3 text-sm text-slate-600">
+                        <p className="font-medium">Avisos do fechamento</p>
+                        <ul className="list-disc pl-4">
+                          {detailDraft.completion_run.warnings!.map((w, i) => (
+                            <li key={i}>{w}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    <Textarea
+                      value={JSON.stringify(detailDraft.completion_run, null, 2)}
+                      minRows={6}
                       isReadOnly
                       radius="sm"
                       variant="bordered"

@@ -1,9 +1,21 @@
 /** Tipos do domínio do produto (espelham o schema Postgres em supabase/migrations). */
 
-export type DraftStatus = "draft" | "exporting" | "exported" | "error";
+/**
+ * "completing" = o roleplay existe na Perfecting, mas o fechamento (rubricas,
+ * conteúdo por etapa, comportamento) ainda está rodando.
+ * "incomplete" = fechou faltando algo no prompt do comprador. Não é erro: o
+ * roleplay é utilizável, só está pior do que o envio prometeu.
+ */
+export type DraftStatus =
+  | "draft"
+  | "exporting"
+  | "completing"
+  | "exported"
+  | "incomplete"
+  | "error";
 export type SourceType = "paste" | "file";
 export type ExportJobState = "queued" | "running" | "done" | "error";
-export type ExportStep = "offer" | "context" | "case_setup";
+export type ExportStep = "offer" | "context" | "context_content" | "persona" | "case_setup";
 
 export interface Connection {
   id: string;
@@ -116,6 +128,58 @@ export interface Methodology {
   slug: string;
   description: string;
   application_case: string;
+}
+
+// ── Fechamento do roleplay avulso (espelha _shared/roleplay-completion.ts) ──
+
+export type CompletionStepName =
+  | "methodology"
+  | "rubrics"
+  | "step_knowledge"
+  | "behavior_guidance"
+  | "update_prompt";
+
+export interface CompletionStepState {
+  status: "pending" | "running" | "done" | "skipped" | "failed";
+  attempts: number;
+  started_at?: string | null;
+  finished_at?: string | null;
+  detail?: unknown;
+}
+
+/** Flags do prompt que o comprador vai usar, remontado pela Perfecting. */
+export interface RolePlayPromptGate {
+  case_setup_id: number;
+  prompt: string;
+  has_persona: boolean;
+  has_persona_company: boolean;
+  has_tone: boolean;
+  has_behavior_guidance: boolean;
+  has_prior_knowledge: boolean;
+  has_conversation_history: boolean;
+  has_knowledge_blocks: boolean;
+  has_objections: boolean;
+  has_difficulty_level: boolean;
+  persona_randomly_selected: boolean;
+}
+
+export interface CompletionRun {
+  case_setup_id: number;
+  context_id?: number | null;
+  persona_id?: number | null;
+  methodology_id?: number | null;
+  methodology_slug?: string | null;
+  difficulty_level_id?: number | null;
+  objections_seeded?: boolean;
+  stage?: CompletionStepName | "queued" | "pre_gate" | "gate" | "done";
+  steps: Partial<Record<CompletionStepName, CompletionStepState>>;
+  gate?: RolePlayPromptGate | null;
+  /** O que não entrou no prompt do comprador. Vazio = roleplay completo. */
+  missing?: string[];
+  warnings?: string[];
+  attempt_round?: number;
+  started_at: string;
+  finished_at?: string | null;
 }
 
 /** Etapa do playbook — cada uma vira um roleplay na implementação. */
@@ -349,6 +413,8 @@ export interface RoleplayDraft {
   // Modo playbook: N roleplays num rascunho só (perfecting_case_setup_id guarda
   // o primeiro, por compatibilidade; a lista completa fica aqui).
   playbook_run: PlaybookRun | null;
+  /** Modo metodologia: progresso e veredito do fechamento (complete-roleplay). */
+  completion_run: CompletionRun | null;
   error_detail: Record<string, unknown> | null;
   created_by: string | null;
   created_at: string;
@@ -376,6 +442,8 @@ export interface AppSettings {
   id: string;
   default_difficulty: string | null;
   default_call_context_slug: string | null;
+  /** Metodologia padrão dos envios avulsos — slug, resolvido no ambiente de destino. */
+  default_methodology_slug: string | null;
   environment: string;
   default_user_group_id: number | null;
   weight_prompt: number;

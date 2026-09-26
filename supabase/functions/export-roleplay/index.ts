@@ -2,6 +2,8 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 import { corsHeaders, json } from "../_shared/cors.ts";
 import { requireUser } from "../_shared/auth.ts";
 import { authenticateConnection, resolveOfferContext } from "../_shared/destination.ts";
+import { invokeFunction } from "../_shared/invoke.ts";
+import type { CompletionRun } from "../_shared/roleplay-completion.ts";
 import {
   applyContextContent,
   type GuardrailSeed,
@@ -12,6 +14,7 @@ import {
   createCaseSetup,
   createPersona,
   DIFFICULTY_LEVEL_IDS,
+  difficultyLevelIdFor,
   generateCaseSetup,
   generatePersonaFromContext,
   getCaseSetup,
@@ -23,6 +26,7 @@ import {
   type PerfectingEnv,
   PerfectingError,
   resolveCallContextTypeId,
+  resolveMethodologyId,
   setCaseSetupPersona,
   truncateForApi,
 } from "../_shared/perfecting.ts";
@@ -93,8 +97,13 @@ async function attachProdPersona(
 /**
  * Exporta um rascunho para a org de destino na Perfecting.
  * Fluxo: superadmin login → login_as_user → offer → context → (persona HML) → case_setup
- * → (persona PROD).
+ * → (persona PROD) → complete-roleplay.
  * Reuso por conexão: pula offer/context se já existe id na ponte. Idempotente.
+ *
+ * O case_setup/create sozinho não fecha o roleplay: rubricas, conteúdo por etapa e
+ * comportamento são outros endpoints (minutos de IA, não cabem aqui). Por isso o
+ * rascunho termina em "completing" e quem o marca como exportado — ou incompleto —
+ * é o gate da complete-roleplay.
  */
 async function exportDraft(draftId: string): Promise<{ caseSetupId: number }> {
   const { data: draft, error } = await db
@@ -109,7 +118,7 @@ async function exportDraft(draftId: string): Promise<{ caseSetupId: number }> {
   // Defaults globais (app_settings) — usados quando o draft não traz scenario.
   const { data: settings } = await db
     .from("app_settings")
-    .select("default_difficulty, default_call_context_slug")
+    .select("default_difficulty, default_call_context_slug, default_methodology_slug")
     .eq("created_by", draft.created_by)
     .maybeSingle();
 
@@ -142,6 +151,25 @@ async function exportDraft(draftId: string): Promise<{ caseSetupId: number }> {
   // dificuldade: scenario → default global → "medium"; sempre easy/medium/hard.
   const rawDifficulty = draft.scenario?.difficulty ?? settings?.default_difficulty ?? "medium";
   const difficulty = VALID_DIFFICULTIES.has(rawDifficulty) ? rawDifficulty : "medium";
+  // O id explícito é o que garante que roleplay e objeções fiquem no mesmo nível:
+  // o prompt só inclui objeção com difficulty_level_id IGUAL ao do case_setup.
+  const difficultyLevelId = difficultyLevelIdFor(difficulty);
+
+  // metodologia padrão (slug, resolvido no ambiente de destino). Sem ela o roleplay
+  // nasce sem conteúdo por etapa — mas nunca derruba o envio: o fechamento tenta
+  // vincular depois e o gate registra o que faltou.
+  const methodologySlug = settings?.default_methodology_slug ?? null;
+  let methodologyId: number | undefined;
+  if (methodologySlug) {
+    try {
+      methodologyId = await resolveMethodologyId(env, token, methodologySlug);
+      if (methodologyId == null) {
+        console.warn(`export-roleplay[metodologia]: slug "${methodologySlug}" não existe em ${env}`);
+      }
+    } catch (e) {
+      console.warn("export-roleplay[metodologia]: falha ao listar —", String(e));
+    }
+  }
 
   // 2/3) OFFER + CONTEXT (reuso por conexão)
   const { perfectingContextId } = await resolveOfferContext(db, draft, env, token, (step) =>
@@ -223,8 +251,12 @@ async function exportDraft(draftId: string): Promise<{ caseSetupId: number }> {
     perfectingContextId,
     callContextTypeId,
     connection.default_user_group_id ?? null,
-    // omite generate_case_prompt → usa o default da API (true), igual aos exports
-    // normais: a Perfecting monta o case prompt a partir dos nossos campos exatos.
+    {
+      // omite generate_case_prompt → usa o default da API (true), igual aos exports
+      // normais: a Perfecting monta o case prompt a partir dos nossos campos exatos.
+      ...(methodologyId != null && { methodologyIds: [methodologyId] }),
+      ...(difficultyLevelId != null && { difficultyLevelId }),
+    },
   );
 
   // 5) PERSONA PROD
@@ -244,13 +276,34 @@ async function exportDraft(draftId: string): Promise<{ caseSetupId: number }> {
           ...(personaWarning && { persona_warning: personaWarning }),
         }
       : null;
+  // 6) FECHAMENTO — o create só monta a casca do roleplay: rubricas, conteúdo por
+  // etapa e comportamento são outros endpoints, que levam minutos e não cabem nesta
+  // invocação. Vai para "completing" e a complete-roleplay assume daqui; o gate de
+  // lá é quem decide entre "exported" e "incomplete".
+  // O disparo é aqui (e não no fim do lote) porque em PROD a persona só existe
+  // depois do passo 5 — e sem persona nada do que o fechamento gera entra no prompt.
+  const completionRun: CompletionRun = {
+    case_setup_id: caseSetupId,
+    context_id: perfectingContextId,
+    persona_id: personaId,
+    methodology_id: methodologyId ?? null,
+    methodology_slug: methodologySlug,
+    difficulty_level_id: difficultyLevelId ?? null,
+    objections_seeded: seedObjections.length > 0,
+    stage: "queued",
+    steps: {},
+    attempt_round: 1,
+    started_at: new Date().toISOString(),
+    finished_at: null,
+  };
   await db
     .from("roleplay_drafts")
     .update({
-      status: "exported",
+      status: "completing",
       perfecting_case_setup_id: caseSetupId,
       elevenlabs_agent_id,
       error_detail: personaWarning ? detail : null,
+      completion_run: completionRun,
     })
     .eq("id", draftId);
   await setJob({
@@ -258,6 +311,7 @@ async function exportDraft(draftId: string): Promise<{ caseSetupId: number }> {
     finished_at: new Date().toISOString(),
     error_detail: detail,
   });
+  invokeFunction("complete-roleplay", { draftId });
 
   return { caseSetupId };
 }

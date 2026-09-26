@@ -18,6 +18,7 @@ import {
   loginSuperadmin,
   parsePerfectingEnv,
   type PerfectingEnv,
+  perfectingEntityExists,
   PerfectingError,
   truncateForApi,
 } from "./perfecting.ts";
@@ -58,6 +59,11 @@ export async function authenticateConnection(
 /**
  * Garante offer + context na org de destino, reusando por conexão via as pontes
  * `offer_perfecting_ids` / `context_perfecting_ids`. Idempotente.
+ *
+ * O id de uma ponte só é reusado se ainda existir na Perfecting: quem apaga o
+ * roleplay lá pode levar a oferta junto, e reusar o id derruba o envio com 404.
+ * Ponte vencida é apagada e a oferta/contexto é recriada; oferta recriada invalida
+ * também a ponte do contexto (ele pertencia à oferta apagada).
  */
 export async function resolveOfferContext(
   db: SupabaseClient,
@@ -81,9 +87,19 @@ export async function resolveOfferContext(
     .eq("offer_id", offer.id)
     .eq("connection_id", connId)
     .maybeSingle();
-  if (offerBridge?.perfecting_offer_id) {
-    perfectingOfferId = offerBridge.perfecting_offer_id;
+  const bridgedOfferId: number | null = offerBridge?.perfecting_offer_id ?? null;
+  const offerAlive =
+    bridgedOfferId != null && (await perfectingEntityExists(env, token, "offer", bridgedOfferId));
+  if (bridgedOfferId != null && offerAlive) {
+    perfectingOfferId = bridgedOfferId;
   } else {
+    if (bridgedOfferId != null) {
+      await db
+        .from("offer_perfecting_ids")
+        .delete()
+        .eq("offer_id", offer.id)
+        .eq("connection_id", connId);
+    }
     // Material colado pode ter dezenas de milhares de caracteres — sem isso o
     // /offer/generate da Perfecting quebra com 500 genérico (ver truncateForApi).
     const description = truncateForApi(offer.general_description);
@@ -134,9 +150,21 @@ export async function resolveOfferContext(
         .eq("connection_id", connId)
         .maybeSingle()
     : { data: null };
-  if (ctxBridge?.perfecting_context_id) {
-    perfectingContextId = ctxBridge.perfecting_context_id;
+  const bridgedContextId: number | null = ctxBridge?.perfecting_context_id ?? null;
+  const contextAlive =
+    bridgedContextId != null &&
+    offerAlive &&
+    (await perfectingEntityExists(env, token, "context", bridgedContextId));
+  if (bridgedContextId != null && contextAlive) {
+    perfectingContextId = bridgedContextId;
   } else {
+    if (bridgedContextId != null && localContextId) {
+      await db
+        .from("context_perfecting_ids")
+        .delete()
+        .eq("context_id", localContextId)
+        .eq("connection_id", connId);
+    }
     const gen = await generateContext(
       env,
       token,

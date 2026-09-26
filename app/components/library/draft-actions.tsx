@@ -79,8 +79,10 @@ export function DraftActions({
     }
   }
 
-  const busy = draft.status === "exporting";
-  const exported = draft.status === "exported";
+  const busy = draft.status === "exporting" || draft.status === "completing";
+  // "incomplete" também já tem roleplay na conta: enviar de novo duplicaria, em vez
+  // de completar o que ficou faltando (isso é o botão "Completar", na linha do item).
+  const exported = draft.status === "exported" || draft.status === "incomplete";
 
   return (
     <>
@@ -197,9 +199,16 @@ export function DraftActions({
           <ModalHeader>Reenviar rascunho já exportado?</ModalHeader>
           <ModalBody>
             <p className="text-sm text-slate-500">
-              Este rascunho já foi exportado para a Perfecting. Reenviar vai criar um{" "}
+              Este rascunho já tem roleplay na Perfecting. Reenviar vai criar um{" "}
               <strong>roleplay duplicado</strong> na conta de destino. Para variar o cenário sem
-              duplicar, prefira <strong>&quot;Novo cenário desta oferta&quot;</strong>.
+              duplicar, prefira <strong>&quot;Novo cenário desta oferta&quot;</strong>
+              {draft.status === "incomplete" ? (
+                <>
+                  ; para resolver o que faltou neste, use <strong>&quot;Completar&quot;</strong> na
+                  linha do item
+                </>
+              ) : null}
+              .
             </p>
           </ModalBody>
           <ModalFooter>

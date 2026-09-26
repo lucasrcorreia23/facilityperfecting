@@ -1378,11 +1378,18 @@ export default function CriacaoPage() {
         errorMessage={sendError}
         onRetry={runSend}
         onClose={() => setSendModalOpen(false)}
-        {...(isPlaybookMode && {
-          sendingLabel: "Iniciando a implementação do playbook…",
-          successTitle: "Implementação iniciada!",
-          successHint: "Acompanhe o progresso na Biblioteca…",
-        })}
+        {...(isPlaybookMode
+          ? {
+              sendingLabel: "Iniciando a implementação do playbook…",
+              successTitle: "Implementação iniciada!",
+              successHint: "Acompanhe o progresso na Biblioteca…",
+            }
+          : {
+              // O roleplay já existe na conta, mas comportamento e conteúdo por
+              // etapa são gerados depois do envio e levam alguns minutos.
+              successTitle: "Roleplay criado!",
+              successHint: "Completando o roleplay — acompanhe na Biblioteca…",
+            })}
       />
     </div>
   );
