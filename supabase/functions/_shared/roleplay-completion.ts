@@ -19,11 +19,15 @@
  */
 import { applyDossierToCaseSetup, hasDossier, type RoleplayDossier } from "./dossier.ts";
 import {
+  deleteCaseSetupRubric,
   generateCaseSetupRubrics,
   generateStepKnowledge,
   getRolePlayPrompt,
   listCaseSetupMethodologies,
   listCaseSetupRubrics,
+  listCaseSetupRubricsFull,
+  listFeedbackRubricTypes,
+  listMethodologySteps,
   listStepKnowledge,
   PerfectingError,
   type PerfectingEnv,
@@ -37,19 +41,25 @@ export type CompletionStepName =
   | "rubrics"
   | "step_knowledge"
   | "dossier"
+  | "buyer_rubrics"
   | "behavior_guidance"
   | "update_prompt";
 
 /**
- * Ordem do ciclo: vínculo → rubricas → conteúdo → dossiê → comportamento → prompt.
- * O dossiê vem depois do que a IA gera (para sobrescrever) e antes do comportamento
- * (que é montado a partir das rubricas).
+ * Ordem do ciclo: vínculo → rubricas → conteúdo → dossiê → rubricas do comprador
+ * fora → comportamento → prompt. O dossiê vem depois do que a IA gera (para
+ * sobrescrever) e antes do comportamento (que é montado a partir das rubricas).
+ *
+ * As rubricas do comprador (tipo roleplay_rubric) saem ANTES do comportamento: o
+ * backend as gera a partir do método do vendedor, e o comportamento montado com elas
+ * leva o SPIN e o "objetivo do treino" para o # Comportamento do comprador.
  */
 export const COMPLETION_STEPS: CompletionStepName[] = [
   "methodology",
   "rubrics",
   "step_knowledge",
   "dossier",
+  "buyer_rubrics",
   "behavior_guidance",
   "update_prompt",
 ];
@@ -59,6 +69,7 @@ export const COMPLETION_STEP_LABELS: Record<CompletionStepName, string> = {
   rubrics: "gerando rubricas",
   step_knowledge: "gerando conteúdo por etapa",
   dossier: "aplicando o dossiê do material",
+  buyer_rubrics: "tirando as rubricas do comprador",
   behavior_guidance: "gerando comportamento",
   update_prompt: "montando prompt",
 };
@@ -107,11 +118,32 @@ const STEP_STALE_MS: Record<CompletionStepName, number> = {
   // nº de personas × (nº de etapas + 1) chamadas de IA em série.
   step_knowledge: 12 * 60_000,
   dossier: 3 * 60_000,
+  buyer_rubrics: 2 * 60_000,
   behavior_guidance: 5 * 60_000,
   update_prompt: 2 * 60_000,
 };
 
 const TERMINAL: CompletionStepStatus[] = ["done", "skipped", "failed"];
+
+/**
+ * Conteúdo por etapa que a Perfecting ainda está gerando (a chamada estourou o
+ * tempo, ou há menos itens que etapas). Em vez de esperar o stale inteiro, confere
+ * a contagem a cada PENDING_PROBE_MS, até MAX_PENDING_PROBES vezes.
+ */
+const PENDING_PROBE_MS = 90_000;
+export const MAX_PENDING_PROBES = 8;
+
+interface PendingDetail {
+  pending: true;
+  probes: number;
+  items?: number;
+  expected?: number | null;
+}
+
+function pendingOf(state: CompletionStepState | undefined): PendingDetail | null {
+  const d = state?.detail as Partial<PendingDetail> | undefined;
+  return d?.pending === true ? { probes: 0, ...d } as PendingDetail : null;
+}
 
 export type CompletionDecision =
   | { kind: "run"; step: CompletionStepName }
@@ -131,10 +163,14 @@ export function nextCompletionStep(run: CompletionRun, now = Date.now()): Comple
     if (TERMINAL.includes(state.status)) continue;
 
     // running: só volta a rodar se morreu (stale) e ainda há tentativa.
+    const pending = pendingOf(state);
     const startedAt = state.started_at ? Date.parse(state.started_at) : NaN;
-    const stale = Number.isFinite(startedAt) && now - startedAt > STEP_STALE_MS[step];
+    const staleMs = pending ? PENDING_PROBE_MS : STEP_STALE_MS[step];
+    const stale = Number.isFinite(startedAt) && now - startedAt > staleMs;
     if (!stale) return { kind: "wait", step };
-    if (state.attempts >= MAX_STEP_ATTEMPTS) return { kind: "give_up", step };
+    if (pending ? pending.probes >= MAX_PENDING_PROBES : state.attempts >= MAX_STEP_ATTEMPTS) {
+      return { kind: "give_up", step };
+    }
     return { kind: "run", step };
   }
   return { kind: "gate" };
@@ -287,9 +323,16 @@ async function precheck(
   }
 
   if (step === "step_knowledge") {
-    const blocks = await listStepKnowledge(env, token, caseSetupId);
-    if (blocks.length > 0) {
-      finishStep(run, step, "done", { blocks: blocks.length });
+    const { items, expected } = await stepKnowledgeCount(env, token, run);
+    if (items > 0 && (expected == null || items >= expected)) {
+      finishStep(run, step, "done", { blocks: items, expected });
+      return true;
+    }
+    // A Perfecting ainda está gerando: confere de novo mais tarde, sem rechamar
+    // (o generate devolveria "already_has_items" e o conteúdo sairia pela metade).
+    const pending = pendingOf(run.steps[step]);
+    if (pending || items > 0) {
+      markPending(run, items, expected, pending ? pending.probes + 1 : 0);
       return true;
     }
     return false;
@@ -329,14 +372,27 @@ async function execute(
   }
 
   if (step === "step_knowledge") {
-    const result = await generateStepKnowledge(env, token, [caseSetupId]);
-    const first = result.results[0];
-    if (result.items_generated > 0) {
-      finishStep(run, step, "done", result);
-      return;
+    let result;
+    try {
+      result = await generateStepKnowledge(env, token, [caseSetupId]);
+    } catch (e) {
+      // Estourou o nosso tempo, não o deles: a Perfecting continua gerando. Falhar
+      // aqui deixava o dossiê rodar sobre metade das etapas (briefing vazio no resto).
+      if (e instanceof PerfectingError && e.status === 408) {
+        markPending(run, 0, null, 0);
+        return;
+      }
+      throw e;
     }
-    // O conteúdo já estava lá (idempotência por case_setup do lado deles).
-    if (first?.skip_reason === "already_has_items") {
+    const first = result.results[0];
+    // O conteúdo já estava lá (idempotência por case_setup do lado deles) — pode
+    // ser de uma geração ainda em andamento: só conclui com todas as etapas.
+    if (result.items_generated > 0 || first?.skip_reason === "already_has_items") {
+      const { items, expected } = await stepKnowledgeCount(env, token, run);
+      if (expected != null && items < expected) {
+        markPending(run, items, expected, 0);
+        return;
+      }
       finishStep(run, step, "done", result);
       return;
     }
@@ -358,9 +414,22 @@ async function execute(
       caseSetupId,
       run.persona_id ?? null,
       run.dossier,
+      run.methodology_id ?? null,
     );
     for (const w of warnings) addCompletionWarning(run, w);
     finishStep(run, step, "done", detail);
+    return;
+  }
+
+  if (step === "buyer_rubrics") {
+    const removed = await deleteBuyerRubrics(env, token, caseSetupId);
+    // Comportamento já montado com elas (run antigo, ou "Completar" de novo): refaz.
+    if (removed > 0) {
+      for (const later of ["behavior_guidance", "update_prompt"] as const) {
+        if (run.steps[later]) run.steps[later] = { status: "pending", attempts: 0 };
+      }
+    }
+    finishStep(run, step, "done", { removed });
     return;
   }
 
@@ -373,6 +442,61 @@ async function execute(
   // update_prompt: determinístico, sem IA — só deixa a coluna coerente.
   const result = await runCaseSetupRepairStep(env, token, caseSetupId, "update_prompt");
   finishStep(run, step, "done", result);
+}
+
+/**
+ * Quantos itens de conteúdo por etapa o comprador deste roleplay já tem, e quantos
+ * deveria ter (um por etapa da metodologia). `expected` null = não deu para saber.
+ */
+async function stepKnowledgeCount(
+  env: PerfectingEnv,
+  token: string,
+  run: CompletionRun,
+): Promise<{ items: number; expected: number | null }> {
+  const items = (await listStepKnowledge(env, token, run.case_setup_id, run.persona_id ?? null)).length;
+  let expected: number | null = null;
+  try {
+    const methodologyId = run.methodology_id ??
+      (await listCaseSetupMethodologies(env, token, run.case_setup_id))[0]?.id;
+    if (methodologyId != null) {
+      const steps = await listMethodologySteps(env, token, methodologyId);
+      if (Array.isArray(steps) && steps.length > 0) expected = steps.length;
+    }
+  } catch {
+    // Sem a contagem esperada, qualquer conteúdo conta como pronto (comportamento antigo).
+  }
+  return { items, expected };
+}
+
+function markPending(
+  run: CompletionRun,
+  items: number,
+  expected: number | null,
+  probes: number,
+): void {
+  const detail: PendingDetail = { pending: true, probes, items, expected };
+  setStep(run, "step_knowledge", {
+    status: "running",
+    started_at: new Date().toISOString(),
+    finished_at: null,
+    detail,
+  });
+}
+
+/** Apaga as rubricas do comprador (roleplay_rubric) do roleplay. Devolve quantas. */
+export async function deleteBuyerRubrics(
+  env: PerfectingEnv,
+  token: string,
+  caseSetupId: number,
+): Promise<number> {
+  const types = await listFeedbackRubricTypes(env, token);
+  const buyerType = types.find((t) => t.name === "roleplay_rubric")?.id;
+  if (buyerType == null) throw new Error("tipo roleplay_rubric não encontrado");
+  const buyer = (await listCaseSetupRubricsFull(env, token, caseSetupId)).filter(
+    (r) => r.feedback_rubric_type_id === buyerType,
+  );
+  for (const r of buyer) await deleteCaseSetupRubric(env, token, caseSetupId, r.id);
+  return buyer.length;
 }
 
 export interface GateContext {

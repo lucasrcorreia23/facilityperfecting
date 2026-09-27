@@ -8,6 +8,7 @@ import {
   applyDossierToPersona,
   applyPortfolio,
   createDossierPersona,
+  dossierLeakWarnings,
   hasDossier,
   type PortfolioIds,
   type RoleplayDossier,
@@ -33,7 +34,7 @@ import {
   overlayVerbatimOnGenerated,
   type PerfectingEnv,
   PerfectingError,
-  resolveCallContextTypeId,
+  matchCallContextSlug,
   resolveMethodologyId,
   setCaseSetupPersona,
   truncateForApi,
@@ -143,17 +144,21 @@ async function exportDraft(draftId: string): Promise<{ caseSetupId: number }> {
   // 1) login + impersonação no ambiente da conexão (hml | prod)
   const { env, token } = await authenticateConnection(connection);
 
-  // resolver call_context: scenario do draft → default global → 1º disponível.
+  // resolver call_context: scenario do draft → default global. Sem fallback: cair no
+  // 1º da lista (Cold Call) mudava o tipo da ligação em silêncio — o comprador de uma
+  // retomada atendia como se nunca tivesse ouvido falar do vendedor.
   // ⚠️ /role_plays/generate QUEBRA (500) se call_context OU dificuldade faltarem.
   const callContextSlug =
     draft.scenario?.call_context_slug ?? settings?.default_call_context_slug ?? null;
-  let callContextTypeId = await resolveCallContextTypeId(env, token, callContextSlug);
+  const callContexts = await listCallContexts(env, token);
+  const callContextTypeId = matchCallContextSlug(callContexts, callContextSlug)?.id;
   if (callContextTypeId == null) {
-    const all = await listCallContexts(env, token);
-    callContextTypeId = all[0]?.id;
-  }
-  if (callContextTypeId == null) {
-    throw new PerfectingError(422, "nenhum call_context disponível na Perfecting");
+    throw new PerfectingError(422, {
+      message: callContextSlug
+        ? `tipo de chamada "${callContextSlug}" não existe em ${env}: escolha outro no rascunho`
+        : "rascunho sem tipo de chamada: escolha um antes de enviar",
+      available: callContexts.map((c) => c.slug),
+    });
   }
 
   // dificuldade: scenario → default global → "medium"; sempre easy/medium/hard.
@@ -166,7 +171,9 @@ async function exportDraft(draftId: string): Promise<{ caseSetupId: number }> {
   // metodologia padrão (slug, resolvido no ambiente de destino). Sem ela o roleplay
   // nasce sem conteúdo por etapa — mas nunca derruba o envio: o fechamento tenta
   // vincular depois e o gate registra o que faltou.
-  const methodologySlug = settings?.default_methodology_slug ?? null;
+  // O rascunho pode trazer a sua (tipo de ligação diferente pede metodologia diferente).
+  const methodologySlug =
+    draft.scenario?.methodology_slug ?? settings?.default_methodology_slug ?? null;
   let methodologyId: number | undefined;
   if (methodologySlug) {
     try {
@@ -199,6 +206,7 @@ async function exportDraft(draftId: string): Promise<{ caseSetupId: number }> {
   let portfolio: PortfolioIds | null = null;
   let personaId: number | null = null;
   if (dossier) {
+    dossierWarnings.push(...dossierLeakWarnings(dossier));
     await setJob({ step: "portfolio" });
     portfolio = await applyPortfolio(env, token, perfectingOfferId, dossier);
     dossierWarnings.push(...portfolio.warnings);

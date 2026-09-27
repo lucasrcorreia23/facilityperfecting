@@ -63,6 +63,8 @@ export type GenerationMode = "methodology" | "playbook";
 
 export interface ScenarioConfig {
   call_context_slug?: string | null;
+  /** Metodologia deste rascunho; sem ela vale a padrão de Configurações. */
+  methodology_slug?: string | null;
   difficulty?: string | null;
   skill?: string | null;
   objective?: string | null;
@@ -146,7 +148,12 @@ export interface RoleplayDossier {
     dores: Array<{ dor: string; revelacao: DossierRevealLevel; detalhe: string }>;
     produtos: Array<{ produto: string; postura: string }>;
   };
-  conhecimento: { previo: string; fatos: DossierTopic[]; briefing: DossierTopic[] };
+  conhecimento: {
+    previo: string;
+    /** `etapa` = momento da conversa em que o fato surge (1-4; 0 = qualquer). */
+    fatos: Array<DossierTopic & { etapa?: number }>;
+    briefing: DossierTopic[];
+  };
   abertura: string[];
   rubricas: Array<{ criterio: string; descricao: string; dica: string }>;
 }
@@ -181,6 +188,7 @@ export type CompletionStepName =
   | "rubrics"
   | "step_knowledge"
   | "dossier"
+  | "buyer_rubrics"
   | "behavior_guidance"
   | "update_prompt";
 

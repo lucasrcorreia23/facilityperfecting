@@ -90,6 +90,7 @@ const COMPLETION_STAGE_LABELS: Record<string, string> = {
   rubrics: "gerando rubricas",
   step_knowledge: "gerando conteúdo por etapa",
   dossier: "aplicando o dossiê do material",
+  buyer_rubrics: "tirando as rubricas do comprador",
   behavior_guidance: "gerando comportamento",
   update_prompt: "montando prompt",
   gate: "conferindo o prompt",
@@ -1032,6 +1033,7 @@ export default function BibliotecaPage() {
                             "rubrics",
                             "step_knowledge",
                             "dossier",
+                            "buyer_rubrics",
                             "behavior_guidance",
                             "update_prompt",
                           ] as CompletionStepName[]

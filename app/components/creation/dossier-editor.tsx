@@ -4,6 +4,7 @@ import { Input, Select, SelectItem, Textarea } from "@heroui/react";
 import { PlusIcon, XMarkIcon } from "@heroicons/react/24/outline";
 import { managerSelectClassNames } from "@/app/lib/select-classnames";
 import type { DossierRevealLevel, DossierTopic, RoleplayDossier } from "@/app/lib/types";
+import { describeLeak, findHiddenPainLeaks } from "@/supabase/functions/_shared/dossier-leaks";
 
 const REVEAL_OPTIONS: Array<{ key: DossierRevealLevel; label: string; hint: string }> = [
   { key: "superficie", label: "Superfície", hint: "diz logo no início" },
@@ -108,6 +109,7 @@ export function DossierEditor({
 }) {
   const d = value;
   const persona = d.persona;
+  const leaks = findHiddenPainLeaks(d);
   const setPersona = (patch: Partial<RoleplayDossier["persona"]>) =>
     onChange({ ...d, persona: { ...persona, ...patch } });
 
@@ -389,6 +391,15 @@ export function DossierEditor({
           variant="bordered"
           minRows={2}
         />
+        {leaks.length > 0 && (
+          <div className="flex flex-col gap-1 rounded-sm bg-amber-50 p-3 text-xs text-amber-800">
+            <p className="font-medium">Dor escondida que parece repetida no que o comprador sabe de saída:</p>
+            {leaks.map((l, i) => (
+              <p key={i}>{describeLeak(l)}</p>
+            ))}
+            <p>Tire do prévio ou do fato, ou mude a camada da dor para superfície.</p>
+          </div>
+        )}
         <p className="text-xs font-medium text-slate-600">Fatos que revela se perguntado</p>
         <TopicList
           label="Fato"

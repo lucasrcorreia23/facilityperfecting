@@ -94,7 +94,15 @@ async function runSteps(draftId: string): Promise<void> {
           status: "failed",
           finished_at: new Date().toISOString(),
         };
-        addCompletionWarning(run, `${decision.step}: sem resposta depois de 2 tentativas`);
+        const d = run.steps[decision.step]?.detail as
+          | { pending?: boolean; items?: number; expected?: number | null }
+          | undefined;
+        addCompletionWarning(
+          run,
+          d?.pending
+            ? `${decision.step}: a Perfecting não terminou (${d.items ?? 0} de ${d.expected ?? "?"} etapas)`
+            : `${decision.step}: sem resposta depois de 2 tentativas`,
+        );
         await saveRun(draftId, run);
         continue;
       }

@@ -342,6 +342,17 @@ export async function createTrackingClient(name: string): Promise<{ id: string }
   return { id: data.id };
 }
 
+/** Metodologia padrão de Configurações (slug), usada quando o rascunho não escolhe. */
+export async function getDefaultMethodologySlug(): Promise<string | null> {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from("app_settings")
+    .select("default_methodology_slug")
+    .maybeSingle();
+  if (error) throw error;
+  return data?.default_methodology_slug ?? null;
+}
+
 /** Pesos globais (por usuário) dos critérios do IPR; default 30/40/30. */
 export async function getAppWeights(): Promise<CriteriaWeights> {
   const supabase = createClient();

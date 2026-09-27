@@ -327,6 +327,16 @@ export interface CallContextType {
   stage?: string;
 }
 
+/** Acha o tipo de chamada pelo slug (derivado do nome, igual em HML e PROD). */
+export function matchCallContextSlug(
+  items: CallContextType[],
+  slug: string | null | undefined,
+): CallContextType | undefined {
+  if (!slug || !slug.trim()) return undefined;
+  const target = slug.trim().toLowerCase();
+  return items.find((c) => c.slug === target);
+}
+
 /** Lista os tipos de call_context (achatados) para alimentar a UI/fallback. */
 export async function listCallContexts(
   env: PerfectingEnv,
@@ -1460,6 +1470,22 @@ export async function listMethodologies(
     }));
 }
 
+/** Etapas da metodologia, na ordem do catálogo (a ordem da conversa). */
+export async function listMethodologySteps(
+  env: PerfectingEnv,
+  token: string,
+  methodologyId: number,
+): Promise<Array<{ id: number; name: string; order: number | null }>> {
+  const data = await getJson<unknown>(`${rp(env)}/methodologies/${methodologyId}/steps`, token);
+  return records(data)
+    .filter((r) => typeof r.id === "number")
+    .map((r) => ({
+      id: r.id as number,
+      name: String(r.name ?? ""),
+      order: typeof r.order === "number" ? r.order : null,
+    }));
+}
+
 /** Acha a metodologia pelo slug (derivado do nome, como em call_contexts). */
 export function matchMethodologySlug(
   items: Methodology[],
@@ -2178,12 +2204,20 @@ export async function deleteCaseSetupRubric(
   await deleteReq(`${rp(env)}/case_setup_${caseSetupId}/feedback_rubrics/${rubricId}`, token);
 }
 
+export interface StepKnowledgeItem {
+  id: number;
+  title: string;
+  persona_id: number | null;
+  /** Etapas do catálogo a que o item pertence (uma por metodologia aplicada). */
+  methodology_step_ids: number[];
+}
+
 export async function listStepKnowledgeItems(
   env: PerfectingEnv,
   token: string,
   caseSetupId: number,
   personaId?: number | null,
-): Promise<Array<{ id: number; title: string; persona_id: number | null }>> {
+): Promise<StepKnowledgeItem[]> {
   const qs = personaId != null ? `?persona_id=${personaId}` : "";
   const data = await getJson<unknown>(`${rp(env)}/case_setup_${caseSetupId}/step_knowledge${qs}`, token);
   return records(data)
@@ -2192,6 +2226,9 @@ export async function listStepKnowledgeItems(
       id: r.id as number,
       title: String(r.title ?? ""),
       persona_id: typeof r.persona_id === "number" ? r.persona_id : null,
+      methodology_step_ids: Array.isArray(r.methodology_step_ids)
+        ? r.methodology_step_ids.filter((n): n is number => typeof n === "number")
+        : [],
     }));
 }
 

@@ -31,3 +31,6 @@ yarn-error.log*
 # supabase
 /supabase/.branches
 /supabase/.temp
+
+# Material interno do cliente FIESC: não entra no repositório
+docs/FIESC-B2G/*.pdf

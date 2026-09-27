@@ -7,11 +7,15 @@ vi.mock("./perfecting.ts", () => ({
       super(`HTTP ${status}`);
     }
   },
+  deleteCaseSetupRubric: vi.fn(),
   generateCaseSetupRubrics: vi.fn(),
   generateStepKnowledge: vi.fn(),
   getRolePlayPrompt: vi.fn(),
   listCaseSetupMethodologies: vi.fn(),
   listCaseSetupRubrics: vi.fn(),
+  listCaseSetupRubricsFull: vi.fn(),
+  listFeedbackRubricTypes: vi.fn(),
+  listMethodologySteps: vi.fn(),
   listStepKnowledge: vi.fn(),
   runCaseSetupRepairStep: vi.fn(),
   setCaseSetupMethodologies: vi.fn(),
@@ -22,6 +26,7 @@ import {
   type CompletionRun,
   evaluateGate,
   finalStatusFor,
+  MAX_PENDING_PROBES,
   MAX_STEP_ATTEMPTS,
   nextCompletionStep,
   runCompletionStep,
@@ -84,6 +89,7 @@ describe("nextCompletionStep", () => {
         rubrics: { status: "done", attempts: 1 },
         step_knowledge: { status: "done", attempts: 1 },
         dossier: { status: "skipped", attempts: 0 },
+        buyer_rubrics: { status: "done", attempts: 1 },
         behavior_guidance: { status: "done", attempts: 1 },
         update_prompt: { status: "done", attempts: 1 },
       },
@@ -184,6 +190,146 @@ describe("runCompletionStep — metodologia", () => {
     expect(api.setCaseSetupMethodologies).toHaveBeenCalledWith("hml", "t", 160, [7]);
     expect(run.steps.methodology?.status).toBe("done");
     expect(run.steps.methodology?.attempts).toBe(1);
+  });
+});
+
+describe("rubricas do comprador", () => {
+  const types = [
+    { id: 1, name: "seller_rubric" },
+    { id: 2, name: "roleplay_rubric" },
+  ];
+
+  it("saem antes de o comportamento ser montado", () => {
+    const order = ["dossier", "buyer_rubrics", "behavior_guidance", "update_prompt"];
+    const run = makeRun({
+      steps: {
+        methodology: { status: "done", attempts: 1 },
+        rubrics: { status: "done", attempts: 1 },
+        step_knowledge: { status: "done", attempts: 1 },
+        dossier: { status: "done", attempts: 1 },
+      },
+    });
+    expect(nextCompletionStep(run)).toEqual({ kind: "run", step: order[1] });
+  });
+
+  it("apaga só as do comprador (roleplay_rubric), nunca as do vendedor", async () => {
+    api.listFeedbackRubricTypes.mockResolvedValue(types);
+    api.listCaseSetupRubricsFull.mockResolvedValue([
+      { id: 10, feedback_rubric_type_id: 1, statement: "vendedor" },
+      { id: 11, feedback_rubric_type_id: 2, statement: "comprador A" },
+      { id: 12, feedback_rubric_type_id: 2, statement: "comprador B" },
+    ]);
+    const run = makeRun();
+    await runCompletionStep("hml", "t", run, "buyer_rubrics", save);
+    expect(api.deleteCaseSetupRubric.mock.calls.map((c) => c[3])).toEqual([11, 12]);
+    expect(run.steps.buyer_rubrics).toMatchObject({ status: "done", detail: { removed: 2 } });
+  });
+
+  it("se o comportamento já tinha sido montado com elas, manda refazer comportamento e prompt", async () => {
+    api.listFeedbackRubricTypes.mockResolvedValue(types);
+    api.listCaseSetupRubricsFull.mockResolvedValue([
+      { id: 11, feedback_rubric_type_id: 2, statement: "comprador" },
+    ]);
+    const run = makeRun({
+      steps: {
+        behavior_guidance: { status: "done", attempts: 1 },
+        update_prompt: { status: "done", attempts: 1 },
+      },
+    });
+    await runCompletionStep("hml", "t", run, "buyer_rubrics", save);
+    expect(run.steps.behavior_guidance?.status).toBe("pending");
+    expect(run.steps.update_prompt?.status).toBe("pending");
+  });
+
+  it("sem o tipo roleplay_rubric, falha com aviso e não apaga nada", async () => {
+    api.listFeedbackRubricTypes.mockResolvedValue([{ id: 1, name: "seller_rubric" }]);
+    const run = makeRun();
+    await runCompletionStep("hml", "t", run, "buyer_rubrics", save);
+    expect(run.steps.buyer_rubrics?.status).toBe("failed");
+    expect(api.deleteCaseSetupRubric).not.toHaveBeenCalled();
+  });
+});
+
+describe("conteúdo por etapa ainda em geração na Perfecting", () => {
+  const linked = { methodology: { status: "done" as const, attempts: 1 } };
+  const fourSteps = [1, 2, 3, 4].map((id) => ({ id, name: `E${id}`, order: id }));
+
+  it("timeout do generate não vira failed: fica esperando a Perfecting", async () => {
+    api.listStepKnowledge.mockResolvedValue([]);
+    api.generateStepKnowledge.mockRejectedValue(new perfecting.PerfectingError(408, "timeout"));
+    const run = makeRun({ steps: { ...linked } });
+    await runCompletionStep("hml", "t", run, "step_knowledge", save);
+    expect(run.steps.step_knowledge?.status).toBe("running");
+    expect(run.steps.step_knowledge?.detail).toMatchObject({ pending: true, probes: 0 });
+    expect(run.warnings ?? []).toHaveLength(0);
+  });
+
+  it("confere de novo em ~90s, não depois do stale inteiro", () => {
+    const startedAt = "2026-09-20T12:00:00.000Z";
+    const run = makeRun({
+      steps: {
+        ...linked,
+        rubrics: { status: "done", attempts: 1 },
+        step_knowledge: {
+          status: "running",
+          attempts: 1,
+          started_at: startedAt,
+          detail: { pending: true, probes: 0 },
+        },
+      },
+    });
+    const t0 = Date.parse(startedAt);
+    expect(nextCompletionStep(run, t0 + 30_000).kind).toBe("wait");
+    expect(nextCompletionStep(run, t0 + 120_000)).toEqual({ kind: "run", step: "step_knowledge" });
+    (run.steps.step_knowledge!.detail as { probes: number }).probes = MAX_PENDING_PROBES;
+    expect(nextCompletionStep(run, t0 + 120_000)).toEqual({ kind: "give_up", step: "step_knowledge" });
+  });
+
+  it("com menos itens que etapas, não fecha nem rechama: espera mais", async () => {
+    api.listStepKnowledge.mockResolvedValue([{ id: 1 }, { id: 2 }]);
+    api.listMethodologySteps.mockResolvedValue(fourSteps);
+    const run = makeRun({
+      steps: {
+        ...linked,
+        step_knowledge: { status: "running", attempts: 1, detail: { pending: true, probes: 2 } },
+      },
+    });
+    await runCompletionStep("hml", "t", run, "step_knowledge", save);
+    expect(api.generateStepKnowledge).not.toHaveBeenCalled();
+    expect(run.steps.step_knowledge?.status).toBe("running");
+    expect(run.steps.step_knowledge?.detail).toMatchObject({ probes: 3, items: 2, expected: 4 });
+  });
+
+  it("fecha quando a contagem bate com as etapas", async () => {
+    api.listStepKnowledge.mockResolvedValue([{ id: 1 }, { id: 2 }, { id: 3 }, { id: 4 }]);
+    api.listMethodologySteps.mockResolvedValue(fourSteps);
+    const run = makeRun({
+      persona_id: 5,
+      steps: {
+        ...linked,
+        step_knowledge: { status: "running", attempts: 1, detail: { pending: true, probes: 1 } },
+      },
+    });
+    await runCompletionStep("hml", "t", run, "step_knowledge", save);
+    expect(run.steps.step_knowledge?.status).toBe("done");
+    expect(api.listStepKnowledge).toHaveBeenCalledWith("hml", "t", 160, 5);
+  });
+
+  it("already_has_items com geração pela metade fica esperando", async () => {
+    api.listStepKnowledge.mockResolvedValueOnce([]).mockResolvedValueOnce([{ id: 1 }]);
+    api.listMethodologySteps.mockResolvedValue(fourSteps);
+    api.generateStepKnowledge.mockResolvedValue({
+      case_setups_processed: 0,
+      case_setups_skipped: 1,
+      items_generated: 0,
+      results: [
+        { case_setup_id: 160, status: "skipped", skip_reason: "already_has_items", items_created: 0 },
+      ],
+    });
+    const run = makeRun({ steps: { ...linked } });
+    await runCompletionStep("hml", "t", run, "step_knowledge", save);
+    expect(run.steps.step_knowledge?.status).toBe("running");
+    expect(run.steps.step_knowledge?.detail).toMatchObject({ pending: true, items: 1, expected: 4 });
   });
 });
 

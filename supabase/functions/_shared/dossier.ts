@@ -7,7 +7,9 @@ import {
   deleteCaseSetupRubric,
   generateDossierPersona,
   listCaseSetupRubricsFull,
+  listCaseSetupMethodologies,
   listFeedbackRubricTypes,
+  listMethodologySteps,
   listOfferPains,
   listOfferProducts,
   listStepKnowledgeItems,
@@ -18,8 +20,10 @@ import {
   type PersonaProductLinkInput,
   setPersonaOfferProducts,
   setPersonaPains,
+  type StepKnowledgeItem,
   updatePersona,
 } from "./perfecting.ts";
+import { describeLeak, findHiddenPainLeaks } from "./dossier-leaks.ts";
 
 /**
  * Dossiê do comprador: o material de UM roleplay avulso quando ele descreve uma conta
@@ -69,6 +73,11 @@ export interface DossierTopic {
   texto: string;
 }
 
+/** Fato que o comprador revela; `etapa` = momento da conversa (0 = qualquer). */
+export interface DossierFact extends DossierTopic {
+  etapa?: number;
+}
+
 export interface DossierRubric {
   criterio: string;
   descricao: string;
@@ -91,10 +100,10 @@ export interface RoleplayDossier {
     produtos: DossierPersonaProduct[];
   };
   conhecimento: {
-    /** O que o comprador já sabe ao atender (igual em todas as etapas da metodologia). */
+    /** O que o comprador já sabe ao atender (só na 1ª etapa da metodologia). */
     previo: string;
     /** Fatos que ele revela se perguntado. */
-    fatos: DossierTopic[];
+    fatos: DossierFact[];
     /** O que o vendedor vê antes da call (dados de CRM). Nada de dor escondida. */
     briefing: DossierTopic[];
   };
@@ -335,12 +344,100 @@ export async function applyDossierToPersona(
   return warnings;
 }
 
+/** Avisos de dor escondida repetida no prévio ou nos fatos (heurístico, não bloqueia). */
+export function dossierLeakWarnings(d: RoleplayDossier): string[] {
+  return findHiddenPainLeaks(d).map((l) => `dossiê: ${describeLeak(l)}`);
+}
+
+/**
+ * Fatos em todas as etapas. O backend de hoje monta a chamada inteira só com a 1ª
+ * etapa, então um fato gravado nas etapas 2–4 some dela.
+ * TODO: reverter quando o backend (PR A) ler todas as etapas na chamada inteira.
+ */
+export const FACTS_IN_ALL_STEPS = true;
+
+export type StepKnowledgePatch = { itemId: number; patch: Record<string, unknown> };
+
+/**
+ * O que gravar em cada item de conhecimento por etapa. É uma call só, contada em
+ * etapas: o prévio vai só na 1ª (repetido, o comprador "lembra" dele a cada etapa) e
+ * cada fato vai na etapa do momento em que surge (`etapa`, pela ordem da metodologia;
+ * 0 = todas). Abertura e briefing valem em todas: servem ao treino de uma etapa só.
+ *
+ * Sem a ordem das etapas (itens sem etapa ou catálogo vazio) volta ao antigo — tudo
+ * em todos — e `ordered` sai false para quem chama avisar.
+ */
+export function planStepKnowledge(
+  d: RoleplayDossier,
+  items: StepKnowledgeItem[],
+  steps: Array<{ id: number; order: number | null; name?: string }>,
+  factsInAllSteps: boolean = FACTS_IN_ALL_STEPS,
+): { patches: StepKnowledgePatch[]; ordered: boolean } {
+  const previo = d.conhecimento.previo.trim();
+  const opening = d.abertura.map((s) => s.trim()).filter(Boolean);
+  const briefing = topicsToRecord(d.conhecimento.briefing);
+  const sorted = [...steps].sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9) || a.id - b.id);
+  const position = new Map(sorted.map((s, i) => [s.id, i + 1]));
+  // O backend às vezes grava o item sem a etapa (visto no Need-Payoff do SPIN em
+  // HML): aí a etapa sai do título, que começa com o nome dela.
+  const byTitle = (title: string) => {
+    const t = norm(title);
+    const i = sorted.findIndex((s) => s.name && t.startsWith(norm(s.name)));
+    return i >= 0 ? i + 1 : null;
+  };
+  const stepOf = (it: StepKnowledgeItem) => {
+    const found = it.methodology_step_ids.map((id) => position.get(id)).filter((n): n is number => n != null);
+    return found.length > 0 ? Math.min(...found) : byTitle(it.title);
+  };
+  const ordered = sorted.length > 0 && items.length > 0 && items.every((it) => stepOf(it) != null);
+
+  const patches = items.map((it) => {
+    // Sem ordem, toda etapa é tratada como a 1ª (comportamento antigo).
+    const step = ordered ? stepOf(it)! : 1;
+    const last = sorted.length || 1;
+    const facts = topicsToRecord(
+      d.conhecimento.fatos.filter((f) => {
+        const e = typeof f.etapa === "number" ? f.etapa : 0;
+        return factsInAllSteps || !ordered || e <= 0 || Math.min(e, last) === step;
+      }),
+    );
+    const patch: Record<string, unknown> = {
+      knowledge_prompt_details: { ...facts, Regra: NO_INVENTED_NUMBERS },
+      ...(Object.keys(briefing).length > 0 && { prior_knowledge_user_briefing: briefing }),
+      ...(opening.length > 0 && { buyer_agent_first_messages: opening }),
+    };
+    // Etapa seguinte: prévio vazio, para não sobrar a "ligação anterior" que a IA inventa.
+    if (step === 1) {
+      if (previo) patch.prior_knowledge_prompt = previo;
+    } else {
+      patch.prior_knowledge_prompt = "";
+    }
+    return { itemId: it.id, patch };
+  });
+  return { patches, ordered };
+}
+
+/** Etapas da metodologia do roleplay; vazio se não der para saber (nunca lança). */
+async function methodologyStepsOf(
+  env: PerfectingEnv,
+  token: string,
+  caseSetupId: number,
+  methodologyId: number | null,
+): Promise<Array<{ id: number; order: number | null; name?: string }>> {
+  try {
+    const id = methodologyId ?? (await listCaseSetupMethodologies(env, token, caseSetupId))[0]?.id;
+    return id != null ? await listMethodologySteps(env, token, id) : [];
+  } catch {
+    return [];
+  }
+}
+
 /**
  * Depois do conteúdo gerado pelo backend: troca o que ele inventou pelo dossiê.
  *  - abertura e critérios de avaliação no case_setup;
  *  - rubricas do vendedor (as geradas saem, entram as do material);
- *  - conhecimento por etapa: mesmo "prévio" e mesmos fatos em todas as etapas (é uma
- *    call só), sem os números e a continuidade entre ligações que a IA inventa.
+ *  - conhecimento por etapa distribuído pelas etapas (planStepKnowledge), sem os
+ *    números e a continuidade entre ligações que a IA inventa.
  * Idempotente. Devolve o que fez e os avisos; nunca lança.
  */
 export async function applyDossierToCaseSetup(
@@ -349,6 +446,7 @@ export async function applyDossierToCaseSetup(
   caseSetupId: number,
   personaId: number | null,
   d: RoleplayDossier,
+  methodologyId: number | null = null,
 ): Promise<{ detail: Record<string, unknown>; warnings: string[] }> {
   const warnings: string[] = [];
   const detail: Record<string, unknown> = {};
@@ -390,23 +488,20 @@ export async function applyDossierToCaseSetup(
     }
   }
 
-  const facts = topicsToRecord(d.conhecimento.fatos);
-  if (d.conhecimento.previo.trim() || Object.keys(facts).length > 0) {
+  if (d.conhecimento.previo.trim() || d.conhecimento.fatos.length > 0) {
     try {
       const items = await listStepKnowledgeItems(env, token, caseSetupId, personaId);
-      const briefing = topicsToRecord(d.conhecimento.briefing);
-      for (const it of items) {
-        await patchStepKnowledge(env, token, caseSetupId, it.id, {
-          ...(d.conhecimento.previo.trim() && { prior_knowledge_prompt: d.conhecimento.previo.trim() }),
-          ...(Object.keys(facts).length > 0 && {
-            knowledge_prompt_details: { ...facts, Regra: NO_INVENTED_NUMBERS },
-          }),
-          ...(Object.keys(briefing).length > 0 && { prior_knowledge_user_briefing: briefing }),
-          ...(opening.length > 0 && { buyer_agent_first_messages: opening }),
-        });
+      const steps = await methodologyStepsOf(env, token, caseSetupId, methodologyId);
+      const { patches, ordered } = planStepKnowledge(d, items, steps);
+      for (const { itemId, patch } of patches) {
+        await patchStepKnowledge(env, token, caseSetupId, itemId, patch);
       }
-      detail.step_knowledge = items.length;
+      detail.step_knowledge = patches.length;
+      detail.step_knowledge_ordered = ordered;
       if (items.length === 0) warnings.push("conhecimento por etapa: nada para reescrever");
+      else if (!ordered) {
+        warnings.push("conhecimento por etapa: sem a ordem das etapas, prévio e fatos foram em todas");
+      }
     } catch (e) {
       warnings.push(`conhecimento por etapa não reescrito: ${messageOf(e)}`);
     }

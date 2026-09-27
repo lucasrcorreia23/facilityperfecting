@@ -35,9 +35,11 @@ import { DossierEditor } from "@/app/components/creation/dossier-editor";
 import {
   createDraftFromText,
   invokeExport,
+  getDefaultMethodologySlug,
   invokeExportPlaybook,
   listCallContexts,
   listConnections,
+  listMethodologies,
   listPlaybookCallTypes,
   listPlaybooks,
   processImport,
@@ -49,11 +51,17 @@ import type {
   GenerationMode,
   GuardrailSeed,
   ImportGap,
+  Methodology,
   ObjectionSeed,
   Playbook,
   PlaybookCallType,
   RoleplayDossier,
 } from "@/app/lib/types";
+
+/** Ligação de abertura de conta: a frio, prospecção ou para passar pela triagem. */
+function isProspectingCall(slug: string): boolean {
+  return /cold|frio|prospec|gatekeeper|triagem/.test(slug);
+}
 
 const GAP_STYLES: Record<ImportGap["severidade"], { label: string; cls: string }> = {
   critico: { label: "Crítico", cls: "bg-red-50 text-red-700" },
@@ -187,6 +195,10 @@ export default function CriacaoPage() {
   const [connections, setConnections] = useState<Connection[]>([]);
   const [callContexts, setCallContexts] = useState<CallContextType[]>([]);
   const [callContextSlug, setCallContextSlug] = useState<string>("");
+  // "" = a metodologia padrão de Configurações.
+  const [methodologySlug, setMethodologySlug] = useState<string>("");
+  const [methodologies, setMethodologies] = useState<Methodology[]>([]);
+  const [defaultMethodologySlug, setDefaultMethodologySlug] = useState<string | null>(null);
   const [generationMode, setGenerationMode] = useState<GenerationMode>("methodology");
   const [playbooks, setPlaybooks] = useState<Playbook[]>([]);
   const [playbookId, setPlaybookId] = useState<string>("");
@@ -270,6 +282,8 @@ export default function CriacaoPage() {
 
   useEffect(() => {
     listConnections().then(setConnections).catch(() => {});
+    listMethodologies().then(setMethodologies).catch(() => {});
+    getDefaultMethodologySlug().then(setDefaultMethodologySlug).catch(() => {});
     listCallContexts()
       .then(setCallContexts)
       .catch(() =>
@@ -409,6 +423,7 @@ export default function CriacaoPage() {
     setOfferDescription("");
     handleConnectionChange("");
     setCallContextSlug("");
+    setMethodologySlug("");
     setDifficulty("medium");
     setPerfil("");
     setCenarioInstrucoes("");
@@ -555,6 +570,7 @@ export default function CriacaoPage() {
       contextNotes: perfil.trim() || null,
       scenario: {
         call_context_slug: callContextSlug,
+        methodology_slug: !isPlaybookMode ? methodologySlug || null : null,
         difficulty,
         objective: objetivo.trim() || null,
         skill: habilidades.trim() || null,
@@ -1235,6 +1251,32 @@ export default function CriacaoPage() {
               {callContexts.map((c) => (
                 <SelectItem key={c.slug} textValue={c.name}>
                   {c.name} — {c.group}
+                </SelectItem>
+              ))}
+            </Select>
+
+            <Select
+              label="Metodologia"
+              labelPlacement="outside-top"
+              placeholder={
+                defaultMethodologySlug
+                  ? `Padrão de Configurações (${methodologies.find((m) => m.slug === defaultMethodologySlug)?.name ?? defaultMethodologySlug})`
+                  : "Padrão de Configurações (nenhuma definida)"
+              }
+              selectedKeys={methodologySlug ? [methodologySlug] : []}
+              onSelectionChange={(keys) => setMethodologySlug(String(Array.from(keys)[0] ?? ""))}
+              radius="sm"
+              variant="bordered"
+              classNames={managerSelectClassNames}
+              description={
+                isProspectingCall(callContextSlug)
+                  ? "Prospecção e triagem normalmente não seguem metodologia de descoberta, mas o conteúdo por etapa precisa de uma: escolha a mais leve."
+                  : undefined
+              }
+            >
+              {methodologies.map((m) => (
+                <SelectItem key={m.slug} textValue={m.name}>
+                  {m.name}
                 </SelectItem>
               ))}
             </Select>

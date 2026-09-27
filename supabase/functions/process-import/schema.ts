@@ -29,14 +29,21 @@ export function buildSystem(
 }
 
 /**
- * As três fatias em que o schema é pedido, escolhidas para equilibrar o VOLUME DE
- * SAÍDA de cada uma (o que domina o tempo), não por afinidade temática:
- *  - core      → o perfil sozinho é o maior bloco de texto
+ * As fatias em que o schema é pedido, escolhidas para equilibrar o VOLUME DE SAÍDA
+ * de cada uma (o que domina o tempo), não por afinidade temática. Cada fatia é UMA
+ * chamada ao Claude, e ela precisa terminar antes do teto de ~150s da Edge Function
+ * (plano Free: vale também para trabalho em segundo plano). Material rico e todo do
+ * lado do comprador chegou a 16,8k tokens numa fatia só (148,7s). Dividir não perde
+ * nada: o schema final é o mesmo, só chega por mais chamadas em paralelo.
+ *  - core      → oferta e variação das personas
+ *  - profile   → o perfil sozinho, o maior bloco de texto (transcrição fiel)
  *  - objections→ 9-10 objeções com fala e condição de cedência pesam tanto quanto
  *  - scenario  → cenário (que pode ser transcrição integral) e rubricas
+ *  - dossier_*  → o dossiê em duas metades (ver DOSSIER_PARTS)
  */
 export const SCHEMA_PARTS = {
-  core: ["oferta_nome", "oferta_descricao", "perfil", "personas_variacao"],
+  core: ["oferta_nome", "oferta_descricao", "personas_variacao"],
+  profile: ["perfil"],
   // `lacunas` mora aqui, e não em `scenario`, porque vale nos dois modos — é o
   // checklist do que falta no material, e `scenario` é pulável (ver PARTS_FOR_MODE).
   objections: ["objecoes", "guardrails", "lacunas"],
@@ -48,8 +55,20 @@ export const SCHEMA_PARTS = {
     "habilidades",
   ],
   // Só por metodologia: um roleplay = uma conta concreta com um comprador.
-  dossier: ["dossie"],
+  dossier_buyer: ["dossie"],
+  dossier_context: ["dossie"],
 } as const;
+
+/**
+ * Metade do dossiê que cada fatia pede. A 1ª fica com tudo que se referencia pelo
+ * nome (dores[].produto → produtos[].nome, persona.dores[].dor → dores[].titulo,
+ * persona.produtos[].produto → produtos[].nome): separado em chamadas que não se
+ * veem, os nomes deixariam de bater. A 2ª só depende do material.
+ */
+export const DOSSIER_PARTS: Record<"dossier_buyer" | "dossier_context", readonly string[]> = {
+  dossier_buyer: ["produtos", "dores", "persona"],
+  dossier_context: ["conhecimento", "abertura", "rubricas"],
+};
 
 export type SchemaPart = keyof typeof SCHEMA_PARTS;
 
@@ -58,8 +77,11 @@ export type SchemaPart = keyof typeof SCHEMA_PARTS;
  * cópia no front). O dossiê precisa dela porque contraria a regra geral do base: ele
  * também extrai o LADO DO VENDEDOR, que fica separado e nunca chega ao comprador.
  */
+const DOSSIER_NOTE = `NESTA RESPOSTA você preenche só o "dossie" (ou a parte dele indicada abaixo). Exceção à regra "QUEM LÊ ISTO É O COMPRADOR": aqui os campos "produtos", "dores[].produto" e "rubricas" SÃO do lado do vendedor e devem ser extraídos (as soluções que o vendedor deveria conectar a cada dor e os critérios de sucesso da conversa). O envio os guarda separados — o comprador só recebe "persona" (sem nomes de produto) e as dores dele. Por isso o critério de resultado do vendedor (o que o material chama de vitória, parcial, avança/trava, meta da ligação) vai em "rubricas", nunca em "persona.prompt"; e faturamento, histórico de compras e relação comercial com o vendedor vão em "conhecimento.briefing", nunca em "persona.empresa_perfil". Todo o resto continua valendo: fidelidade ao material, nenhum número, data ou pessoa inventados, e o que o material marca como construção de personagem pode ser usado como fato do personagem.`;
+
 export const PART_NOTES: Partial<Record<SchemaPart, string>> = {
-  dossier: `NESTA RESPOSTA você preenche só o "dossie". Exceção à regra "QUEM LÊ ISTO É O COMPRADOR": aqui os campos "produtos", "dores[].produto" e "rubricas" SÃO do lado do vendedor e devem ser extraídos (as soluções que o vendedor deveria conectar a cada dor e os critérios de sucesso da conversa). O envio os guarda separados — o comprador só recebe "persona" (sem nomes de produto) e as dores dele. Todo o resto continua valendo: fidelidade ao material, nenhum número, data ou pessoa inventados, e o que o material marca como construção de personagem pode ser usado como fato do personagem.`,
+  dossier_buyer: `${DOSSIER_NOTE} Nesta resposta, do dossiê, só "produtos", "dores" e "persona"; o resto é pedido à parte.`,
+  dossier_context: `${DOSSIER_NOTE} Nesta resposta, do dossiê, só "conhecimento", "abertura" e "rubricas"; o resto é pedido à parte.`,
 };
 
 const topic = {
@@ -70,6 +92,26 @@ const topic = {
     texto: { type: "string" },
   },
   required: ["titulo", "texto"],
+};
+
+/**
+ * Fato que o comprador revela, com o momento da conversa em que ele costuma surgir.
+ * O envio usa `etapa` para gravar o fato só na etapa da metodologia correspondente
+ * (pela ordem), em vez de repetir tudo em todas.
+ */
+const fact = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    ...topic.properties,
+    etapa: {
+      type: "integer",
+      enum: [0, 1, 2, 3, 4],
+      description:
+        "Momento da conversa em que o fato costuma aparecer: 1 = contexto e situação atual; 2 = problemas e dificuldades; 3 = consequências e impacto; 4 = necessidade, solução, próximo passo; 0 = pode surgir em qualquer momento.",
+    },
+  },
+  required: ["titulo", "texto", "etapa"],
 };
 
 /**
@@ -127,11 +169,15 @@ const DOSSIE_SCHEMA = {
         cargo: { type: "string" },
         area: { type: "string" },
         empresa_nome: { type: "string" },
-        empresa_perfil: { type: "string", description: "Fatos da empresa/conta: segmento, porte, fundação, relação e faturamento com o vendedor." },
+        empresa_perfil: {
+          type: "string",
+          description:
+            "Fatos da empresa como o próprio comprador a descreveria: segmento, porte, localização, fundação, operação. NUNCA faturamento, valores ou histórico de compras com o vendedor nem a relação comercial com ele — isso é dado de CRM e vai em conhecimento.briefing.",
+        },
         prompt: {
           type: "string",
           description:
-            "Prompt do comprador, em segunda pessoa ('Você é…'): quem é, o momento da conversa (quem liga para quem, primeira conversa ou retorno), o que ele sabe e lembra do histórico, pessoas que pode citar, personalidade e tom, e como reage ao que o vendedor faz (o 'avança/trava' do material escrito como reação dele). Inclua o 'segredo do cenário' quando houver, dizendo quando revelar. Sem nome de produto do vendedor, sem critérios de avaliação, sem as dores (elas vão em 'dores').",
+            "Prompt do comprador, em segunda pessoa ('Você é…'): quem é, o momento da conversa (quem liga para quem, primeira conversa ou retorno), o que ele sabe e lembra do histórico, pessoas que pode citar, personalidade e tom, e como reage ao que o vendedor faz, sempre do ponto de vista dele ('se o vendedor citar X, você se abre'; 'se falar de catálogo, você despacha'). Inclua o 'segredo do cenário' quando houver, dizendo quando revelar. PROIBIDO: resultado ou meta do vendedor ('vitória', 'parcial', 'avança', 'trava', 'objetivo do vendedor', o que conta como sucesso) — isso vai em 'rubricas'; faturamento ou valores de compra com o vendedor (vão em conhecimento.briefing); nome de produto do vendedor; critérios de avaliação; as dores (elas vão em 'dores').",
         },
         dores: {
           type: "array",
@@ -147,7 +193,11 @@ const DOSSIE_SCHEMA = {
                 description:
                   "superficie = diz logo no início; sondada = revela se o vendedor perguntar sobre o assunto; oculta = só com pergunta direta e aprofundamento (ex.: 'revela só se…'). Atenção: as sondadas aparecem na ficha do vendedor; o que ele precisa descobrir de verdade (motivo real, segredo) é oculta.",
               },
-              detalhe: { type: "string", description: "Como a dor aparece para ESTE comprador, com a fala do material quando houver." },
+              detalhe: {
+                type: "string",
+                description:
+                  "Como a dor aparece para ESTE comprador, parafraseada em 3ª pessoa ('sente que…', 'reclama de…', 'tem receio de…'). NUNCA fala em 1ª pessoa nem citação entre aspas: o comprador recitaria a frase pronta.",
+              },
             },
             required: ["dor", "revelacao", "detalhe"],
           },
@@ -175,11 +225,21 @@ const DOSSIE_SCHEMA = {
       type: "object",
       additionalProperties: false,
       properties: {
-        previo: { type: "string", description: "O que o comprador já sabe ao atender, em 2-4 frases. Diga se é a primeira conversa." },
-        fatos: { type: "array", description: "Fatos que o comprador revela se perguntado (histórico, operação, pessoas, propostas). Só do material.", items: topic },
+        previo: {
+          type: "string",
+          description:
+            "O que o comprador já sabe ao atender, em 2-4 frases. Diga se é a primeira conversa. Sem dores 'sondada' ou 'oculta' (o comprador as diria logo no início).",
+        },
+        fatos: {
+          type: "array",
+          description:
+            "Fatos que o comprador revela se perguntado (histórico, operação, pessoas, propostas). Só do material. Nada que repita uma dor 'sondada' ou 'oculta': ela já está em persona.dores com a regra de quando revelar, e repetida aqui o comprador a solta na primeira pergunta.",
+          items: fact,
+        },
         briefing: {
           type: "array",
-          description: "O que o VENDEDOR sabe antes da call (dados de CRM da conta). Nada do que o comprador esconde.",
+          description:
+            "O que o VENDEDOR sabe antes da call (dados de CRM da conta): faturamento e histórico de compras com o vendedor, propostas, contatos. Todo dado comercial da conta vai AQUI, não no perfil da empresa. Nada do que o comprador esconde.",
           items: topic,
         },
       },
@@ -193,7 +253,7 @@ const DOSSIE_SCHEMA = {
     rubricas: {
       type: "array",
       description:
-        "LADO DO VENDEDOR: critérios de avaliação do material (critérios de sucesso). Inclua um de conexão dor → ofertas que liste, por dor, as ofertas que o material manda conectar.",
+        "LADO DO VENDEDOR: critérios de avaliação do material (critérios de sucesso), incluindo o resultado esperado da ligação (o que o material chama de vitória/parcial). O tipo de conversa manda: em descoberta, apresentação, proposta ou retorno em que o vendedor deve oferecer solução, inclua um critério de conexão dor → ofertas que liste, por dor, as ofertas que o material manda conectar; em prospecção, ligação a frio ou triagem (quem atende não é o decisor), NÃO cobre oferta — use 'qualificou o decisor e quem participa da decisão' e 'saiu com próximo passo com data'.",
       items: {
         type: "object",
         additionalProperties: false,
@@ -218,8 +278,8 @@ const DOSSIE_SCHEMA = {
  * ~25% do tempo de um material grande, sem perder nada que o envio use.
  */
 export const PARTS_FOR_MODE: Record<"playbook" | "methodology", readonly SchemaPart[]> = {
-  playbook: ["core", "objections"],
-  methodology: ["core", "objections", "scenario", "dossier"],
+  playbook: ["core", "profile", "objections"],
+  methodology: ["core", "profile", "objections", "scenario", "dossier_buyer", "dossier_context"],
 };
 
 /**
@@ -369,9 +429,18 @@ export function buildSchema(
 
   const fields = SCHEMA_PARTS[part] as readonly string[];
   const keep = (k: string) => fields.includes(k);
-  return {
-    ...full,
-    properties: Object.fromEntries(Object.entries(full.properties).filter(([k]) => keep(k))),
-    required: full.required.filter(keep),
-  };
+  const properties: Record<string, unknown> = Object.fromEntries(
+    Object.entries(full.properties).filter(([k]) => keep(k)),
+  );
+  if (part === "dossier_buyer" || part === "dossier_context") {
+    const half = DOSSIER_PARTS[part];
+    properties.dossie = {
+      ...DOSSIE_SCHEMA,
+      properties: Object.fromEntries(
+        Object.entries(DOSSIE_SCHEMA.properties).filter(([k]) => half.includes(k)),
+      ),
+      required: DOSSIE_SCHEMA.required.filter((k) => half.includes(k)),
+    };
+  }
+  return { ...full, properties, required: full.required.filter(keep) };
 }

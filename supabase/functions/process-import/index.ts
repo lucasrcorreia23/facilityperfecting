@@ -25,6 +25,22 @@ class PartError extends Error {
 const num = (v: unknown) => (typeof v === "number" ? v : 0);
 
 /**
+ * Prazo de cada fatia. O teto da Edge Function é ~150s (plano Free); abortar antes
+ * dele é o que permite devolver QUAL fatia estourou, em vez do "Failed to send a
+ * request" genérico que o front recebe quando o gateway derruba a conexão.
+ */
+const PART_DEADLINE_MS = 138_000;
+
+const PART_LABELS: Record<SchemaPart, string> = {
+  core: "oferta",
+  profile: "perfil",
+  objections: "objeções e guardrails",
+  scenario: "cenário",
+  dossier_buyer: "dossiê (comprador e dores)",
+  dossier_context: "dossiê (conhecimento, abertura e rubricas)",
+};
+
+/**
  * Pré-prompt mestre de ingestão (modo NÃO-interativo): extrai → organiza nos blocos
  * que a Perfecting consome → aponta lacunas. Nunca pergunta; sempre devolve o JSON
  * estruturado. Marca "Hipótese Assumida" quando inferir.
@@ -140,7 +156,24 @@ Deno.serve(async (req) => {
 
     /** Uma metade do schema, pedida à Anthropic. Ver buildSchema() sobre o porquê. */
     const askFor = async (part: SchemaPart) => {
+      const startedAt = Date.now();
+      const signal = AbortSignal.timeout(PART_DEADLINE_MS);
+      try {
+        return await askForUntil(part, signal, startedAt);
+      } catch (e) {
+        if (signal.aborted) {
+          console.warn(`process-import[${part}]: passou de ${PART_DEADLINE_MS / 1000}s`);
+          throw new PartError(
+            `A parte "${PART_LABELS[part]}" passou do tempo (${Math.round(PART_DEADLINE_MS / 1000)}s). Nada foi descartado: tente de novo; se repetir, a parte precisa ser dividida.`,
+          );
+        }
+        throw e;
+      }
+    };
+
+    const askForUntil = async (part: SchemaPart, signal: AbortSignal, startedAt: number) => {
       const res = await fetch(ANTHROPIC_URL, {
+        signal,
         method: "POST",
         headers: {
           "x-api-key": ANTHROPIC_API_KEY,
@@ -176,6 +209,12 @@ Deno.serve(async (req) => {
         throw new PartError({ status: res.status, detail: msg });
       }
       const { text: generated, stopReason, usage } = await readAnthropicStream(res);
+      // Tamanho e tempo de cada fatia: é o que diz qual delas cresce e precisa dividir.
+      console.log(
+        `process-import[${part}]: ${num(usage?.output_tokens)} tokens de saída em ${
+          Math.round((Date.now() - startedAt) / 1000)
+        }s`,
+      );
       if (stopReason === "max_tokens") {
         throw new PartError(
           "O material é muito extenso para ser estruturado em uma única resposta. Reduza o conteúdo (ou processe em partes) e tente de novo.",
@@ -193,23 +232,24 @@ Deno.serve(async (req) => {
     // mantém a função abaixo do teto de ~150s do gateway com material grande.
     let parts;
     try {
-      parts = await Promise.all(
-        PARTS_FOR_MODE[mode].map((p: SchemaPart) =>
-          // O dossiê é opcional: se ele falhar, o resto do processamento vale igual.
-          p === "dossier"
-            ? askFor(p).catch((e) => {
-              console.warn("process-import[dossie]:", e instanceof PartError ? JSON.stringify(e.payload) : String(e));
-              return { parsed: {} as Record<string, unknown>, usage: undefined };
-            })
-            : askFor(p)
-        ),
-      );
+      // Todas as fatias são obrigatórias, o dossiê inclusive: uma que falhe derruba o
+      // processamento com o motivo, em vez de devolver o material pela metade.
+      parts = await Promise.all(PARTS_FOR_MODE[mode].map((p: SchemaPart) => askFor(p)));
     } catch (e) {
       if (e instanceof PartError) return json({ ok: false, error: e.payload }, 502);
       throw e;
     }
 
-    const result = Object.assign({}, ...parts.map((p) => p.parsed));
+    // As metades do dossiê chegam cada uma com um `dossie` parcial: junta em vez de
+    // deixar a segunda sobrescrever a primeira.
+    const result: Record<string, unknown> = {};
+    for (const { parsed } of parts) {
+      for (const [k, v] of Object.entries(parsed)) {
+        result[k] = k === "dossie" && result.dossie
+          ? { ...(result.dossie as object), ...(v as object) }
+          : v;
+      }
+    }
     const usage = {
       input_tokens: parts.reduce((t, p) => t + num(p.usage?.input_tokens), 0),
       output_tokens: parts.reduce((t, p) => t + num(p.usage?.output_tokens), 0),
