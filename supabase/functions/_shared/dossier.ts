@@ -350,11 +350,14 @@ export function dossierLeakWarnings(d: RoleplayDossier): string[] {
 }
 
 /**
- * Fatos em todas as etapas. O backend de hoje monta a chamada inteira só com a 1ª
- * etapa, então um fato gravado nas etapas 2–4 some dela.
- * TODO: reverter quando o backend (PR A) ler todas as etapas na chamada inteira.
+ * Fatos em todas as etapas: desligado desde 2026-10-07. Era um contorno enquanto o
+ * backend montava a chamada inteira só com a 1ª etapa; ele já lê todas
+ * (`all_steps=whole_call`, backend `5cf6bdef`). Ligado, o conteúdo de S, P e I saía
+ * idêntico e, numa letra do meio, o comprador recebia os mesmos fatos como "já
+ * disse" (histórico) e "revele se perguntarem" (background) — lab de 07/10/2026,
+ * roleplays 122–125 do HML.
  */
-export const FACTS_IN_ALL_STEPS = true;
+export const FACTS_IN_ALL_STEPS = false;
 
 export type StepKnowledgePatch = { itemId: number; patch: Record<string, unknown> };
 
@@ -362,7 +365,10 @@ export type StepKnowledgePatch = { itemId: number; patch: Record<string, unknown
  * O que gravar em cada item de conhecimento por etapa. É uma call só, contada em
  * etapas: o prévio vai só na 1ª (repetido, o comprador "lembra" dele a cada etapa) e
  * cada fato vai na etapa do momento em que surge (`etapa`, pela ordem da metodologia;
- * 0 = todas). Abertura e briefing valem em todas: servem ao treino de uma etapa só.
+ * 0 = todas). A abertura vai só na 1ª: nas outras a ligação já está em andamento, e o
+ * backend usa uma fala de continuação. O briefing do dossiê (dados de CRM da conta) não
+ * vai para as etapas: ali o campo é "o que já foi conversado" e a tela o mostra como
+ * tal — fica o resumo que o backend gera (2026-10-07).
  *
  * Sem a ordem das etapas (itens sem etapa ou catálogo vazio) volta ao antigo — tudo
  * em todos — e `ordered` sai false para quem chama avisar.
@@ -375,7 +381,6 @@ export function planStepKnowledge(
 ): { patches: StepKnowledgePatch[]; ordered: boolean } {
   const previo = d.conhecimento.previo.trim();
   const opening = d.abertura.map((s) => s.trim()).filter(Boolean);
-  const briefing = topicsToRecord(d.conhecimento.briefing);
   const sorted = [...steps].sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9) || a.id - b.id);
   const position = new Map(sorted.map((s, i) => [s.id, i + 1]));
   // O backend às vezes grava o item sem a etapa (visto no Need-Payoff do SPIN em
@@ -403,8 +408,7 @@ export function planStepKnowledge(
     );
     const patch: Record<string, unknown> = {
       knowledge_prompt_details: { ...facts, Regra: NO_INVENTED_NUMBERS },
-      ...(Object.keys(briefing).length > 0 && { prior_knowledge_user_briefing: briefing }),
-      ...(opening.length > 0 && { buyer_agent_first_messages: opening }),
+      ...(step === 1 && opening.length > 0 && { buyer_agent_first_messages: opening }),
     };
     // Etapa seguinte: prévio vazio, para não sobrar a "ligação anterior" que a IA inventa.
     if (step === 1) {

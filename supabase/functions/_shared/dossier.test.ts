@@ -204,7 +204,7 @@ describe("planStepKnowledge", () => {
     { id: 3, title: "I", persona_id: 5, methodology_step_ids: [33] },
   ];
 
-  it("sem FACTS_IN_ALL_STEPS: põe cada fato na sua etapa, os de etapa 0 em todas, e a abertura em todas", () => {
+  it("padrão: cada fato na sua etapa, os de etapa 0 em todas, abertura só na 1ª e sem briefing", () => {
     const d = makeDossier();
     d.conhecimento.fatos = [
       { titulo: "Geral", texto: "Cooperativa com 3 unidades.", etapa: 0 },
@@ -212,25 +212,27 @@ describe("planStepKnowledge", () => {
       // etapa além da última cai na última
       { titulo: "Próximo passo", texto: "Reunião de diretoria mensal.", etapa: 4 },
     ];
-    const { patches, ordered } = planStepKnowledge(d, items, steps, false);
+    const { patches, ordered } = planStepKnowledge(d, items, steps);
     expect(ordered).toBe(true);
     const facts = patches.map((p) => Object.keys(p.patch.knowledge_prompt_details as object));
     expect(facts[0]).toEqual(["Geral", "Regra"]);
     expect(facts[1]).toEqual(["Geral", "Atraso", "Regra"]);
     expect(facts[2]).toEqual(["Geral", "Próximo passo", "Regra"]);
-    expect(patches.every((p) => (p.patch.buyer_agent_first_messages as string[])[0] === "Oi, tudo bem?")).toBe(true);
-    expect(patches[0].patch.prior_knowledge_user_briefing).toEqual({ Conta: "R$ 35 mil em 2025." });
+    // Etapas 2+ começam com a ligação em andamento: o backend usa uma fala de continuação.
+    expect(patches.map((p) => p.patch.buyer_agent_first_messages)).toEqual([["Oi, tudo bem?"], undefined, undefined]);
+    // O dossiê de CRM não é "o que já foi conversado": fica fora das etapas.
+    expect(patches.every((p) => !("prior_knowledge_user_briefing" in p.patch))).toBe(true);
   });
 
-  it("com FACTS_IN_ALL_STEPS (padrão de hoje): todo fato em todas, prévio só na 1ª", () => {
-    expect(FACTS_IN_ALL_STEPS).toBe(true);
+  it("com factsInAllSteps explícito: todo fato em todas, prévio só na 1ª", () => {
+    expect(FACTS_IN_ALL_STEPS).toBe(false);
     const d = makeDossier();
     d.conhecimento.fatos = [
       { titulo: "Geral", texto: "Cooperativa com 3 unidades.", etapa: 0 },
       { titulo: "Atraso", texto: "Exames atrasados.", etapa: 2 },
       { titulo: "Próximo passo", texto: "Reunião de diretoria mensal.", etapa: 4 },
     ];
-    const { patches } = planStepKnowledge(d, items, steps);
+    const { patches } = planStepKnowledge(d, items, steps, true);
     for (const p of patches) {
       expect(Object.keys(p.patch.knowledge_prompt_details as object)).toEqual([
         "Geral",
