@@ -487,9 +487,9 @@ describe("evaluateGate", () => {
     expect(verdict.missing).toContain("persona");
   });
 
-  it("persona sorteada a cada call só é problema em produção", () => {
+  it("avisa da persona sorteada a cada call nos dois ambientes", () => {
     const flagged = { ...completeGate, persona_randomly_selected: true };
-    expect(evaluateGate(flagged, ctx).warnings).toHaveLength(0);
+    expect(evaluateGate(flagged, ctx).warnings.join()).toContain("não está travada");
     expect(evaluateGate(flagged, { ...ctx, env: "prod" }).warnings.join()).toContain(
       "não está travada",
     );

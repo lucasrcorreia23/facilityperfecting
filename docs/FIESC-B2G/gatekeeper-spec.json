@@ -269,10 +269,6 @@
   "container": {
     "title": "FIESC – Prospecção",
     "description": "Triagem com o gatekeeper e, em seguida, a conversa com o interlocutor de cada conta.",
-    "then_case_setup_ids": [
-      116,
-      117,
-      118
-    ]
+    "then_case_setup_ids": [122, 123, 124]
   }
 }

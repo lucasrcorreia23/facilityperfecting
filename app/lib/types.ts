@@ -145,7 +145,8 @@ export interface RoleplayDossier {
     empresa_nome: string;
     empresa_perfil: string;
     prompt: string;
-    dores: Array<{ dor: string; revelacao: DossierRevealLevel; detalhe: string }>;
+    /** `impacto` = número real do material; ausente em rascunhos antigos. */
+    dores: Array<{ dor: string; revelacao: DossierRevealLevel; detalhe: string; impacto?: string }>;
     produtos: Array<{ produto: string; postura: string }>;
   };
   conhecimento: {

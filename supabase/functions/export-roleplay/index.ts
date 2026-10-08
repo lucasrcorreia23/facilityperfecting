@@ -304,9 +304,10 @@ async function exportDraft(draftId: string): Promise<{ caseSetupId: number }> {
     },
   );
 
-  // 4b) Comprador do dossiê travado no roleplay: sem isso o backend sorteia entre as
-  // personas do contexto, e um contexto reusado por outro rascunho teria duas.
-  if (dossier && env === "hml" && personaId != null) {
+  // 4b) Comprador travado no roleplay (com ou sem dossiê): sem isso o backend sorteia
+  // entre as personas do contexto a cada call, e o contexto é reusado pela conexão —
+  // cada rascunho enviado nele deixa mais uma persona no sorteio.
+  if (env === "hml" && personaId != null) {
     try {
       await setCaseSetupPersona(env, token, caseSetupId, personaId);
     } catch (e) {

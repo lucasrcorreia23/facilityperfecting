@@ -60,6 +60,8 @@ export interface DossierPersonaPain {
   revelacao: RevealLevel;
   /** Como a dor aparece para ESTE comprador (fala, quando revela). */
   detalhe: string;
+  /** Impacto em número real do material; "" = sem número (ausente em rascunhos antigos). */
+  impacto?: string;
 }
 
 export interface DossierPersonaProduct {
@@ -136,6 +138,20 @@ const REVEAL_TEXT: Record<RevealLevel, string> = {
 };
 
 /**
+ * O que o comprador recebe como "No seu caso" da dor: o detalhe e o impacto em número.
+ *
+ * O impacto vai aqui, e não em `offer_pains.quantified_impact`, porque a dor é da
+ * OFERTA e a oferta é reusada entre compradores do mesmo cliente: o número de um
+ * comprador apareceria no prompt do outro.
+ */
+export function personaPainDetail(p: DossierPersonaPain): string {
+  const detail = p.detalhe.trim();
+  const impact = p.impacto?.trim() ?? "";
+  if (!impact) return detail;
+  return detail ? `${detail} Impacto: ${impact}` : `Impacto: ${impact}`;
+}
+
+/**
  * As dores em texto, para o ambiente que ainda não tem as rotas de portfólio (PROD).
  * Sem nome de produto: o comprador não conhece o que o vendedor vende.
  */
@@ -144,7 +160,7 @@ export function painsAsPromptText(d: RoleplayDossier): string {
     .filter((p) => p.dor.trim())
     .map((p) => {
       const pain = d.dores.find((x) => norm(x.titulo) === norm(p.dor));
-      const what = [pain?.descricao, p.detalhe].filter((s) => s?.trim()).join(" ");
+      const what = [pain?.descricao, personaPainDetail(p)].filter((s) => s?.trim()).join(" ");
       return `- ${p.dor}: ${what} (${REVEAL_TEXT[p.revelacao] ?? REVEAL_TEXT.sondada})`;
     });
   if (lines.length === 0) return "";
@@ -254,7 +270,7 @@ export function personaPainLinks(d: RoleplayDossier, ids: PortfolioIds): Persona
     return [{
       offer_pain_id: id,
       reveal_level: REVEAL_TO_API[p.revelacao] ?? "probed",
-      persona_specific_detail: p.detalhe || null,
+      persona_specific_detail: personaPainDetail(p) || null,
     }];
   });
 }

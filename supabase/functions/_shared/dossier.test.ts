@@ -36,6 +36,7 @@ import {
   FACTS_IN_ALL_STEPS,
   hasDossier,
   painsAsPromptText,
+  personaPainDetail,
   personaPainLinks,
   planStepKnowledge,
   type RoleplayDossier,
@@ -97,6 +98,34 @@ describe("painsAsPromptText", () => {
     expect(text).toContain("Apagão de mão de obra");
     expect(text).toContain("desconversa");
     expect(text).not.toContain("Habilita");
+  });
+});
+
+describe("personaPainDetail", () => {
+  it("junta o impacto em número ao detalhe do comprador", () => {
+    expect(
+      personaPainDetail({ dor: "x", revelacao: "sondada", detalhe: "Quem é bom sai.", impacto: "12 vagas abertas" }),
+    ).toBe("Quem é bom sai. Impacto: 12 vagas abertas");
+    expect(personaPainDetail({ dor: "x", revelacao: "sondada", detalhe: "", impacto: "12 vagas" })).toBe(
+      "Impacto: 12 vagas",
+    );
+  });
+
+  it("sem impacto (ou rascunho antigo sem o campo) fica só o detalhe", () => {
+    expect(personaPainDetail({ dor: "x", revelacao: "sondada", detalhe: "Quem é bom sai.", impacto: " " })).toBe(
+      "Quem é bom sai.",
+    );
+    expect(personaPainDetail({ dor: "x", revelacao: "sondada", detalhe: "Quem é bom sai." })).toBe(
+      "Quem é bom sai.",
+    );
+  });
+
+  it("o impacto chega ao comprador pela ligação da persona e pelo texto de PROD", () => {
+    const d = makeDossier();
+    d.persona.dores[0].impacto = "12 vagas de solda abertas há 4 meses";
+    const ids = { supported: true, productIds: new Map(), painIds: new Map([["apagão de mão de obra", 20]]), warnings: [] };
+    expect(personaPainLinks(d, ids)[0].persona_specific_detail).toContain("12 vagas de solda");
+    expect(painsAsPromptText(d)).toContain("12 vagas de solda");
   });
 });
 

@@ -11,7 +11,7 @@
 
 export interface PainLeakInput {
   dores: Array<{ titulo: string; descricao: string }>;
-  persona: { dores: Array<{ dor: string; revelacao: string; detalhe: string }> };
+  persona: { dores: Array<{ dor: string; revelacao: string; detalhe: string; impacto?: string }> };
   conhecimento: { previo: string; fatos: Array<{ titulo: string; texto: string }> };
 }
 
@@ -68,7 +68,7 @@ export function findHiddenPainLeaks(d: PainLeakInput): PainLeak[] {
   for (const p of d.persona.dores) {
     if (p.revelacao !== "sondada" && p.revelacao !== "oculta") continue;
     const pain = d.dores.find((x) => norm(x.titulo) === norm(p.dor));
-    const painTerms = terms([p.dor, pain?.descricao ?? "", p.detalhe].join(" "));
+    const painTerms = terms([p.dor, pain?.descricao ?? "", p.detalhe, p.impacto ?? ""].join(" "));
     if (painTerms.size === 0) continue;
     for (const t of targets) {
       const shared = [...painTerms].filter((w) => t.terms.has(w));

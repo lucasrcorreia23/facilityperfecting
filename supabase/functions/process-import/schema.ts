@@ -198,8 +198,13 @@ const DOSSIE_SCHEMA = {
                 description:
                   "Como a dor aparece para ESTE comprador, parafraseada em 3ª pessoa ('sente que…', 'reclama de…', 'tem receio de…'). NUNCA fala em 1ª pessoa nem citação entre aspas: o comprador recitaria a frase pronta.",
               },
+              impacto: {
+                type: "string",
+                description:
+                  "O impacto desta dor para ESTE comprador em número real do material (custo, prazo, quantidade, percentual), em 3ª pessoa. Ex.: '12 vagas de solda abertas há 4 meses'. String vazia se o material não trouxer número: nunca estime nem arredonde.",
+              },
             },
-            required: ["dor", "revelacao", "detalhe"],
+            required: ["dor", "revelacao", "detalhe", "impacto"],
           },
         },
         produtos: {

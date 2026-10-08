@@ -149,7 +149,7 @@ export function DossierEditor({
       dores: [...d.dores, { titulo: title, descricao: "", produto: "" }],
       persona: {
         ...persona,
-        dores: [...persona.dores, { dor: title, revelacao: "sondada", detalhe: "" }],
+        dores: [...persona.dores, { dor: title, revelacao: "sondada", detalhe: "", impacto: "" }],
       },
     });
   }
@@ -326,6 +326,19 @@ export function DossierEditor({
                 radius="sm"
                 variant="bordered"
                 minRows={2}
+                classNames={field}
+              />
+              <Input
+                label="Impacto em número"
+                labelPlacement="outside"
+                placeholder="Só com número real do cliente. Ex.: 12 vagas abertas há 4 meses"
+                value={p.impacto ?? ""}
+                onValueChange={(v) =>
+                  setPersona({ dores: persona.dores.map((x, j) => (j === i ? { ...x, impacto: v } : x)) })
+                }
+                radius="sm"
+                variant="bordered"
+                size="sm"
                 classNames={field}
               />
             </div>

@@ -255,7 +255,10 @@ for (const p of spec.personas) {
 if (!DRY && contextId != null) {
   // Os três níveis: o prompt usa só objeções do nível escolhido naquela call.
   const levels = DIFFICULTY_LEVEL_IDS;
-  const g = await applyContextContent(ENV, token, contextId, [], spec.guardrails, levels);
+  // Nome de guardrail é único no banco inteiro (todas as orgs): o sufixo do contexto
+  // evita colidir com os de um contexto anterior do mesmo spec.
+  const guardrails = spec.guardrails.map((g) => ({ ...g, nome: `${g.nome} · ctx ${contextId}` }));
+  const g = await applyContextContent(ENV, token, contextId, [], guardrails, levels);
   log(`✓ guardrails: ${g.guardrails_created} criados, ${g.guardrails_skipped} já existiam`);
   g.warnings.forEach(warn);
   for (const p of spec.personas) {

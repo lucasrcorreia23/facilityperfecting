@@ -535,7 +535,7 @@ export function evaluateGate(gate: RolePlayPromptGate, ctx: GateContext): GateVe
   if (!gate.has_prior_knowledge) warnings.push("sem # Conhecimento Prévio");
   if (!gate.has_tone) warnings.push("sem # Tone");
   if (!gate.has_persona_company) warnings.push("sem # Ambiente (empresa da persona)");
-  if (ctx.env === "prod" && gate.persona_randomly_selected) {
+  if (gate.persona_randomly_selected) {
     warnings.push("a persona não está travada no roleplay (sorteio a cada call)");
   }
 
