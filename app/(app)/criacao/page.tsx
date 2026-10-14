@@ -554,6 +554,16 @@ export default function CriacaoPage() {
       addToast({ title: "Escolha o tipo de chamada", color: "warning" });
       return false;
     }
+    // Sem metodologia o roleplay nasce sem conteúdo por etapa: a cola cai nos
+    // critérios do case_setup e o comprador no conhecimento prévio genérico.
+    if (!methodologySlug && !defaultMethodologySlug) {
+      addToast({
+        title: "Escolha a metodologia",
+        description: "Não há metodologia padrão em Configurações.",
+        color: "warning",
+      });
+      return false;
+    }
     return true;
   }
 

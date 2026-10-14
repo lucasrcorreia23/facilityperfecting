@@ -16,6 +16,7 @@ vi.mock("./perfecting.ts", () => ({
   listStepKnowledgeItems: vi.fn(),
   patchCaseSetup: vi.fn(),
   patchStepKnowledge: vi.fn(),
+  setCaseSetupPriorKnowledge: vi.fn(),
   setPersonaOfferProducts: vi.fn(),
   setPersonaPains: vi.fn(),
   updatePersona: vi.fn(),
@@ -189,7 +190,14 @@ describe("applyDossierToCaseSetup", () => {
     expect(warnings).toEqual([]);
     expect(mocked.patchCaseSetup.mock.calls[0][3]).toMatchObject({
       buyer_agent_first_messages: ["Oi, tudo bem?"],
+      // A cola da chamada mostra este campo: só o critério, sem o gabarito.
+      salesperson_evaluation_rubric_criteria: ["Agendamento"],
     });
+    expect(mocked.createCaseSetupRubric.mock.calls[0][3]).toMatchObject({
+      statement: "Agendamento",
+      description: "Reunião com data.",
+    });
+    expect(mocked.setCaseSetupPriorKnowledge).toHaveBeenCalledWith("hml", "t", 99, ["Retorno da visita."]);
     expect(mocked.deleteCaseSetupRubric).toHaveBeenCalledTimes(1);
     expect(mocked.deleteCaseSetupRubric).toHaveBeenCalledWith("hml", "t", 99, 100);
     expect(mocked.createCaseSetupRubric).toHaveBeenCalledTimes(1);
@@ -201,6 +209,15 @@ describe("applyDossierToCaseSetup", () => {
     expect(byItem[7].prior_knowledge_prompt).toBe("Retorno da visita.");
     expect(byItem[8].prior_knowledge_prompt).toBe("");
     expect(byItem[7].knowledge_prompt_details).toMatchObject({ Propostas: "NR-13 parada." });
+  });
+
+  it("sem prévio no dossiê, apaga o conhecimento prévio gerado pelo backend", async () => {
+    mocked.listFeedbackRubricTypes.mockResolvedValue([{ id: 1, name: "seller_rubric" }]);
+    mocked.listCaseSetupRubricsFull.mockResolvedValue([]);
+    const d = makeDossier();
+    d.conhecimento = { previo: "  ", fatos: [], briefing: [] };
+    await applyDossierToCaseSetup("hml", "t", 99, 5, d);
+    expect(mocked.setCaseSetupPriorKnowledge).toHaveBeenCalledWith("hml", "t", 99, []);
   });
 
   it("sem a ordem das etapas, volta a copiar tudo e avisa", async () => {

@@ -933,6 +933,25 @@ export async function setCaseSetupPersona(
   );
 }
 
+/**
+ * Reescreve o `buyer_prior_knowledge` do case_setup. O PATCH não aceita o campo,
+ * então vai pelo PUT (merge parcial, mesmo cuidado com `generate_case_prompt` de
+ * `setCaseSetupPersona`). É o que a cola mostra em "O que {persona} já sabe" e o
+ * que o prompt do comprador usa quando a etapa não tem conhecimento próprio.
+ */
+export async function setCaseSetupPriorKnowledge(
+  env: PerfectingEnv,
+  token: string,
+  caseSetupId: number,
+  items: string[],
+): Promise<void> {
+  await putJson(
+    `${rp(env)}/case_setup_${caseSetupId}?generate_case_prompt=false`,
+    token,
+    { buyer_prior_knowledge: items },
+  );
+}
+
 /** Quais personas um roleplay aceita, já resolvido da árvore do catálogo. */
 export interface CaseSetupPersonas {
   case_setup_id: number;

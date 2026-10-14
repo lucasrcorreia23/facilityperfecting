@@ -18,6 +18,7 @@ import {
   type PerfectingEnv,
   type PersonaPainLinkInput,
   type PersonaProductLinkInput,
+  setCaseSetupPriorKnowledge,
   setPersonaOfferProducts,
   setPersonaPains,
   type StepKnowledgeItem,
@@ -455,6 +456,7 @@ async function methodologyStepsOf(
 /**
  * Depois do conteúdo gerado pelo backend: troca o que ele inventou pelo dossiê.
  *  - abertura e critérios de avaliação no case_setup;
+ *  - o conhecimento prévio do case_setup (o "O que {persona} já sabe" da cola);
  *  - rubricas do vendedor (as geradas saem, entram as do material);
  *  - conhecimento por etapa distribuído pelas etapas (planStepKnowledge), sem os
  *    números e a continuidade entre ligações que a IA inventa.
@@ -477,12 +479,26 @@ export async function applyDossierToCaseSetup(
     await patchCaseSetup(env, token, caseSetupId, {
       ...(opening.length > 0 && { buyer_agent_first_messages: opening }),
       ...(rubrics.length > 0 && {
-        salesperson_evaluation_rubric_criteria: rubrics.map((r) => `${r.criterio} — ${r.descricao}`),
+        // Só o critério: sem rubrica na letra, o backend mostra este campo na cola da
+        // chamada, e a descrição é o gabarito do avaliador. Ela vai na rubrica abaixo,
+        // que é o que o feedback pós-chamada lê.
+        salesperson_evaluation_rubric_criteria: rubrics.map((r) => r.criterio.trim()),
       }),
     });
     detail.case_setup = true;
   } catch (e) {
     warnings.push(`abertura/critérios não aplicados: ${messageOf(e)}`);
+  }
+
+  // Sempre, mesmo vazio: o que o backend gera aqui não vê a persona e a contradiz
+  // (case_setup 253: "já contratou agências" × "nunca contratou alguém de fora").
+  // Com o dossiê, o que o comprador sabe é o que o material diz, ou nada.
+  try {
+    const previo = d.conhecimento.previo.trim();
+    await setCaseSetupPriorKnowledge(env, token, caseSetupId, previo ? [previo] : []);
+    detail.prior_knowledge = previo ? 1 : 0;
+  } catch (e) {
+    warnings.push(`conhecimento prévio não aplicado: ${messageOf(e)}`);
   }
 
   if (rubrics.length > 0) {

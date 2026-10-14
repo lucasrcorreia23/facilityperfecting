@@ -233,7 +233,7 @@ const DOSSIE_SCHEMA = {
         previo: {
           type: "string",
           description:
-            "O que o comprador já sabe ao atender, em 2-4 frases. Diga se é a primeira conversa. Sem dores 'sondada' ou 'oculta' (o comprador as diria logo no início).",
+            "O que o comprador já sabe DESTA conversa ao atender, em 2-4 frases: se é a primeira conversa, quem marcou e por quê, o que ele sabe do vendedor e da empresa dele. Não descreva o comprador nem a empresa dele (perfil e temperamento já estão na persona): o vendedor lê este texto na tela da chamada. Sem dores 'sondada' ou 'oculta' (o comprador as diria logo no início).",
         },
         fatos: {
           type: "array",
