@@ -37,6 +37,7 @@ import {
   FACTS_IN_ALL_STEPS,
   hasDossier,
   painsAsPromptText,
+  personaDescription,
   personaPainDetail,
   personaPainLinks,
   planStepKnowledge,
@@ -165,6 +166,27 @@ describe("applyDossierToPersona", () => {
     const patch = mocked.updatePersona.mock.calls[0][3] as Record<string, string>;
     expect(patch.persona_prompt).toContain("# Suas dores");
     expect(mocked.setPersonaPains).not.toHaveBeenCalled();
+  });
+});
+
+describe("personaDescription", () => {
+  it("usa a 1ª frase do prompt sem o 'Você é X,'", () => {
+    const d = makeDossier();
+    d.persona.prompt = "Você é Ricardo, dono de uma rede pequena de três lojas de varejo. Esta é a primeira conversa.";
+    expect(personaDescription(d)).toBe("dono de uma rede pequena de três lojas de varejo");
+  });
+
+  it("sem esse formato, cargo e empresa", () => {
+    const d = makeDossier();
+    d.persona.prompt = "Você é o André.";
+    expect(personaDescription(d)).toBe("RH da Cooperativa Vale Dourado");
+  });
+
+  it("vai no PUT da persona", async () => {
+    const ids = { supported: false, productIds: new Map(), painIds: new Map(), warnings: [] };
+    await applyDossierToPersona("prod", "t", 5, makeDossier(), ids);
+    const patch = mocked.updatePersona.mock.calls[0][3] as Record<string, string>;
+    expect(patch.description).toBe("RH da Cooperativa Vale Dourado");
   });
 });
 

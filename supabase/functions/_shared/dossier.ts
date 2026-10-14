@@ -325,7 +325,22 @@ export async function createDossierPersona(
 }
 
 /**
- * Sobrescreve o que a IA gerou na persona com o dossiê: nome, cargo e prompt; e, com
+ * Descrição da persona a partir do dossiê. É a frase que abre a "# Personalidade" do
+ * comprador ("Você é {nome}, {descrição}."), e em PROD ela vinha do perfil que o
+ * /generate inventou (case_setup 254: "experiências frustradas com agências" contra
+ * "nunca contratou alguém de fora" no prompt). Usa a 1ª frase do prompt sem o
+ * "Você é X,"; sem esse formato, cargo e empresa.
+ */
+export function personaDescription(d: RoleplayDossier): string {
+  const first = d.persona.prompt.trim().split(/(?<=[.!?])\s+/)[0] ?? "";
+  const m = first.match(/^Você é [^,.]+,\s*(.+?)[.!?]?$/i);
+  if (m) return m[1].trim();
+  const empresa = d.persona.empresa_nome.trim();
+  return [d.persona.cargo.trim(), empresa && `da ${empresa}`].filter(Boolean).join(" ");
+}
+
+/**
+ * Sobrescreve o que a IA gerou na persona com o dossiê: nome, cargo, descrição e prompt; e, com
  * portfólio, as ligações exatas de dores e produtos. Nunca lança.
  */
 export async function applyDossierToPersona(
@@ -337,8 +352,10 @@ export async function applyDossierToPersona(
 ): Promise<string[]> {
   const warnings: string[] = [];
   const prompt = ids.supported ? d.persona.prompt : `${d.persona.prompt}${painsAsPromptText(d)}`;
+  const description = personaDescription(d);
   try {
     await updatePersona(env, token, personaId, {
+      ...(description && { description }),
       ...(d.persona.nome && { name: d.persona.nome }),
       ...(d.persona.cargo && { job_title: d.persona.cargo }),
       ...(d.persona.area && { department: d.persona.area }),
