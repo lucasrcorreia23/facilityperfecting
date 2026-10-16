@@ -1,0 +1,56 @@
+{
+  "playbook_id": 11,
+  "call_types": {
+    "fase2": 14,
+    "fase3": 15
+  },
+  "blocks": {
+    "fase2": [
+      143,
+      144,
+      145,
+      146,
+      147,
+      148
+    ],
+    "fase3": [
+      149,
+      150,
+      151,
+      152,
+      153
+    ]
+  },
+  "contas": {
+    "vale-dourado": {
+      "context_id": 58,
+      "company_id": 108,
+      "persona_id": 144,
+      "case_setups": {
+        "fase3": 127,
+        "fase2": 126
+      },
+      "container_id": 10
+    },
+    "trico-vallery": {
+      "context_id": 59,
+      "company_id": 109,
+      "persona_id": 145,
+      "case_setups": {
+        "fase3": 129,
+        "fase2": 128
+      },
+      "container_id": 11
+    },
+    "vila-serena": {
+      "context_id": 60,
+      "company_id": 110,
+      "persona_id": 146,
+      "case_setups": {
+        "fase3": 132,
+        "fase2": 131
+      },
+      "container_id": 12
+    }
+  }
+}
