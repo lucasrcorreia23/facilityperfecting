@@ -21,6 +21,7 @@ import {
   DocumentDuplicateIcon,
   EyeIcon,
   TrashIcon,
+  AdjustmentsHorizontalIcon,
 } from "@heroicons/react/24/outline";
 import { Button } from "@/app/components/ui/button";
 import { ConfirmDialog, type ConfirmConfig } from "@/app/components/ui/confirm-dialog";
@@ -83,6 +84,12 @@ export function DraftActions({
   // "incomplete" também já tem roleplay na conta: enviar de novo duplicaria, em vez
   // de completar o que ficou faltando (isso é o botão "Completar", na linha do item).
   const exported = draft.status === "exported" || draft.status === "incomplete";
+  // Ajusta o roleplay que já está na conta (no playbook, o da 1ª etapa; os outros
+  // ficam no detalhe do item).
+  const adjustHref =
+    exported && draft.connection_id && draft.perfecting_case_setup_id
+      ? `/ajustar/${draft.connection_id}/${draft.perfecting_case_setup_id}`
+      : null;
 
   return (
     <>
@@ -105,6 +112,15 @@ export function DraftActions({
             onPress={exported ? () => setResendOpen(true) : onSend}
           >
             {exported ? "Reenviar para a conta destino" : "Enviar para a conta destino"}
+          </DropdownItem>
+          <DropdownItem
+            key="adjust"
+            className={MENU_ITEM_HOVER}
+            startContent={<AdjustmentsHorizontalIcon className="w-4 h-4" />}
+            isDisabled={!adjustHref}
+            href={adjustHref ?? undefined}
+          >
+            Calibrar roleplay
           </DropdownItem>
           <DropdownItem
             key="new-scenario"

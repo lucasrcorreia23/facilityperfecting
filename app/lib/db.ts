@@ -20,6 +20,7 @@ import type {
   PlaybookDraftDetail,
   ProcessImportResult,
   Profile,
+  RoleplayAdjustment,
   RoleplayEvaluation,
   RoleplayReadiness,
   RoundStatus,
@@ -1189,4 +1190,41 @@ export async function uploadAndExtract(file: File): Promise<{
     );
   if (!data?.ok) throw new Error(`${file.name}: ${data?.error ?? "falha ao extrair o texto"}`);
   return { text: data.text, suggestedOfferName: data.suggestedOfferName, filePath: path };
+}
+
+// ── Ajustar roleplay ───────────────────────────────────────────────────────
+
+/** Erro da função `adjust-roleplay` com o status HTTP (409 = recarregar, 428 = confirmar produção). */
+export class AdjustRequestError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.status = status;
+  }
+}
+
+/** Chama a função `adjust-roleplay` (op = list | load | save | regenerate | preview). */
+export async function invokeAdjust<T = Record<string, unknown>>(body: Record<string, unknown>): Promise<T> {
+  const supabase = createClient();
+  const { data, error } = await supabase.functions.invoke("adjust-roleplay", { body });
+  if (error) {
+    const status = (error as { context?: Response }).context?.status ?? 0;
+    throw new AdjustRequestError(await functionErrorMessage(error, "Falha ao ajustar o roleplay"), status);
+  }
+  if (!data?.ok) throw new AdjustRequestError(JSON.stringify(data?.error ?? data), 0);
+  return data as T;
+}
+
+/** Histórico de ajustes de um roleplay, mais recente primeiro. */
+export async function listAdjustments(connectionId: string, caseSetupId: number): Promise<RoleplayAdjustment[]> {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from("roleplay_adjustments")
+    .select("*")
+    .eq("connection_id", connectionId)
+    .eq("case_setup_id", caseSetupId)
+    .order("created_at", { ascending: false })
+    .limit(100);
+  if (error) throw error;
+  return (data ?? []) as RoleplayAdjustment[];
 }

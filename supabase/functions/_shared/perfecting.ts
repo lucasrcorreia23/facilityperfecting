@@ -2261,3 +2261,191 @@ export async function patchStepKnowledge(
   await patchJson(`${rp(env)}/case_setup_${caseSetupId}/step_knowledge/${itemId}`, token, patch);
 }
 
+
+// ── Ajuste de roleplay já criado (tela "Ajustar roleplay") ─────────────────
+// Leituras completas e as rotas de alterar/apagar que o envio não usa. Devolvem os
+// registros crus: quem interpreta é `_shared/roleplay-adjust.ts`.
+
+/** Painel da chamada: blocos do playbook (com nome) e etapas irmãs do mesmo contexto. */
+export async function getCaseSetupCallPanel(
+  env: PerfectingEnv,
+  token: string,
+  caseSetupId: number,
+  personaId?: number | null,
+): Promise<Record<string, unknown>> {
+  const qs = personaId != null ? `?persona_id=${personaId}` : "";
+  const data = await getJson<Record<string, unknown>>(
+    `${rp(env)}/case_setup_${caseSetupId}/details_v2${qs}`,
+    token,
+  );
+  const panel = data?.call_panel;
+  return panel && typeof panel === "object" ? (panel as Record<string, unknown>) : {};
+}
+
+/** Conhecimento por bloco/etapa com todos os campos (prévio, fatos, briefing, abertura). */
+export async function listStepKnowledgeFull(
+  env: PerfectingEnv,
+  token: string,
+  caseSetupId: number,
+  personaId?: number | null,
+): Promise<Array<Record<string, unknown>>> {
+  const qs = personaId != null ? `?persona_id=${personaId}` : "";
+  return records(await getJson<unknown>(`${rp(env)}/case_setup_${caseSetupId}/step_knowledge${qs}`, token));
+}
+
+/** Objeções do próprio roleplay (sem as context-wide), com todos os campos. */
+export async function listCaseSetupObjectionsFull(
+  env: PerfectingEnv,
+  token: string,
+  caseSetupId: number,
+): Promise<Array<Record<string, unknown>>> {
+  return records(
+    await getJson<unknown>(`${rp(env)}/case_setup_${caseSetupId}/objections?include_context_wide=false`, token),
+  );
+}
+
+export async function listContextObjectionsFull(
+  env: PerfectingEnv,
+  token: string,
+  contextId: number,
+): Promise<Array<Record<string, unknown>>> {
+  return records(await getJson<unknown>(`${rp(env)}/context_${contextId}/objections`, token));
+}
+
+/** Onde a objeção mora: no roleplay ou no contexto (as rotas são diferentes). */
+export type ObjectionScope = { caseSetupId: number } | { contextId: number };
+
+function objectionBase(env: PerfectingEnv, scope: ObjectionScope): string {
+  return "caseSetupId" in scope
+    ? `${rp(env)}/case_setup_${scope.caseSetupId}/objections`
+    : `${rp(env)}/context_${scope.contextId}/objections`;
+}
+
+/** PATCH parcial. Nunca mande `context_id`: a rota do roleplay não o protege. */
+export async function patchObjection(
+  env: PerfectingEnv,
+  token: string,
+  scope: ObjectionScope,
+  objectionId: number,
+  patch: Record<string, unknown>,
+): Promise<void> {
+  const { context_id: _ignored, ...safe } = patch;
+  await patchJson(`${objectionBase(env, scope)}/${objectionId}`, token, safe);
+}
+
+export async function deleteObjection(
+  env: PerfectingEnv,
+  token: string,
+  scope: ObjectionScope,
+  objectionId: number,
+): Promise<void> {
+  await deleteReq(`${objectionBase(env, scope)}/${objectionId}`, token);
+}
+
+export async function listContextGuardrailsFull(
+  env: PerfectingEnv,
+  token: string,
+  contextId: number,
+): Promise<Array<Record<string, unknown>>> {
+  return records(await getJson<unknown>(`${rp(env)}/context_${contextId}/guardrails`, token));
+}
+
+export async function patchContextGuardrail(
+  env: PerfectingEnv,
+  token: string,
+  contextId: number,
+  guardrailId: number,
+  patch: { name?: string; prompt?: string },
+): Promise<void> {
+  await patchJson(`${rp(env)}/context_${contextId}/guardrails/${guardrailId}`, token, patch);
+}
+
+export async function deleteContextGuardrail(
+  env: PerfectingEnv,
+  token: string,
+  contextId: number,
+  guardrailId: number,
+): Promise<void> {
+  await deleteReq(`${rp(env)}/context_${contextId}/guardrails/${guardrailId}`, token);
+}
+
+export function getPersona(
+  env: PerfectingEnv,
+  token: string,
+  personaId: number,
+): Promise<Record<string, unknown>> {
+  return getJson<Record<string, unknown>>(`${rp(env)}/persona_${personaId}`, token);
+}
+
+/** Dores ligadas à persona; null = o ambiente não tem as rotas de portfólio. */
+export async function getPersonaPains(
+  env: PerfectingEnv,
+  token: string,
+  personaId: number,
+): Promise<Array<Record<string, unknown>> | null> {
+  try {
+    return records(await getJson<unknown>(`${rp(env)}/persona_${personaId}/pains`, token));
+  } catch (e) {
+    if (e instanceof PerfectingError && (e.status === 404 || e.status === 405)) return null;
+    throw e;
+  }
+}
+
+export async function getPersonaOfferProducts(
+  env: PerfectingEnv,
+  token: string,
+  personaId: number,
+): Promise<Array<Record<string, unknown>> | null> {
+  try {
+    return records(await getJson<unknown>(`${rp(env)}/persona_${personaId}/offer_products`, token));
+  } catch (e) {
+    if (e instanceof PerfectingError && (e.status === 404 || e.status === 405)) return null;
+    throw e;
+  }
+}
+
+/** Catálogo de dores da oferta (para ligar novas dores à persona). */
+export async function listOfferPainsFull(
+  env: PerfectingEnv,
+  token: string,
+  offerId: number,
+): Promise<Array<Record<string, unknown>> | null> {
+  try {
+    return records(await getJson<unknown>(`${rp(env)}/offer_${offerId}/pains`, token));
+  } catch (e) {
+    if (e instanceof PerfectingError && (e.status === 404 || e.status === 405)) return null;
+    throw e;
+  }
+}
+
+export async function listOfferProductsFull(
+  env: PerfectingEnv,
+  token: string,
+  offerId: number,
+): Promise<Array<Record<string, unknown>> | null> {
+  try {
+    return records(await getJson<unknown>(`${rp(env)}/offer_${offerId}/products`, token));
+  } catch (e) {
+    if (e instanceof PerfectingError && (e.status === 404 || e.status === 405)) return null;
+    throw e;
+  }
+}
+
+/** Roleplays de um contexto (nome, tipo de chamada, status). */
+export async function listCaseSetupsByContextFull(
+  env: PerfectingEnv,
+  token: string,
+  contextId: number,
+): Promise<Array<Record<string, unknown>>> {
+  return records(await getJson<unknown>(`${rp(env)}/case_setup/context_${contextId}/list`, token));
+}
+
+/** Todos os roleplays da org do token, sem o filtro de visibilidade por status. */
+export async function listOrganizationCaseSetups(
+  env: PerfectingEnv,
+  token: string,
+): Promise<Array<Record<string, unknown>>> {
+  return records(
+    await getJson<unknown>(`${rp(env)}/case_setup/organization/list?apply_visibility_filter=false`, token),
+  );
+}

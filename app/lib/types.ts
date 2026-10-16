@@ -704,3 +704,18 @@ export interface RoleplayEvaluation {
   created_at: string;
   updated_at: string;
 }
+
+// ── Ajustar roleplay (roleplay já na Perfecting) ───────────────────────────
+
+/** Uma linha do histórico de ajustes (`roleplay_adjustments`). */
+export interface RoleplayAdjustment {
+  id: string;
+  connection_id: string;
+  case_setup_id: number;
+  section: string;
+  before: unknown;
+  after: unknown;
+  summary: string[];
+  created_by: string | null;
+  created_at: string;
+}

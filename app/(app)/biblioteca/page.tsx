@@ -982,15 +982,25 @@ export default function BibliotecaPage() {
                       <dt className="text-xs text-slate-500">Roleplays criados</dt>
                       <dd className="flex flex-wrap gap-1.5">
                         {detailDraft.playbook_run!.case_setup_ids!.map((id) => (
-                          <a
-                            key={id}
-                            href={perfectingRoleplayUrl(detailDraft.connection?.environment, id)}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="text-slate-700 underline hover:text-slate-900"
-                          >
-                            {id}
-                          </a>
+                          <span key={id} className="inline-flex items-center gap-1">
+                            <a
+                              href={perfectingRoleplayUrl(detailDraft.connection?.environment, id)}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-slate-700 underline hover:text-slate-900"
+                            >
+                              {id}
+                            </a>
+                            {detailDraft.connection_id && (
+                              <a
+                                href={`/ajustar/${detailDraft.connection_id}/${id}`}
+                                className="text-xs text-slate-500 underline hover:text-slate-700"
+                                title={`Calibrar o roleplay ${id}`}
+                              >
+                                calibrar
+                              </a>
+                            )}
+                          </span>
                         ))}
                       </dd>
                     </div>

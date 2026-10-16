@@ -1,7 +1,7 @@
 /** Bases do app Perfecting (não a API) por ambiente. */
 const APP_BASE: Record<"hml" | "prod", string> = {
-  hml: "https://app-hml.perfecting.app",
-  prod: "https://app.perfecting.app",
+  hml: "https://homolog.perfecting.com.br",
+  prod: "https://app.perfecting.com.br",
 };
 
 export type PerfectingAppEnv = keyof typeof APP_BASE;

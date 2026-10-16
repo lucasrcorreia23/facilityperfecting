@@ -9,19 +9,42 @@ import {
   ClipboardDocumentCheckIcon,
   AcademicCapIcon,
   BookOpenIcon,
+  AdjustmentsHorizontalIcon,
 } from "@heroicons/react/24/outline";
 import { RobotIcon } from "@/app/components/icons/robot-icon";
 import { cn } from "@/app/lib/cn";
 
-const ITEMS = [
-  { href: "/criacao", label: "Criação", icon: RobotIcon },
-  { href: "/trilhas", label: "Trilhas", icon: AcademicCapIcon },
-  { href: "/playbooks", label: "Playbooks", icon: BookOpenIcon },
-  { href: "/biblioteca", label: "Biblioteca", icon: RectangleStackIcon },
-  { href: "/prontidao", label: "Prontidão", icon: ClipboardDocumentCheckIcon },
-  { href: "/conexoes", label: "Conexões", icon: LinkIcon },
-  { href: "/config", label: "Config", icon: Cog6ToothIcon },
+/** Seções da navegação, na ordem do trabalho: criar → enviados → avaliar → sistema. */
+const GROUPS = [
+  {
+    label: "Criar",
+    items: [
+      { href: "/criacao", label: "Criação", icon: RobotIcon },
+      { href: "/trilhas", label: "Trilhas", icon: AcademicCapIcon },
+      { href: "/playbooks", label: "Playbooks", icon: BookOpenIcon },
+    ],
+  },
+  {
+    label: "Roleplays",
+    items: [
+      { href: "/biblioteca", label: "Biblioteca", icon: RectangleStackIcon },
+      { href: "/ajustar", label: "Calibração", icon: AdjustmentsHorizontalIcon },
+    ],
+  },
+  {
+    label: "Avaliar",
+    items: [{ href: "/prontidao", label: "Prontidão", icon: ClipboardDocumentCheckIcon }],
+  },
+  {
+    label: "Sistema",
+    items: [
+      { href: "/conexoes", label: "Conexões", icon: LinkIcon },
+      { href: "/config", label: "Config", icon: Cog6ToothIcon },
+    ],
+  },
 ];
+
+const ITEMS = GROUPS.flatMap((g) => g.items);
 
 export function Sidebar({ collapsed }: { collapsed: boolean }) {
   const pathname = usePathname();
@@ -32,25 +55,37 @@ export function Sidebar({ collapsed }: { collapsed: boolean }) {
         collapsed ? "w-[60px]" : "w-[220px]",
       )}
     >
-      <nav className="flex flex-col gap-1 p-2">
-        {ITEMS.map(({ href, label, icon: Icon }) => {
-          const active = pathname.startsWith(href);
-          return (
-            <Link
-              key={href}
-              href={href}
-              className={cn(
-                "flex items-center gap-3 rounded-sm px-3 py-2.5 text-sm font-medium transition-colors",
-                active
-                  ? "bg-slate-100 text-slate-900"
-                  : "text-slate-600 hover:bg-slate-50 hover:text-slate-800",
-              )}
-            >
-              <Icon className="w-5 h-5 shrink-0" />
-              {!collapsed && <span>{label}</span>}
-            </Link>
-          );
-        })}
+      <nav className="flex flex-col gap-4 p-2">
+        {GROUPS.map((group) => (
+          <div key={group.label} className="flex flex-col gap-1">
+            {collapsed ? (
+              <div className="mx-3 my-1 border-t border-slate-100 first:hidden" aria-hidden />
+            ) : (
+              <p className="px-3 pb-1 pt-2 text-xs text-slate-400">
+                {group.label}
+              </p>
+            )}
+            {group.items.map(({ href, label, icon: Icon }) => {
+              const active = pathname.startsWith(href);
+              return (
+                <Link
+                  key={href}
+                  href={href}
+                  title={collapsed ? label : undefined}
+                  className={cn(
+                    "flex items-center gap-3 rounded-sm px-3 py-2.5 text-sm font-medium transition-colors",
+                    active
+                      ? "bg-slate-100 text-slate-900"
+                      : "text-slate-600 hover:bg-slate-50 hover:text-slate-800",
+                  )}
+                >
+                  <Icon className="w-5 h-5 shrink-0" />
+                  {!collapsed && <span>{label}</span>}
+                </Link>
+              );
+            })}
+          </div>
+        ))}
       </nav>
     </aside>
   );
@@ -60,7 +95,7 @@ export function Sidebar({ collapsed }: { collapsed: boolean }) {
 export function MobileNav() {
   const pathname = usePathname();
   return (
-    <nav className="layer-header fixed bottom-0 left-0 right-0 grid grid-cols-7 border-t border-slate-200 bg-white sm:hidden">
+    <nav className="layer-header fixed bottom-0 left-0 right-0 grid grid-cols-8 border-t border-slate-200 bg-white sm:hidden">
       {ITEMS.map(({ href, label, icon: Icon }) => {
         const active = pathname.startsWith(href);
         return (

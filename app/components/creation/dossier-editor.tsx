@@ -16,7 +16,7 @@ const NO_PRODUCT = "__none__";
 
 const field = { inputWrapper: "bg-white" };
 
-function RemoveButton({ label, onPress }: { label: string; onPress: () => void }) {
+export function RemoveButton({ label, onPress }: { label: string; onPress: () => void }) {
   return (
     <button
       type="button"
@@ -30,7 +30,7 @@ function RemoveButton({ label, onPress }: { label: string; onPress: () => void }
   );
 }
 
-function AddButton({ label, onPress }: { label: string; onPress: () => void }) {
+export function AddButton({ label, onPress }: { label: string; onPress: () => void }) {
   return (
     <button
       type="button"
@@ -43,7 +43,7 @@ function AddButton({ label, onPress }: { label: string; onPress: () => void }) {
   );
 }
 
-function SectionTitle({ title, hint }: { title: string; hint?: string }) {
+export function SectionTitle({ title, hint }: { title: string; hint?: string }) {
   return (
     <div>
       <p className="text-sm font-medium text-slate-700">{title}</p>
@@ -52,7 +52,7 @@ function SectionTitle({ title, hint }: { title: string; hint?: string }) {
   );
 }
 
-function TopicList({
+export function TopicList({
   label,
   items,
   onChange,

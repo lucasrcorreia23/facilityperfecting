@@ -71,3 +71,6 @@ verify_jwt = true
 
 [functions.list-persona-catalog]
 verify_jwt = true
+
+[functions.adjust-roleplay]
+verify_jwt = true

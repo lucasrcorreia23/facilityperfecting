@@ -32,6 +32,8 @@ import { ConfirmDialog, type ConfirmConfig } from "@/app/components/ui/confirm-d
 import { SendStatusModal, type SendStatus } from "@/app/components/ui/send-status-modal";
 import { managerSelectClassNames } from "@/app/lib/select-classnames";
 import { DossierEditor } from "@/app/components/creation/dossier-editor";
+import { ObjectionListEditor } from "@/app/components/content/objection-list-editor";
+import { GuardrailListEditor } from "@/app/components/content/guardrail-list-editor";
 import {
   createDraftFromText,
   invokeExport,
@@ -263,11 +265,6 @@ export default function CriacaoPage() {
     // personaInstructions NÃO é resetado: ele descreve a variação de personas extraída
     // do MATERIAL (a IA preenche em handleProcess), não algo preso à conta/playbook.
     setLoadingPlaybooks(Boolean(id));
-  }
-
-  /** Edita um campo de uma objeção extraída, preservando as demais. */
-  function updateObjection(index: number, patch: Partial<ObjectionSeed>) {
-    setObjections((prev) => prev.map((o, i) => (i === index ? { ...o, ...patch } : o)));
   }
 
   /** Marca/desmarca uma etapa como "persona fixa". */
@@ -981,87 +978,14 @@ export default function CriacaoPage() {
               </p>
             </div>
 
-            {objections.map((o, i) => (
-              <div key={i} className="flex flex-col gap-2 rounded-sm bg-slate-50 p-3">
-                <div className="flex items-center gap-2">
-                  <Input
-                    aria-label={`Título da objeção ${i + 1}`}
-                    value={o.titulo}
-                    onValueChange={(v) => updateObjection(i, { titulo: v })}
-                    radius="sm"
-                    variant="bordered"
-                    size="sm"
-                    classNames={{ inputWrapper: "bg-white" }}
-                  />
-                  <span className="shrink-0 rounded-sm bg-slate-200 px-1.5 py-0.5 text-[10px] font-medium text-slate-600">
-                    {o.tipo}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => setObjections((prev) => prev.filter((_, j) => j !== i))}
-                    title="Remover objeção"
-                    aria-label="Remover objeção"
-                    className="shrink-0 rounded-sm p-1 text-slate-400 hover:bg-slate-200 hover:text-slate-600"
-                  >
-                    <XMarkIcon className="w-4 h-4" />
-                  </button>
-                </div>
-                <Textarea
-                  label="Como o comprador diz"
-                  labelPlacement="outside"
-                  value={o.fala_exemplo}
-                  onValueChange={(v) => updateObjection(i, { fala_exemplo: v })}
-                  radius="sm"
-                  variant="bordered"
-                  minRows={2}
-                  classNames={{ inputWrapper: "bg-white" }}
-                />
-                <Textarea
-                  label="Ceda se"
-                  labelPlacement="outside"
-                  value={o.ceder_se}
-                  onValueChange={(v) => updateObjection(i, { ceder_se: v })}
-                  radius="sm"
-                  variant="bordered"
-                  minRows={2}
-                  description="Sem isto o comprador repete a objeção até o fim e o treino não fecha."
-                  classNames={{ inputWrapper: "bg-white" }}
-                />
-              </div>
-            ))}
+            <ObjectionListEditor items={objections} onChange={setObjections} />
 
             {guardrails.length > 0 && (
               <div className="flex flex-col gap-2">
                 <p className="text-sm font-medium text-slate-700">
                   Regras de comportamento ({guardrails.length})
                 </p>
-                {guardrails.map((g, i) => (
-                  <div key={i} className="flex items-start gap-2">
-                    <Textarea
-                      aria-label={`Regra ${i + 1}: ${g.nome}`}
-                      label={g.nome}
-                      labelPlacement="outside"
-                      value={g.instrucao}
-                      onValueChange={(v) =>
-                        setGuardrails((prev) =>
-                          prev.map((x, j) => (j === i ? { ...x, instrucao: v } : x)),
-                        )
-                      }
-                      radius="sm"
-                      variant="bordered"
-                      minRows={2}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setGuardrails((prev) => prev.filter((_, j) => j !== i))}
-                      title="Remover regra"
-                      aria-label="Remover regra"
-                      className="mt-6 shrink-0 rounded-sm p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
-                    >
-                      <XMarkIcon className="w-4 h-4" />
-                    </button>
-                  </div>
-                ))}
+                <GuardrailListEditor items={guardrails} onChange={setGuardrails} />
               </div>
             )}
           </div>
