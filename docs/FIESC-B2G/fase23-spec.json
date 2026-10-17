@@ -10,7 +10,7 @@
         "key": "fase2",
         "name": "Fase 2 · Visita presencial (AVA)",
         "description": "Visita presencial ao decisor depois da ligação de prospecção: diagnóstico SPIN da dor levantada, conexão com a solução certa do Sistema FIESC e saída com a visita técnica agendada.",
-        "call_context_slug": "qualificacao_inicial_discovery_call",
+        "call_context_slug": "reuniao_presencial_de_diagnostico",
         "pain_offer_stage": "discovery",
         "blocks": [
           {

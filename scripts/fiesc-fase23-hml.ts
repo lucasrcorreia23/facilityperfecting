@@ -22,6 +22,19 @@
  *     [--dry-run] [--only=vale-dourado] [--release-fase3] [--no-container]
  *
  * ⚠️ Cria dados reais na org do spec (14, Perfecting Demo). Nunca rode contra org de cliente.
+ *
+ * PROD (`--env=prod`, conta FIESC, org 52): o spec é o traduzido por
+ * scripts/fiesc-fase23-map-prod.ts (fase23-spec.prod.json) e o estado é
+ * fase23-state.prod.json. Em PROD:
+ *   - `--as-user=<id>` é obrigatório: o criador é quem vê os roleplays em "Em
+ *     desenvolvimento" (gestor só vê os que criou);
+ *   - as DUAS etapas ficam em "Em desenvolvimento" (status 1). A implementação cria o
+ *     roleplay sem status (NULL = visível a todos), então um verificador põe status 1 em
+ *     todo roleplay novo do contexto a cada 3 s enquanto ela roda, e de novo no fim;
+ *   - sem container, a não ser com `--container`.
+ *
+ *   deno run -A --env-file=.env.prod.local scripts/fiesc-fase23-hml.ts --env=prod \
+ *     --as-user=269 [--dry-run] [--only=vale-dourado]
  */
 import { applyContextContent, messageOf } from "../supabase/functions/_shared/context-content.ts";
 import type { GuardrailSeed, ObjectionSeed } from "../supabase/functions/_shared/context-content.ts";
@@ -63,10 +76,13 @@ import {
   updatePersona,
 } from "../supabase/functions/_shared/perfecting.ts";
 
-const ENV = "hml" as const;
+const envArg = Deno.args.find((a) => a.startsWith("--env="));
+const ENV = (envArg ? envArg.slice("--env=".length) : "hml") as "hml" | "prod";
+if (ENV !== "hml" && ENV !== "prod") throw new Error(`--env inválido: ${ENV}`);
+const IS_PROD = ENV === "prod";
 const ROOT = new URL("..", import.meta.url);
-const SPEC_PATH = new URL("docs/FIESC-B2G/fase23-spec.json", ROOT);
-const STATE_PATH = new URL("docs/FIESC-B2G/fase23-state.hml.json", ROOT);
+const SPEC_PATH = new URL(`docs/FIESC-B2G/fase23-spec${IS_PROD ? ".prod" : ""}.json`, ROOT);
+const STATE_PATH = new URL(`docs/FIESC-B2G/fase23-state.${ENV}.json`, ROOT);
 
 // ── Spec ───────────────────────────────────────────────────────────────────
 type StageKey = "fase2" | "fase3";
@@ -150,7 +166,14 @@ interface State {
 const args = new Set(Deno.args);
 const DRY = args.has("--dry-run");
 const RELEASE = args.has("--release-fase3");
-const WITH_CONTAINER = !args.has("--no-container");
+const WITH_CONTAINER = IS_PROD ? args.has("--container") : !args.has("--no-container");
+const asUserArg = Deno.args.find((a) => a.startsWith("--as-user="));
+const AS_USER = asUserArg ? Number(asUserArg.slice("--as-user=".length)) : null;
+if (IS_PROD && (AS_USER == null || !Number.isFinite(AS_USER))) {
+  throw new Error("--as-user=<id> é obrigatório em PROD (sem ele o criador seria um gestor do cliente)");
+}
+/** PROD: as duas etapas nascem e ficam em "Em desenvolvimento". */
+const HIDE_ALL = IS_PROD;
 const onlyArg = Deno.args.find((a) => a.startsWith("--only="));
 const ONLY = onlyArg ? onlyArg.slice("--only=".length) : null;
 
@@ -188,7 +211,7 @@ const items = (data: unknown): Array<Record<string, unknown>> =>
 // ── 0) Auth e catálogos ────────────────────────────────────────────────────
 log(`Ambiente: ${getEnvConfig(ENV).api} · org ${spec.org_id}${DRY ? " · DRY RUN" : ""}${ONLY ? ` · só ${ONLY}` : ""}`);
 const saToken = await loginSuperadmin(ENV);
-const userId = await findManagerUserId(ENV, saToken, spec.org_id);
+const userId = AS_USER ?? (await findManagerUserId(ENV, saToken, spec.org_id));
 if (userId == null) throw new Error(`nenhum usuário na org ${spec.org_id}`);
 const token = await loginAsUser(ENV, saToken, userId, spec.org_id);
 log(`✓ login como usuário ${userId}`);
@@ -381,8 +404,30 @@ for (const conta of spec.contas) {
   }
   if (st.case_setups.fase2 == null || st.case_setups.fase3 == null) {
     const before = new Set(await listCaseSetupIdsByContext(ENV, token, contextId));
+    // PROD: o roleplay nasce sem status (visível a todos). Esconde cada um que aparecer,
+    // em todo tick (o pipeline continua gravando a linha), até a implementação acabar.
+    const seenNew = new Set<number>();
+    let hiding = false;
+    const hideTick = async () => {
+      if (hiding) return;
+      hiding = true;
+      try {
+        for (const id of await listCaseSetupIdsByContext(ENV, token, contextId)) {
+          if (before.has(id)) continue;
+          if (!seenNew.has(id)) log(`  ⤷ roleplay ${id} apareceu: Em desenvolvimento`);
+          seenNew.add(id);
+          await patchCaseSetup(ENV, token, id, { role_play_status_id: 1 });
+        }
+      } catch (e) {
+        warn(`verificador de status: ${messageOf(e)}`);
+      } finally {
+        hiding = false;
+      }
+    };
+    const hider = HIDE_ALL ? setInterval(hideTick, 3000) : null;
     log("… implementando o playbook (demora vários minutos)");
     const res = await openPlaybookImplementationStream(ENV, token, playbookId, contextId, personaId);
+    try {
     for await (const { event, data } of sseEvents(res)) {
       if (event === "heartbeat") continue;
       const payload = (data ?? {}) as Record<string, unknown>;
@@ -393,6 +438,13 @@ for (const conta of spec.contas) {
         break;
       } else if (event === "error") {
         throw new Error(`implementação falhou: ${JSON.stringify(payload).slice(0, 500)}`);
+      }
+    }
+    } finally {
+      if (hider != null) {
+        clearInterval(hider);
+        while (hiding) await new Promise((r) => setTimeout(r, 200));
+        await hideTick();
       }
     }
     const created = (await listCaseSetupIdsByContext(ENV, token, contextId)).filter((id) => !before.has(id));
@@ -410,6 +462,7 @@ for (const conta of spec.contas) {
   if (cs2 == null || cs3 == null) {
     // A Fase 3 nasce visível: esconde já, mesmo com a implementação pela metade.
     if (cs3 != null && !st.released_fase3) await patchCaseSetup(ENV, token, cs3, { role_play_status_id: 1 });
+    if (cs2 != null && HIDE_ALL) await patchCaseSetup(ENV, token, cs2, { role_play_status_id: 1 });
     warn(
       `implementação incompleta: ${JSON.stringify(st.case_setups)}. Para refazer sem duplicar, ` +
         "apague o roleplay criado (DELETE /case_setup_{id}), limpe case_setups da conta no estado e rode de novo.",
@@ -523,6 +576,10 @@ for (const conta of spec.contas) {
     await patchCaseSetup(ENV, token, cs3, { role_play_status_id: 1 });
     log("✓ fase3 escondida (Em desenvolvimento)");
   }
+  if (HIDE_ALL) {
+    await patchCaseSetup(ENV, token, cs2, { role_play_status_id: 1 });
+    log("✓ fase2 escondida (Em desenvolvimento)");
+  }
   await saveState();
 
   // 2i) Container da conta: Fase 2 (e a Fase 3 depois da liberação). Os roleplays da
@@ -559,8 +616,20 @@ for (const conta of spec.contas) {
     const missing = flags.filter((f) => !gate[f]);
     log(`  gate ${stage} (${csId}): ${missing.length === 0 ? "ok" : `faltou ${missing.join(", ")}`}`);
     if (missing.length > 0) warn(`${conta.key} ${stage}: faltou ${missing.join(", ")}`);
+    if (!gate.prompt || String(gate.prompt).trim().length === 0) warn(`${conta.key} ${stage}: prompt do comprador vazio`);
+    if (HIDE_ALL) {
+      // O token do login-como é superadmin e vê tudo: a prova de "escondido" é o dado.
+      const raw = await api<Record<string, unknown>>("GET", `/case_setup_${csId}`, token);
+      const status = raw.role_play_status_id;
+      const creatorId = raw.created_by_user_id;
+      log(`  visibilidade ${stage} (${csId}): status ${String(status)}, criador ${String(creatorId)}`);
+      if (status !== 1) warn(`${conta.key} ${stage} (${csId}): status ${String(status)}, esperado 1`);
+      if (creatorId !== undefined && creatorId !== AS_USER) {
+        warn(`${conta.key} ${stage} (${csId}): criador ${String(creatorId)}, esperado ${AS_USER}`);
+      }
+    }
     await Deno.writeTextFile(
-      new URL(`docs/FIESC-B2G/fase23-prompt-${conta.key}-${stage}.hml.md`, ROOT),
+      new URL(`docs/FIESC-B2G/fase23-prompt-${conta.key}-${stage}.${ENV}.md`, ROOT),
       `<!-- prompt remontado por /role_play_prompt em ${new Date().toISOString()} -->\n\n${gate.prompt}\n`,
     );
   }
