@@ -59,6 +59,7 @@ import type {
   PlaybookCallType,
   RoleplayDossier,
 } from "@/app/lib/types";
+import { ROLE_PLAY_STATUSES } from "@/supabase/functions/_shared/roleplay-adjust-model";
 
 /** Ligação de abertura de conta: a frio, prospecção ou para passar pela triagem. */
 function isProspectingCall(slug: string): boolean {
@@ -79,6 +80,9 @@ const DIFFICULTIES = [
 
 /** Quantidade de personas no modo playbook. 1 = comportamento antigo (persona única). */
 const PERSONA_COUNTS = Array.from({ length: 10 }, (_, i) => String(i + 1));
+
+/** Chave do Select para "sem status" (o id é null). */
+const NO_STATUS = "__none__";
 
 const PROMPT_STORAGE_KEY = "import_prompt";
 const PROMPT_VERSION_KEY = "import_prompt_version";
@@ -211,6 +215,7 @@ export default function CriacaoPage() {
   /** PlaybookCallType.id das etapas travadas na persona principal. */
   const [fixedCallTypeIds, setFixedCallTypeIds] = useState<Set<number>>(new Set());
   const [difficulty, setDifficulty] = useState<string>("medium");
+  const [roleplayStatus, setRoleplayStatus] = useState<string>(NO_STATUS);
   const [perfil, setPerfil] = useState("");
   const [cenarioInstrucoes, setCenarioInstrucoes] = useState("");
   const [objetivo, setObjetivo] = useState("");
@@ -422,6 +427,7 @@ export default function CriacaoPage() {
     setCallContextSlug("");
     setMethodologySlug("");
     setDifficulty("medium");
+    setRoleplayStatus(NO_STATUS);
     setPerfil("");
     setCenarioInstrucoes("");
     setObjetivo("");
@@ -595,6 +601,7 @@ export default function CriacaoPage() {
         objections: objections.length > 0 ? objections : null,
         guardrails: guardrails.length > 0 ? guardrails : null,
         dossier: !isPlaybookMode ? dossier : null,
+        role_play_status_id: roleplayStatus === NO_STATUS ? null : Number(roleplayStatus),
       },
     };
   }
@@ -1052,6 +1059,26 @@ export default function CriacaoPage() {
           {connections.map((c) => (
             <SelectItem key={c.id} textValue={`${c.org_name ?? `Org ${c.org_id}`} (${c.environment})`}>
               {c.org_name ?? `Org ${c.org_id}`} ({c.environment})
+            </SelectItem>
+          ))}
+        </Select>
+
+        <Select
+          label="Status na conta"
+          labelPlacement="outside-top"
+          selectedKeys={[roleplayStatus]}
+          onSelectionChange={(keys) => setRoleplayStatus(String(Array.from(keys)[0] ?? NO_STATUS))}
+          radius="sm"
+          variant="bordered"
+          classNames={managerSelectClassNames}
+        >
+          {ROLE_PLAY_STATUSES.map((s) => (
+            <SelectItem
+              key={s.id == null ? NO_STATUS : String(s.id)}
+              textValue={`${s.label} — ${s.hint}`}
+              description={s.hint}
+            >
+              {s.label}
             </SelectItem>
           ))}
         </Select>

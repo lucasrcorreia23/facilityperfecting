@@ -2180,6 +2180,37 @@ export async function patchCaseSetup(
   await patchJson(`${rp(env)}/case_setup_${caseSetupId}`, token, patch);
 }
 
+/** Status escolhido na Criação (`scenario.role_play_status_id`); null = sem status. */
+export function roleplayStatusIdFrom(scenario: unknown): number | null {
+  const id = Number((scenario as { role_play_status_id?: unknown } | null)?.role_play_status_id);
+  return id === 1 || id === 2 || id === 3 ? id : null;
+}
+
+/**
+ * Põe o status nos roleplays recém-criados. O `case_setup/create` ignora o campo, então
+ * vai por PATCH — até lá o roleplay fica sem status, visível para todos. Nunca derruba
+ * o envio (o roleplay já existe): a falha volta como aviso, por roleplay.
+ */
+export async function applyRoleplayStatus(
+  env: PerfectingEnv,
+  token: string,
+  caseSetupIds: number[],
+  statusId: number,
+): Promise<{ applied: number[]; warnings: string[] }> {
+  const applied: number[] = [];
+  const warnings: string[] = [];
+  for (const id of caseSetupIds) {
+    try {
+      await patchCaseSetup(env, token, id, { role_play_status_id: statusId });
+      applied.push(id);
+    } catch (e) {
+      const reason = e instanceof PerfectingError ? JSON.stringify(e.detail) : String(e);
+      warnings.push(`roleplay ${id} ficou sem status (visível para todos): ${reason}`);
+    }
+  }
+  return { applied, warnings };
+}
+
 export async function listFeedbackRubricTypes(
   env: PerfectingEnv,
   token: string,

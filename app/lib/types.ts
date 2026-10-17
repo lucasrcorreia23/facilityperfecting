@@ -88,6 +88,13 @@ export interface ScenarioConfig {
    */
   fixed_persona_call_type_ids?: number[] | null;
   /**
+   * Status com que os roleplays entram na conta (`role_plays.role_play_status`):
+   * 1 = Em desenvolvimento, 2 = Homologação, 3 = Publicado. null/ausente = sem
+   * status (visível para todos). O create não aceita o campo — vai por PATCH logo
+   * depois de cada roleplay criado.
+   */
+  role_play_status_id?: number | null;
+  /**
    * Objeções e guardrails do material, criados no contexto da Perfecting no envio.
    * Guardrails vão para o contexto nos dois modos. Objeções: no contexto por
    * metodologia; no modo playbook, no roleplay de cada etapa (ver objection_steps).

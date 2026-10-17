@@ -19,6 +19,7 @@ import {
   type ObjectionSeed,
 } from "../_shared/context-content.ts";
 import {
+  applyRoleplayStatus,
   buildPersonaFromCaseSetup,
   createCaseSetup,
   createPersona,
@@ -36,6 +37,7 @@ import {
   PerfectingError,
   matchCallContextSlug,
   resolveMethodologyId,
+  roleplayStatusIdFrom,
   setCaseSetupPersona,
   truncateForApi,
 } from "../_shared/perfecting.ts";
@@ -304,6 +306,15 @@ async function exportDraft(draftId: string): Promise<{ caseSetupId: number }> {
     },
   );
 
+  // 4a) Status na conta — logo depois do create, que nasce sem status (visível para
+  // todos) e não aceita o campo. Falha vira aviso: o roleplay já existe.
+  const statusId = roleplayStatusIdFrom(draft.scenario);
+  const statusWarnings =
+    statusId != null
+      ? (await applyRoleplayStatus(env, token, [caseSetupId], statusId)).warnings
+      : [];
+  if (statusWarnings.length > 0) console.warn("export-roleplay[status]:", statusWarnings[0]);
+
   // 4b) Comprador travado no roleplay (com ou sem dossiê): sem isso o backend sorteia
   // entre as personas do contexto a cada call, e o contexto é reusado pela conexão —
   // cada rascunho enviado nele deixa mais uma persona no sorteio.
@@ -340,11 +351,12 @@ async function exportDraft(draftId: string): Promise<{ caseSetupId: number }> {
   }
 
   const detail =
-    personaId != null || personaWarning || dossierWarnings.length > 0
+    personaId != null || personaWarning || dossierWarnings.length > 0 || statusWarnings.length > 0
       ? {
           ...(personaId != null && { persona_id: personaId }),
           ...(personaWarning && { persona_warning: personaWarning }),
           ...(dossierWarnings.length > 0 && { dossier_warnings: dossierWarnings }),
+          ...(statusWarnings.length > 0 && { status_warning: statusWarnings[0] }),
         }
       : null;
   // 6) FECHAMENTO — o create só monta a casca do roleplay: rubricas, conteúdo por
@@ -362,7 +374,10 @@ async function exportDraft(draftId: string): Promise<{ caseSetupId: number }> {
     difficulty_level_id: difficultyLevelId ?? null,
     objections_seeded: seedObjections.length > 0,
     dossier,
-    ...(dossierWarnings.length > 0 && { warnings: [...dossierWarnings] }),
+    // Os do status também: é a lista que a Biblioteca mostra no detalhe do envio.
+    ...((dossierWarnings.length > 0 || statusWarnings.length > 0) && {
+      warnings: [...statusWarnings, ...dossierWarnings],
+    }),
     stage: "queued",
     steps: {},
     attempt_round: 1,
@@ -375,7 +390,8 @@ async function exportDraft(draftId: string): Promise<{ caseSetupId: number }> {
       status: "completing",
       perfecting_case_setup_id: caseSetupId,
       elevenlabs_agent_id,
-      error_detail: personaWarning || dossierWarnings.length > 0 ? detail : null,
+      error_detail:
+        personaWarning || dossierWarnings.length > 0 || statusWarnings.length > 0 ? detail : null,
       completion_run: completionRun,
     })
     .eq("id", draftId);

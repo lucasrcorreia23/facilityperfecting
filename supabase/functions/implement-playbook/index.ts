@@ -22,6 +22,7 @@ import {
   type ObjectionSeed,
 } from "../_shared/context-content.ts";
 import {
+  applyRoleplayStatus,
   type CaseSetupRepairStep,
   countPlaybookCallBlockRubrics,
   DIFFICULTY_LEVEL_IDS,
@@ -36,6 +37,7 @@ import {
   openPlaybookImplementationStream,
   PerfectingError,
   type PerfectingEnv,
+  roleplayStatusIdFrom,
   runCaseSetupRepairStep,
   setCaseSetupPersona,
   setPlaybookCallTypePrecedent,
@@ -126,6 +128,8 @@ interface PlaybookRun {
   call_type_case_setups?: Record<string, number>;
   /** case_setups já travados — permite o poll retomar sem repetir. */
   locked_case_setup_ids?: number[];
+  /** case_setups que já receberam o status da Criação (scenario.role_play_status_id). */
+  status_applied_ids?: number[];
   /** Avisos não-fatais (ex.: persona fixa não aplicada numa etapa). */
   warnings?: string[];
   /** Quantas objeções/guardrails do material foram criados no contexto. */
@@ -372,6 +376,30 @@ function invokeSelf(body: Record<string, unknown>): void {
   );
 }
 
+/**
+ * Status escolhido na Criação nos roleplays criados até aqui. A jornada leva minutos e
+ * cada etapa nasce sem status (visível para todos), então o poll aplica a cada rodada,
+ * não só no fim. Tenta uma vez por roleplay: a falha fica nos avisos.
+ * Devolve se o run mudou (para o poll salvar).
+ */
+async function applyStatusToCreated(
+  env: PerfectingEnv,
+  token: string,
+  draft: any,
+  run: PlaybookRun,
+  created: number[],
+): Promise<boolean> {
+  const statusId = roleplayStatusIdFrom(draft.scenario);
+  if (statusId == null) return false;
+  const done = new Set(run.status_applied_ids ?? []);
+  const pending = created.filter((id) => !done.has(id));
+  if (pending.length === 0) return false;
+  const { warnings } = await applyRoleplayStatus(env, token, pending, statusId);
+  run.status_applied_ids = [...done, ...pending];
+  for (const w of warnings) addWarning(run, w);
+  return true;
+}
+
 /** Fecha o rascunho com os ids criados (diff contra o snapshot inicial). */
 async function finish(
   draftId: string,
@@ -583,6 +611,7 @@ async function run(draftId: string): Promise<void> {
       treatPendingAsFailed: true,
     });
     warnIncompleteCallTypes(playbookRun, states);
+    await applyStatusToCreated(env, token, draft, playbookRun, created);
     await lockFixedPersonas(env, token, draftId, playbookRun, created);
     await applyObjectionsToSteps(env, token, draftId, playbookRun).catch((e) =>
       addWarning(playbookRun, `objeções das etapas não aplicadas: ${messageOf(e)}`),
@@ -701,6 +730,7 @@ async function runPoll(draftId: string): Promise<{ done: boolean; created?: numb
   const before = new Set(playbookRun.before_case_setup_ids ?? []);
   const created = after.filter((id) => !before.has(id));
   const total = playbookRun.call_type_total ?? 0;
+  const statusChanged = await applyStatusToCreated(env, token, draft, playbookRun, created);
   const startedAt = playbookRun.started_at ? Date.parse(playbookRun.started_at) : NaN;
   const stale = Number.isFinite(startedAt) && Date.now() - startedAt > STALE_AFTER_MS;
 
@@ -748,7 +778,7 @@ async function runPoll(draftId: string): Promise<{ done: boolean; created?: numb
   // "exporting", para não sobrescrever um finish() que tenha acabado de gravar.
   const inProgress = total > 0 ? Math.min(created.length + 1, total) : 0;
   const advanced = inProgress > (playbookRun.call_type_index ?? 0);
-  if (advanced || classified) {
+  if (advanced || classified || statusChanged) {
     if (advanced) playbookRun.call_type_index = inProgress;
     playbookRun.case_setup_ids = created;
     playbookRun.stage = "tracking_remote";

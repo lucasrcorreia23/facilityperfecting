@@ -7,6 +7,7 @@ import {
   MAX_API_TEXT_CHARS,
   type Methodology,
   personaPromptFromCasePrompt,
+  roleplayStatusIdFrom,
   truncateForApi,
 } from "./perfecting.ts";
 
@@ -129,5 +130,20 @@ describe("applyCaseSetupExtras", () => {
 
   it("não deixa generateCasePrompt vazar para o payload", () => {
     expect(applyCaseSetupExtras(base, { generateCasePrompt: false })).toEqual(base);
+  });
+});
+
+describe("roleplayStatusIdFrom", () => {
+  it("aceita só os status que a Criação oferece", () => {
+    expect(roleplayStatusIdFrom({ role_play_status_id: 1 })).toBe(1);
+    expect(roleplayStatusIdFrom({ role_play_status_id: 3 })).toBe(3);
+  });
+
+  it("sem status, ausente ou fora da lista vira null (o roleplay fica como sempre)", () => {
+    expect(roleplayStatusIdFrom({ role_play_status_id: null })).toBeNull();
+    expect(roleplayStatusIdFrom({})).toBeNull();
+    expect(roleplayStatusIdFrom(null)).toBeNull();
+    expect(roleplayStatusIdFrom({ role_play_status_id: 9 })).toBeNull();
+    expect(roleplayStatusIdFrom({ role_play_status_id: 0 })).toBeNull();
   });
 });
