@@ -29,8 +29,8 @@ export interface PerfectingEnvConfig {
 }
 
 const DEFAULT_API: Record<PerfectingEnv, string> = {
-  hml: "https://api-hml.perfecting.app",
-  prod: "https://api.perfecting.app",
+  hml: "https://api-hml.perfecting.com.br",
+  prod: "https://api.perfecting.com.br",
 };
 
 export function parsePerfectingEnv(value: unknown): PerfectingEnv {
