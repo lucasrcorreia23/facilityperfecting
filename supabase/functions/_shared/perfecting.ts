@@ -736,14 +736,41 @@ export async function createContext(
   return data.id;
 }
 
+/**
+ * `additional_instructions` da persona gerada do contexto, a partir do perfil do
+ * rascunho (`contexts.target_notes`) e da variação entre personas. Sem isso a persona
+ * só via o contexto, que o /context/generate reescreve tomando a oferta como base e
+ * generalizando a pessoa descrita para um segmento: material de comprador "aluno"
+ * numa oferta de curso saía com uma professora. O backend dá prioridade alta a este
+ * campo sobre o contexto. null quando não há nada a mandar.
+ */
+export function profilePersonaInstructions(
+  profile: unknown,
+  variation?: unknown,
+): string | null {
+  const text = (v: unknown) => (typeof v === "string" ? v.trim() : "");
+  const parts: string[] = [];
+  if (text(profile)) {
+    parts.push(
+      `Perfil do comprador descrito pelo cliente. A persona é uma pessoa deste perfil: respeite quem ela é (papel, idade, momento de vida, comportamento), mesmo que a oferta sugira outro público.\n\n${text(profile)}`,
+    );
+  }
+  if (text(variation)) parts.push(`Como as personas variam entre si:\n${text(variation)}`);
+  return parts.length > 0 ? truncateForApi(parts.join("\n\n")) : null;
+}
+
 export async function generatePersonaFromContext(
   env: PerfectingEnv,
   token: string,
   contextId: number,
+  additionalInstructions?: string | null,
 ): Promise<{ id: number; name: string | null }> {
   const data = await postJson<{
     persona?: { id?: number; name?: string | null };
-  }>(`${rp(env)}/persona/generate_from_context`, token, { context_id: contextId });
+  }>(`${rp(env)}/persona/generate_from_context`, token, {
+    context_id: contextId,
+    ...(additionalInstructions && { additional_instructions: additionalInstructions }),
+  });
   const id = data.persona?.id;
   if (typeof id !== "number") {
     throw new PerfectingError(502, "persona/generate_from_context sem persona.id");
