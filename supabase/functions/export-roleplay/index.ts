@@ -35,6 +35,7 @@ import {
   overlayVerbatimOnGenerated,
   type PerfectingEnv,
   PerfectingError,
+  profilePersonaInstructions,
   matchCallContextSlug,
   resolveMethodologyId,
   roleplayStatusIdFrom,
@@ -247,9 +248,16 @@ async function exportDraft(draftId: string): Promise<{ caseSetupId: number }> {
 
   // 3b) PERSONA HML — gerada do contexto, com voz v2 (HML aceita override de voz).
   // Em PROD a persona vem depois do case_setup (passo 5). Com dossiê já foi criada.
+  // O perfil vai junto: o contexto é reescrito a partir da oferta e sozinho trocava
+  // o comprador descrito (aluno → professora).
   if (env === "hml" && personaId == null) {
     await setJob({ step: "persona" });
-    const persona = await generatePersonaFromContext(env, token, perfectingContextId);
+    const persona = await generatePersonaFromContext(
+      env,
+      token,
+      perfectingContextId,
+      profilePersonaInstructions(draft.contexts?.target_notes),
+    );
     personaId = persona.id;
     await setJob({ error_detail: { persona_id: personaId } });
   }

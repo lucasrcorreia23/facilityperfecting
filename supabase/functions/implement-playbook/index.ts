@@ -37,6 +37,7 @@ import {
   openPlaybookImplementationStream,
   PerfectingError,
   type PerfectingEnv,
+  profilePersonaInstructions,
   roleplayStatusIdFrom,
   runCaseSetupRepairStep,
   setCaseSetupPersona,
@@ -501,7 +502,12 @@ async function run(draftId: string): Promise<void> {
       // Sem persona_id a API sorteia uma do contexto — que pode não existir.
       playbookRun.stage = "persona";
       await saveRun(draftId, playbookRun);
-      const persona = await generatePersonaFromContext(env, token, perfectingContextId);
+      const persona = await generatePersonaFromContext(
+        env,
+        token,
+        perfectingContextId,
+        profilePersonaInstructions(draft.contexts?.target_notes, personaInstructions),
+      );
       playbookRun.persona_id = persona.id;
       playbookRun.persona_ids = [persona.id];
       playbookRun.persona_names = [persona.name ?? `Persona ${persona.id}`];

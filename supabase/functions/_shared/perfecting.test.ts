@@ -7,6 +7,7 @@ import {
   MAX_API_TEXT_CHARS,
   type Methodology,
   personaPromptFromCasePrompt,
+  profilePersonaInstructions,
   roleplayStatusIdFrom,
   truncateForApi,
 } from "./perfecting.ts";
@@ -145,5 +146,36 @@ describe("roleplayStatusIdFrom", () => {
     expect(roleplayStatusIdFrom(null)).toBeNull();
     expect(roleplayStatusIdFrom({ role_play_status_id: 9 })).toBeNull();
     expect(roleplayStatusIdFrom({ role_play_status_id: 0 })).toBeNull();
+  });
+});
+
+describe("profilePersonaInstructions", () => {
+  it("leva o perfil inteiro, com a ordem de respeitar quem a pessoa é", () => {
+    const out = profilePersonaInstructions("## Público\nAluno do ensino médio, 17 anos.");
+    expect(out).toContain("Aluno do ensino médio, 17 anos.");
+    expect(out).toContain("mesmo que a oferta sugira outro público");
+  });
+
+  it("junta a variação entre personas quando houver", () => {
+    const out = profilePersonaInstructions("Aluno", "  idades diferentes  ");
+    expect(out).toContain("Aluno");
+    expect(out).toContain("Como as personas variam entre si:\nidades diferentes");
+  });
+
+  it("manda só a variação quando não há perfil", () => {
+    const out = profilePersonaInstructions(null, "idades diferentes");
+    expect(out).toBe("Como as personas variam entre si:\nidades diferentes");
+  });
+
+  it("null sem nada a mandar", () => {
+    expect(profilePersonaInstructions(null)).toBeNull();
+    expect(profilePersonaInstructions("   ", "")).toBeNull();
+    expect(profilePersonaInstructions(42)).toBeNull();
+  });
+
+  it("corta no teto da API", () => {
+    const out = profilePersonaInstructions("c".repeat(30_000));
+    expect(out).toContain("o original tem");
+    expect(out!.length).toBeLessThan(MAX_API_TEXT_CHARS + 100);
   });
 });
