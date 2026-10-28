@@ -150,7 +150,7 @@ export, se a offer/context já tem id da Perfecting, **pula as etapas 1 e 2** e 
 Aciona ao clicar "Enviar para Perfecting" (individual ou em lote). Roda numa **Edge Function /
 worker** (idealmente assíncrono — os `/generate` levam segundos a minutos).
 
-**Base URLs:** HML `https://api-hml.perfecting.app` · PROD `https://api.perfecting.app` ·
+**Base URLs:** HML `https://api-hml.perfecting.com.br` · PROD `https://api.perfecting.com.br` ·
 role plays em `{API_BASE}/role_plays` · superadmin em `{API_BASE}/superadmin`.
 
 **Auth com mira na conta certa (superadmin → impersonação):**

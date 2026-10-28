@@ -3,14 +3,14 @@
 # Valida: login superadmin → login_as_user → offer → context → case_setup numa org de teste.
 #
 # Uso:
-#   PERFECTING_API_BASE=https://api-hml.perfecting.app \
+#   PERFECTING_API_BASE=https://api-hml.perfecting.com.br \
 #   SA_EMAIL=...@... SA_PASS=... TARGET_ORG_ID=123 TARGET_USER_ID=456 \
 #   bash scripts/validate-hml.sh
 #
 # Requer: curl, jq.
 set -euo pipefail
 
-API="${PERFECTING_API_BASE:-https://api-hml.perfecting.app}"
+API="${PERFECTING_API_BASE:-https://api-hml.perfecting.com.br}"
 : "${SA_EMAIL:?defina SA_EMAIL}"
 : "${SA_PASS:?defina SA_PASS}"
 : "${TARGET_ORG_ID:?defina TARGET_ORG_ID}"
@@ -69,5 +69,5 @@ CASE=$(curl -sS -X POST "$API/role_plays/case_setup/create" \
 echo "$CASE" | jq '{id, elevenlabs_agent_id}'
 
 echo ""
-echo "✅ Validação concluída. Confirme em app-hml.perfecting.app (logado na org $TARGET_ORG_ID)"
+echo "✅ Validação concluída. Confirme em homolog.perfecting.com.br (logado na org $TARGET_ORG_ID)"
 echo "   que o roleplay aparece em /roleplays e abre em /roleplays/<id>/details."

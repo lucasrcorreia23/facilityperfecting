@@ -15,7 +15,7 @@
 #   6) o mesmo PUT SEM ?generate_case_prompt=false — documenta o erro esperado
 #
 # Uso:
-#   PERFECTING_API_BASE=https://api-hml.perfecting.app \
+#   PERFECTING_API_BASE=https://api-hml.perfecting.com.br \
 #   SA_EMAIL=...@... SA_PASS=... TARGET_ORG_ID=123 TARGET_USER_ID=456 \
 #   CONTEXT_ID=789 PLAYBOOK_ID=12 \
 #   bash scripts/validate-personas-hml.sh
@@ -30,7 +30,7 @@
 # Requer: curl, jq.
 set -euo pipefail
 
-API="${PERFECTING_API_BASE:-https://api-hml.perfecting.app}"
+API="${PERFECTING_API_BASE:-https://api-hml.perfecting.com.br}"
 : "${SA_EMAIL:?defina SA_EMAIL}"
 : "${SA_PASS:?defina SA_PASS}"
 : "${TARGET_ORG_ID:?defina TARGET_ORG_ID}"

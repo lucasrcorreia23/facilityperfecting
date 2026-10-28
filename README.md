@@ -26,13 +26,13 @@ Prova a cadeia `login → impersonação → offer → context → case_setup` d
 sem depender do app. **Não pule** — é o que dá confiança no motor de export.
 
 ```bash
-PERFECTING_API_BASE=https://api-hml.perfecting.app \
+PERFECTING_API_BASE=https://api-hml.perfecting.com.br \
 SA_EMAIL=superadmin@... SA_PASS=... \
 TARGET_ORG_ID=<org de teste> TARGET_USER_ID=<gestor da org> \
 bash scripts/validate-hml.sh
 ```
 
-Depois confirme em `app-hml.perfecting.app` (logado naquela org) que o roleplay aparece em
+Depois confirme em `homolog.perfecting.com.br` (logado naquela org) que o roleplay aparece em
 `/roleplays` e abre em `/roleplays/<id>/details`. Anote o enum real de
 `scenario_difficulty_level` e os slugs de `call_contexts`.
 
@@ -51,10 +51,10 @@ dashboard (Authentication → Users) — o signup está desativado (uso interno)
 
 ```bash
 supabase secrets set \
-  PERFECTING_HML_API_BASE=https://api-hml.perfecting.app \
+  PERFECTING_HML_API_BASE=https://api-hml.perfecting.com.br \
   PERFECTING_HML_SUPERADMIN_EMAIL=... \
   PERFECTING_HML_SUPERADMIN_PASSWORD=... \
-  PERFECTING_PROD_API_BASE=https://api.perfecting.app \
+  PERFECTING_PROD_API_BASE=https://api.perfecting.com.br \
   PERFECTING_PROD_SUPERADMIN_EMAIL=... \
   PERFECTING_PROD_SUPERADMIN_PASSWORD=... \
   ANTHROPIC_API_KEY=... \

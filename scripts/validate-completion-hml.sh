@@ -8,7 +8,7 @@
 # fechamento (nº de personas × (nº de etapas + 1) chamadas de IA em série).
 #
 # Uso:
-#   PERFECTING_API_BASE=https://api-hml.perfecting.app \
+#   PERFECTING_API_BASE=https://api-hml.perfecting.com.br \
 #   SA_EMAIL=...@... SA_PASS=... TARGET_ORG_ID=123 TARGET_USER_ID=456 \
 #   CASE_SETUP_ID=160 [METHODOLOGY_ID=7] \
 #   bash scripts/validate-completion-hml.sh
@@ -16,7 +16,7 @@
 # Requer: curl, jq. NÃO roda em produção: gera conteúdo com IA na conta.
 set -euo pipefail
 
-API="${PERFECTING_API_BASE:-https://api-hml.perfecting.app}"
+API="${PERFECTING_API_BASE:-https://api-hml.perfecting.com.br}"
 : "${SA_EMAIL:?defina SA_EMAIL}"
 : "${SA_PASS:?defina SA_PASS}"
 : "${TARGET_ORG_ID:?defina TARGET_ORG_ID}"

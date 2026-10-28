@@ -264,7 +264,7 @@ create policy "own_rows" on google_accounts for all using (user_id = auth.uid())
 // supabase/functions/export-roleplay/index.ts
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 
-const API = Deno.env.get('PERFECTING_API_BASE')!;            // https://api-hml.perfecting.app
+const API = Deno.env.get('PERFECTING_API_BASE')!;            // https://api-hml.perfecting.com.br
 const SA_EMAIL = Deno.env.get('PERFECTING_SUPERADMIN_EMAIL')!;
 const SA_PASS  = Deno.env.get('PERFECTING_SUPERADMIN_PASSWORD')!;
 
@@ -418,7 +418,7 @@ texto. Arquivos grandes/longos → processar assíncrono (status no `source.meta
 
 ```
 # Edge Functions (supabase secrets set ...)
-PERFECTING_API_BASE=https://api-hml.perfecting.app
+PERFECTING_API_BASE=https://api-hml.perfecting.com.br
 PERFECTING_SUPERADMIN_EMAIL=...
 PERFECTING_SUPERADMIN_PASSWORD=...
 OPENAI_API_KEY=...               # transcrição de áudio (Whisper)
