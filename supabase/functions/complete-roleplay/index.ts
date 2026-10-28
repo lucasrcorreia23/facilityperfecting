@@ -265,9 +265,15 @@ Deno.serve(async (req) => {
     }
 
     const current: CompletionRun | null = draft.completion_run ?? null;
+    // Um run semeado pelo export (stage "queued", sem passo nenhum) é retomado como
+    // está; qualquer outro caso recomeça do zero, preservando o que o pre-gate achar.
+    // O export já deixa o rascunho em "completing" com started_at de agora: sem
+    // isentar o run semeado, o próprio start dele caía no 409 e só andava pelo poll.
+    const fresh = current && current.stage === "queued" && Object.keys(current.steps ?? {}).length === 0;
     const startedAt = current?.started_at ? Date.parse(current.started_at) : NaN;
     if (
       body.force !== true &&
+      !fresh &&
       draft.status === "completing" &&
       Number.isFinite(startedAt) &&
       Date.now() - startedAt < RUNNING_WINDOW_MS
@@ -275,9 +281,6 @@ Deno.serve(async (req) => {
       return json({ ok: false, error: "fechamento já em andamento para este rascunho" }, 409);
     }
 
-    // Um run semeado pelo export (stage "queued", sem passo nenhum) é retomado como
-    // está; qualquer outro caso recomeça do zero, preservando o que o pre-gate achar.
-    const fresh = current && current.stage === "queued" && Object.keys(current.steps ?? {}).length === 0;
     const run = fresh ? current! : seedRun(draft);
     await saveRun(draftId, run, { status: "completing" });
 
