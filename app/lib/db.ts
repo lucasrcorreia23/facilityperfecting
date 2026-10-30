@@ -9,6 +9,10 @@ import type {
   DraftRow,
   EvalWeights,
   GenerationMode,
+  GeneratorGuideline,
+  GeneratorManifest,
+  GuidelineScope,
+  GuidelineVersion,
   EvaluationRound,
   Methodology,
   MethodologySource,
@@ -22,6 +26,7 @@ import type {
   Profile,
   RoleplayAdjustment,
   RoleplayEvaluation,
+  RoleplayGeneration,
   RoleplayReadiness,
   RoundStatus,
   ScenarioConfig,
@@ -57,6 +62,10 @@ export async function createDraftFromText(params: {
   scenario?: ScenarioConfig;
   /** Notas de buyer persona (Grupo 2) → vira um contexto explícito ligado ao draft. */
   contextNotes?: string | null;
+  /** Manifesto do processamento por IA; null quando o material não foi processado. */
+  generator?: GeneratorManifest | null;
+  /** Resposta da IA, para a linha do tempo mostrar o que a equipe editou antes do envio. */
+  generationOutput?: ProcessImportResult | null;
 }): Promise<{ draftId: string }> {
   const supabase = createClient();
 
@@ -107,6 +116,8 @@ export async function createDraftFromText(params: {
       connection_id: params.connectionId ?? null,
       scenario: params.scenario ?? {},
       title: params.offerName,
+      generator: params.generator ?? null,
+      generation_output: params.generationOutput ?? null,
     })
     .select("id")
     .single();
@@ -663,21 +674,138 @@ async function functionErrorMessage(error: unknown, fallback: string): Promise<s
   return error instanceof Error ? error.message : fallback;
 }
 
-/** Processa o texto importado com IA (Claude) → briefing estruturado + cenário + lacunas. */
+/**
+ * Processa o texto importado com IA (Claude) → briefing estruturado + cenário + lacunas,
+ * com o manifesto do gerador (versão + diretrizes aplicadas) que vai junto no rascunho.
+ */
 export async function processImport(
   text: string,
-  customPrompt?: string | null,
   /** "playbook" pula a extração de cenário/rubricas — que o playbook descarta. */
-  mode?: GenerationMode | null,
-): Promise<ProcessImportResult> {
+  mode: GenerationMode,
+  /** Conta de destino, quando já escolhida: aplica as diretrizes dela. */
+  connectionId: string | null,
+): Promise<{ result: ProcessImportResult; generator: GeneratorManifest | null; warnings: string[] }> {
   const supabase = createClient();
-  const body: Record<string, unknown> = { text };
-  if (customPrompt?.trim()) body.prompt = customPrompt.trim();
-  if (mode) body.mode = mode;
+  const body: Record<string, unknown> = { text, mode };
+  if (connectionId) body.connection_id = connectionId;
   const { data, error } = await supabase.functions.invoke("process-import", { body });
   if (error) throw new Error(await functionErrorMessage(error, "Falha ao processar"));
   if (!data?.ok) throw new Error(JSON.stringify(data?.error ?? data));
-  return data.result as ProcessImportResult;
+  return {
+    result: data.result as ProcessImportResult,
+    generator: (data.generator ?? null) as GeneratorManifest | null,
+    warnings: (data.warnings ?? []) as string[],
+  };
+}
+
+/** Prompt base do gerador (somente leitura) e a versão em produção. */
+export async function getGeneratorInfo(): Promise<{
+  prompt: string;
+  version: string;
+  fingerprint: string;
+  model: string;
+}> {
+  const supabase = createClient();
+  const { data, error } = await supabase.functions.invoke("process-import", { body: { op: "info" } });
+  if (error) throw new Error(await functionErrorMessage(error, "Falha ao ler o prompt base"));
+  if (!data?.ok) throw new Error(JSON.stringify(data?.error ?? data));
+  return data;
+}
+
+// ── Diretrizes da equipe (generator_guidelines*, migration 0024) ────────────
+
+export async function listGuidelines(): Promise<GeneratorGuideline[]> {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from("generator_guidelines_current")
+    .select("*")
+    .eq("target", "roleplay_import")
+    .order("position", { ascending: true })
+    .order("created_at", { ascending: true });
+  if (error) throw error;
+  return (data ?? []) as GeneratorGuideline[];
+}
+
+/** Cria a diretriz já com a versão 1 (diretriz sem versão não aparece na lista). */
+export async function createGuideline(params: {
+  title: string;
+  scopeType: GuidelineScope;
+  scopeKeys: string[];
+  body: string;
+  note?: string | null;
+}): Promise<string> {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from("generator_guidelines")
+    .insert({
+      title: params.title.trim(),
+      scope_type: params.scopeType,
+      scope_keys: params.scopeType === "global" ? [] : params.scopeKeys,
+    })
+    .select("id")
+    .single();
+  if (error) throw error;
+  await addGuidelineVersion(data.id, params.body, params.note ?? null);
+  return data.id as string;
+}
+
+/** Título, escopo, ordem e ligar/desligar: não mudam o texto, então não viram versão. */
+export async function updateGuidelineMeta(
+  id: string,
+  patch: Partial<{ title: string; scope_type: GuidelineScope; scope_keys: string[]; position: number; active: boolean }>,
+): Promise<void> {
+  const supabase = createClient();
+  const { error } = await supabase.from("generator_guidelines").update(patch).eq("id", id);
+  if (error) throw error;
+}
+
+export async function listGuidelineVersions(guidelineId: string): Promise<GuidelineVersion[]> {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from("generator_guideline_versions")
+    .select("*")
+    .eq("guideline_id", guidelineId)
+    .order("version_no", { ascending: false });
+  if (error) throw error;
+  return (data ?? []) as GuidelineVersion[];
+}
+
+/** Toda mudança de texto é uma versão nova; restaurar também (com a origem anotada). */
+export async function addGuidelineVersion(
+  guidelineId: string,
+  body: string,
+  note: string | null,
+  restoredFromVersionNo: number | null = null,
+): Promise<void> {
+  const supabase = createClient();
+  const { error } = await supabase.from("generator_guideline_versions").insert({
+    guideline_id: guidelineId,
+    // O trigger numera; o valor aqui só satisfaz o not null.
+    version_no: 0,
+    body: body.trim(),
+    note: note?.trim() || null,
+    restored_from_version_no: restoredFromVersionNo,
+  });
+  if (error) {
+    if (error.code === "23505") throw new Error("Outra pessoa salvou esta diretriz agora. Recarregue e tente de novo.");
+    throw error;
+  }
+}
+
+/** Origem de um roleplay da conta; null = criado fora da facility ou antes do versionamento. */
+export async function getRoleplayGeneration(
+  connectionId: string,
+  caseSetupId: number,
+): Promise<RoleplayGeneration | null> {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from("roleplay_generations")
+    .select("*")
+    .eq("connection_id", connectionId)
+    .eq("case_setup_id", caseSetupId)
+    .maybeSingle();
+  if (error) throw error;
+  return (data ?? null) as RoleplayGeneration | null;
 }
 
 // ── Playbooks (autoria local → envio para a conta) ─────────────────────────

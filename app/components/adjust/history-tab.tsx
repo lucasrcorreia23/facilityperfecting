@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { listAdjustments, listProfiles } from "@/app/lib/db";
 import type { Profile, RoleplayAdjustment } from "@/app/lib/types";
+import { reasonLabel } from "@/app/components/adjust/reason-picker";
 
 export const SECTION_LABELS: Record<string, string> = {
   general: "Geral",
@@ -45,7 +46,7 @@ export function HistoryTab({
 
   if (error) return <p className="text-sm text-rose-600">{error}</p>;
   if (!items) return <p className="text-sm text-slate-500">Carregando…</p>;
-  if (items.length === 0) return <p className="text-sm text-slate-500">Nenhum ajuste feito por esta tela ainda.</p>;
+  if (items.length === 0) return <p className="text-sm text-slate-500">Nenhuma calibração ainda.</p>;
 
   return (
     <ul className="flex flex-col gap-3">
@@ -59,6 +60,16 @@ export function HistoryTab({
                 {new Date(a.created_at).toLocaleString("pt-BR")} · {who?.display_name || who?.email || "—"}
               </span>
             </div>
+            {(a.reason_kind || a.reason) && (
+              <p className="mt-1 text-sm text-slate-700">
+                {a.reason_kind && (
+                  <span className="mr-1.5 rounded-sm bg-slate-100 px-1.5 py-0.5 text-[11px] font-medium text-slate-600">
+                    {reasonLabel(a.reason_kind) ?? a.reason_kind}
+                  </span>
+                )}
+                {a.reason}
+              </p>
+            )}
             <ul className="mt-1 list-disc pl-5 text-xs text-slate-600">
               {(a.summary ?? []).map((s, i) => (
                 <li key={i}>{s}</li>

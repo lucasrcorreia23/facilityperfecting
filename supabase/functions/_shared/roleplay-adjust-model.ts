@@ -484,3 +484,24 @@ export function planGuardrailChanges(
   for (const g of existing) if (!kept.has(g.id)) plan.deletes.push(g.id);
   return plan;
 }
+
+/** Por que uma calibração foi feita: o tipo é filtrável; o texto diz qual teste ou pedido. */
+export const ADJUST_REASON_KINDS = [
+  { id: "test_defect", label: "Defeito em teste" },
+  { id: "client_request", label: "Pedido do cliente" },
+  { id: "wrong_data", label: "Dado errado ou vencido" },
+  { id: "polish", label: "Polimento" },
+  { id: "other", label: "Outro" },
+] as const;
+
+export type AdjustReasonKind = (typeof ADJUST_REASON_KINDS)[number]["id"];
+
+/**
+ * Lê o motivo do corpo do pedido. Tolerante de propósito: a tela exige o tipo, mas
+ * um front antigo (sem o campo) não pode deixar de salvar; aí o motivo fica null.
+ */
+export function parseAdjustReason(body: Record<string, unknown>): { reason_kind: AdjustReasonKind | null; reason: string | null } {
+  const kind = ADJUST_REASON_KINDS.find((k) => k.id === body.reasonKind)?.id ?? null;
+  const text = typeof body.reason === "string" ? body.reason.trim().slice(0, 500) : "";
+  return { reason_kind: kind, reason: text || null };
+}

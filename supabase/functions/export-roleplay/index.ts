@@ -42,6 +42,7 @@ import {
   setCaseSetupPersona,
   truncateForApi,
 } from "../_shared/perfecting.ts";
+import { recordGenerations } from "../_shared/generations.ts";
 
 const VALID_DIFFICULTIES = new Set(["easy", "medium", "hard"]);
 
@@ -403,6 +404,7 @@ async function exportDraft(draftId: string): Promise<{ caseSetupId: number }> {
       completion_run: completionRun,
     })
     .eq("id", draftId);
+  await recordGenerations(db, draft, [caseSetupId]);
   await setJob({
     state: "done",
     finished_at: new Date().toISOString(),

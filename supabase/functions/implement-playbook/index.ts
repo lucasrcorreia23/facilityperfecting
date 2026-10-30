@@ -43,6 +43,7 @@ import {
   setCaseSetupPersona,
   setPlaybookCallTypePrecedent,
 } from "../_shared/perfecting.ts";
+import { recordGenerations } from "../_shared/generations.ts";
 
 /**
  * Envio no modo playbook: dispara o Engine de Implementação por Playbook, que
@@ -415,11 +416,20 @@ async function finish(
     perfecting_case_setup_id: createdIds[0] ?? null,
     error_detail: null,
   });
+  await recordOrigin(draftId, createdIds);
+}
+
+/** Origem de cada roleplay criado, também quando a implementação para no meio. */
+async function recordOrigin(draftId: string, caseSetupIds: number[]): Promise<void> {
+  if (caseSetupIds.length === 0) return;
+  const draft = await loadDraft(draftId).catch(() => null);
+  if (draft) await recordGenerations(db, draft, caseSetupIds);
 }
 
 async function fail(draftId: string, run: PlaybookRun, detail: unknown): Promise<void> {
   run.finished_at = new Date().toISOString();
   await saveRun(draftId, run, { status: "error", error_detail: detail });
+  await recordOrigin(draftId, run.case_setup_ids ?? []);
 }
 
 async function run(draftId: string): Promise<void> {

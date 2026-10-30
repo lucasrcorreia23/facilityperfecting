@@ -6,8 +6,9 @@
  */
 
 /**
- * `today` entra pelo código, e não pelo texto base, para valer também com prompt
- * personalizado: sem ele o modelo copia prazos vencidos do material como vigentes.
+ * `today` entra pelo código, e não pelo texto base, porque muda todo dia e não pode
+ * entrar na impressão digital do gerador: sem ele o modelo copia prazos vencidos do
+ * material como vigentes.
  */
 export function buildSystem(
   contexts: Array<{ slug: string; name: string; stage?: string }>,
@@ -73,8 +74,8 @@ export const DOSSIER_PARTS: Record<"dossier_buyer" | "dossier_context", readonly
 export type SchemaPart = keyof typeof SCHEMA_PARTS;
 
 /**
- * Instrução extra por fatia, fora do prompt base (que é editável pelo usuário e tem
- * cópia no front). O dossiê precisa dela porque contraria a regra geral do base: ele
+ * Instrução extra por fatia, fora do prompt base (que vale para todas as fatias).
+ * O dossiê precisa dela porque contraria a regra geral do base: ele
  * também extrai o LADO DO VENDEDOR, que fica separado e nunca chega ao comprador.
  */
 const DOSSIER_NOTE = `NESTA RESPOSTA você preenche só o "dossie" (ou a parte dele indicada abaixo). Exceção à regra "QUEM LÊ ISTO É O COMPRADOR": aqui os campos "produtos", "dores[].produto" e "rubricas" SÃO do lado do vendedor e devem ser extraídos (as soluções que o vendedor deveria conectar a cada dor e os critérios de sucesso da conversa). O envio os guarda separados — o comprador só recebe "persona" (sem nomes de produto) e as dores dele. Por isso o critério de resultado do vendedor (o que o material chama de vitória, parcial, avança/trava, meta da ligação) vai em "rubricas", nunca em "persona.prompt"; e faturamento, histórico de compras e relação comercial com o vendedor vão em "conhecimento.briefing", nunca em "persona.empresa_perfil". Todo o resto continua valendo: fidelidade ao material, nenhum número, data ou pessoa inventados, e o que o material marca como construção de personagem pode ser usado como fato do personagem.`;

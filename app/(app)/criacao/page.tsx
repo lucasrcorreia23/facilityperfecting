@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   Checkbox,
@@ -21,7 +22,6 @@ import {
   ArrowPathIcon,
   ArrowUpTrayIcon,
   DocumentTextIcon,
-  PencilSquareIcon,
   SparklesIcon,
   XMarkIcon,
 } from "@heroicons/react/24/outline";
@@ -36,6 +36,7 @@ import { ObjectionListEditor } from "@/app/components/content/objection-list-edi
 import { GuardrailListEditor } from "@/app/components/content/guardrail-list-editor";
 import {
   createDraftFromText,
+  getGeneratorInfo,
   invokeExport,
   getDefaultMethodologySlug,
   invokeExportPlaybook,
@@ -51,7 +52,9 @@ import type {
   CallContextType,
   Connection,
   GenerationMode,
+  GeneratorManifest,
   GuardrailSeed,
+  ProcessImportResult,
   ImportGap,
   Methodology,
   ObjectionSeed,
@@ -60,6 +63,8 @@ import type {
   RoleplayDossier,
 } from "@/app/lib/types";
 import { ROLE_PLAY_STATUSES } from "@/supabase/functions/_shared/roleplay-adjust-model";
+import { generatorVersionLabel, guidelinesLabel } from "@/app/lib/generator-label";
+import { buildSentSnapshot, changedItems, diffGeneration } from "@/supabase/functions/_shared/generation-diff";
 
 /** Ligação de abertura de conta: a frio, prospecção ou para passar pela triagem. */
 function isProspectingCall(slug: string): boolean {
@@ -86,111 +91,32 @@ const NO_STATUS = "__none__";
 /** Em desenvolvimento: só admins e o gestor-alvo da conexão (quem cria) veem. */
 const DEFAULT_ROLEPLAY_STATUS = "1";
 
-const PROMPT_STORAGE_KEY = "import_prompt";
-const PROMPT_VERSION_KEY = "import_prompt_version";
-/** Avisa a própria aba: o evento "storage" do navegador só dispara nas OUTRAS abas. */
-const PROMPT_CHANGE_EVENT = "import-prompt-change";
+/**
+ * Chave do prompt personalizado antigo, que ficava só no navegador e substituía o
+ * prompt base inteiro. Deixou de valer com as Diretrizes: a tela avisa uma vez e
+ * oferece copiar o texto para levar o que importa para uma diretriz.
+ */
+const LEGACY_PROMPT_KEYS = ["import_prompt", "import_prompt_version"];
 
-function subscribeSavedPrompt(onChange: () => void) {
+/** Avisa a própria aba: o evento "storage" do navegador só dispara nas OUTRAS abas. */
+const LEGACY_PROMPT_EVENT = "import-prompt-change";
+
+function subscribeLegacyPrompt(onChange: () => void) {
   window.addEventListener("storage", onChange);
-  window.addEventListener(PROMPT_CHANGE_EVENT, onChange);
+  window.addEventListener(LEGACY_PROMPT_EVENT, onChange);
   return () => {
     window.removeEventListener("storage", onChange);
-    window.removeEventListener(PROMPT_CHANGE_EVENT, onChange);
+    window.removeEventListener(LEGACY_PROMPT_EVENT, onChange);
   };
 }
 
-/** Snapshot em string (o useSyncExternalStore compara por ===): [prompt, versão]. */
-function readSavedPrompt(): string {
+function readLegacyPrompt(): string {
   try {
-    return JSON.stringify([
-      localStorage.getItem(PROMPT_STORAGE_KEY) ?? "",
-      localStorage.getItem(PROMPT_VERSION_KEY) ?? "",
-    ]);
+    return localStorage.getItem(LEGACY_PROMPT_KEYS[0]) ?? "";
   } catch {
-    return '["",""]'; // localStorage indisponível — usa o prompt padrão
+    return "";
   }
 }
-/**
- * Suba a cada mudança no DEFAULT_IMPORT_PROMPT. Um prompt personalizado fica no
- * localStorage e continua valendo depois do deploy — sem isto, quem personalizou
- * seguiria com um prompt velho sem saber que o padrão evoluiu.
- * v2: realinhado ao modo playbook, às 13 dimensões do contexto e ao B2B/B2C.
- * v3: extrai objeções (com "Ceda se") e guardrails do material.
- * v4: separa o lado do comprador do material do vendedor, gera "oferta_descricao",
- *     regras de datas/valores e guardrails sem encerrar a ligação.
- */
-const PROMPT_VERSION = 4;
-
-/** Prompt padrão de processamento (instruções de extração). O app adiciona, depois,
- *  a lista de call_contexts disponíveis e o formato JSON automaticamente. */
-const DEFAULT_IMPORT_PROMPT = `Você é um especialista em criação de Roleplays Comerciais para a plataforma Perfecting.
-
-Sua tarefa: a partir de QUALQUER material fornecido (sites, PDFs, propostas, transcrições, playbooks, anotações), EXTRAIR e ORGANIZAR as informações para preencher um roleplay na Perfecting. Você NÃO conversa e NÃO pergunta — você sempre devolve o resultado estruturado.
-
-COMO O RESULTADO É USADO. O roleplay pode ser gerado de dois jeitos, e o usuário só escolhe DEPOIS de você processar — então preencha todos os campos, mas saiba onde cada um pesa:
-- Pelo PLAYBOOK da conta: cada etapa do playbook vira um roleplay. Tipo de chamada, comportamento e rubricas vêm das etapas, então "call_context_slug", "dificuldade", "cenario_instrucoes", "objetivo" e "habilidades" são IGNORADOS. Chegam à plataforma: "oferta_nome", "oferta_descricao", "perfil", "personas_variacao", "objecoes" e "guardrails".
-- Por METODOLOGIA: um roleplay só, e aí todos os campos são usados.
-"oferta_descricao", "perfil", "personas_variacao", "objecoes" e "guardrails" alimentam o roleplay nos DOIS modos — são eles que carregam o material do cliente até a plataforma. Priorize-os.
-
-QUEM LÊ ISTO É O COMPRADOR. Tudo que chega à plataforma vira conhecimento do comprador simulado: ele "sabe" o que estiver nesses campos. O material costuma misturar dois lados:
-- Lado do comprador (USE): quem ele é, a empresa e o segmento dele, dores, prioridades, orçamento, processo de decisão, o que usa hoje, receios, as frases que ele diz, e o que a oferta mostra publicamente.
-- Lado do vendedor (NÃO TRANSCREVA): metodologia e etapas de venda, playbook, roteiro e perguntas que o vendedor deve fazer, o que o vendedor deve ou não deve fazer, critérios de avaliação e rubricas, campos e rotinas de CRM, metas da equipe comercial, documentos e processos internos da empresa que vende.
-Use o lado do vendedor só para INFERIR o comprador — se o roteiro manda perguntar sobre orçamento, descreva a situação de orçamento do comprador, não a pergunta. Um comprador que conhece o método do vendedor ensina o método e conduz a venda no lugar dele, e o treino perde o sentido.
-
-ETAPA 1 — EXTRAÇÃO. Extraia tudo que conseguir sobre:
-- Oferta: nome, produto/serviço, proposta de valor, problema principal resolvido, diferenciais competitivos, ticket médio, ciclo de vendas, concorrentes, casos de uso, ROI, público-alvo.
-- Quem compra: cargos/perfis, responsabilidades, KPIs, metas, medos, motivações, critérios de decisão, influenciadores, nível de autoridade, estilos de comunicação.
-- Cenário: tipo de conversa (cold call, discovery, demo, proposta, negociação, renovação, expansão), como o lead chegou, nível de consciência, momento da jornada, urgência, situação atual.
-- Objeções: preço, timing, prioridade, concorrente, autoridade, implementação, integração, segurança, ROI, troca de fornecedor, falta de necessidade. Use frases reais quando houver.
-
-ETAPA 2 — ORGANIZAÇÃO. Separe o conteúdo nos blocos abaixo.
-
-oferta_descricao (markdown curto) — USADO NOS DOIS MODOS. Vira a descrição da oferta na Perfecting. O que é vendido e para quem: produto/serviço, proposta de valor, problema resolvido, diferenciais, formato, e preço e condições VIGENTES quando o material trouxer. Escreva como a oferta se apresenta ao mercado — sem metodologia de venda, roteiro, argumentos que o vendedor deve usar, CRM ou processo interno.
-
-perfil (markdown) — O CAMPO MAIS IMPORTANTE. Não é o retrato de uma pessoa: é a instrução com que a Perfecting monta o CONTEXTO, e é do contexto que saem uma ou várias personas. Use subtítulos e cubra tudo que o material permitir:
-- Público-alvo: quem compra (empresa/segmento se B2B; perfil de pessoa se B2C)
-- Gatilhos de urgência: o que faz agir agora, e não daqui a seis meses
-- Prioridades e objetivos do período
-- Dores mensuráveis: com números, prazos ou custos quando houver
-- Estado futuro desejado: como é o "depois" que eles querem
-- O que de fato motiva a compra (receita, risco, segurança, reconhecimento…)
-- Processo de decisão: quem decide, quem influencia, quantas etapas, prazo típico
-- Aversão a risco: o quanto temem mudar, o que preferem manter como está
-- Objeções e receios — com frases reais quando houver
-- Consciência do problema: sabem que têm? subestimam? que sintomas percebem?
-- Consciência das soluções: já pesquisaram? o que acham do que existe no mercado?
-- O que usam hoje para resolver isso e por que não basta
-Se o material indicar cargos ou áreas típicas, cite-os como EXEMPLOS do espectro — não feche numa pessoa só, porque as personas são geradas a partir deste texto.
-Descreva o comprador, não a venda: nada de etapas do playbook, perguntas do vendedor ou método.
-
-personas_variacao (texto curto) — como as personas devem variar entre si quando o usuário pedir mais de uma: cargos e áreas diferentes, senioridade, estilos de comunicação, graus de consciência e de resistência. Só o que o material sustentar; sem base, devolva "".
-
-objecoes (lista) — USADO NOS DOIS MODOS. As objeções que o comprador levanta. No modo playbook, cada uma vai só para as etapas em que o comprador a levantaria; por metodologia, vale para o roleplay inteiro. Para cada uma:
-- "titulo": nome curto (ex.: "Orçamento comprometido")
-- "tipo": um dos slugs disponíveis
-- "fala_exemplo": como o comprador diz isso, na primeira pessoa — TRANSCREVA a frase real do material quando houver, em vez de reescrever
-- "detalhes": o que está por trás, o que ele teme
-- "ceder_se": a condição que faz o comprador ceder, do ponto de vista dele — o que ele precisa ouvir, ver ou receber (ex.: "Ver um caso de empresa do mesmo porte, com o retorno em números"). Não descreva técnica, etapa ou método do vendedor. SEMPRE preencha: sem ela o comprador repete a objeção até o fim e o treino não tem desfecho possível
-Extraia todas as que o material trouxer, sem inventar. Lista vazia se não houver nenhuma.
-
-guardrails (lista) — USADO NOS DOIS MODOS. Regras de comportamento do comprador simulado, quando o material as definir: o que ele nunca deve fazer, como reagir a promessa indevida ou a termo proibido ao vendedor. Valem em TODAS as etapas e em qualquer momento da conversa, então: nada que só faça sentido numa etapa (ex.: regras de fechamento ou de negociação); nunca mande o comprador encerrar, desligar ou abandonar a ligação — ele reage (desconfia, pede prova, resiste), mas continua na conversa; e nada que seja critério de avaliação do vendedor. Cada item tem "nome" (curto) e "instrucao" (a regra em segunda pessoa, dirigida ao comprador — ex.: "Se o vendedor prometer que a verba será aprovada, desconfie e peça que ele mostre como isso seria garantido"). Lista vazia se o material não definir regras.
-
-cenario_instrucoes (markdown) — IGNORADO no modo playbook. Comportamento da persona durante a conversa: como reage, testes de fogo/objeções que aplica, critério de fechamento. Se o material já trouxer instruções ou prompts de comportamento prontos, PRESERVE-OS na íntegra (transcreva, não resuma). Sem base no material, seja breve em vez de inventar.
-
-objetivo e habilidades — IGNORADOS no modo playbook (as rubricas vêm das etapas). Objetivo de treino do roleplay e habilidades de venda a treinar.
-
-call_context_slug e dificuldade — IGNORADOS no modo playbook. Escolha o slug mais adequado entre os disponíveis e a dificuldade (easy/medium/hard) coerente com o cenário.
-
-ETAPA 3 — LACUNAS. Liste o que ainda falta para um roleplay de alta qualidade, classificando cada item como "critico", "importante" ou "opcional". Use o campo "grupo" para separar o que vale sempre ("Oferta", "Contexto", "Personas") do que só importa fora do playbook ("Cenário (sem playbook)", "Rubricas (sem playbook)") — assim quem usa playbook não persegue lacuna que as etapas já resolvem.
-
-REGRAS:
-- SEJA COMPLETO E FIEL ao lado do comprador no material. Preserve o detalhe que o cliente preparou sobre ele; transcreva falas, exemplos e instruções de comportamento do comprador em vez de resumir. NÃO comprima esse conteúdo — é melhor um bloco longo e fiel do que um resumo curto. Isso não vale para o lado do vendedor (ver QUEM LÊ ISTO É O COMPRADOR).
-- Priorize dados reais extraídos do material. Quando precisar inferir algo qualitativo, marque o trecho com "(Hipótese Assumida)". Nunca infira números nem datas.
-- DATAS: a data de hoje vem no fim destas instruções. Prazo, condição comercial, campanha ou evento do material com data já passada NÃO é fato vigente — omita, ou reescreva sem a data. Não invente datas absolutas; quando precisar situar algo no tempo, use termos relativos ("no próximo trimestre", "há dois meses").
-- VALORES: preços, orçamentos, percentuais e quantidades só quando estiverem no material, e sempre os mesmos em todos os campos. Os campos são gerados em partes que não se veem — um número inventado num campo vai contradizer outro.
-- B2B ou B2C: infira da oferta e NUNCA assuma B2B por padrão. Um curso vendido a interessados individuais tem como público-alvo a PESSOA FÍSICA que quer se qualificar, não a instituição que oferece o curso. Linguagem e exemplos seguem o que a oferta realmente vende.
-- Responda SEMPRE no formato estruturado pedido (JSON).`;
 
 export default function CriacaoPage() {
   const router = useRouter();
@@ -236,16 +162,13 @@ export default function CriacaoPage() {
   const [fileNames, setFileNames] = useState<string[]>([]);
   const [filePath, setFilePath] = useState<string | null>(null);
   const [extractMsg, setExtractMsg] = useState("Extraindo texto…");
-  const savedPromptSnapshot = useSyncExternalStore(
-    subscribeSavedPrompt,
-    readSavedPrompt,
-    () => '["",""]',
-  );
-  const [customPrompt, savedPromptVersion] = JSON.parse(savedPromptSnapshot) as [string, string];
-  /** Prompt salvo veio de uma versão anterior do padrão — vale avisar. */
-  const promptOutdated = Boolean(customPrompt) && Number(savedPromptVersion || "1") < PROMPT_VERSION;
+  /** Versão do gerador e diretrizes do último processamento — vai junto no rascunho. */
+  const [generator, setGenerator] = useState<GeneratorManifest | null>(null);
+  /** Resposta crua da IA: o que foi editado à mão é a diferença entre ela e o formulário. */
+  const [aiOutput, setAiOutput] = useState<ProcessImportResult | null>(null);
+  const legacyPrompt = useSyncExternalStore(subscribeLegacyPrompt, readLegacyPrompt, () => "");
   const [promptModalOpen, setPromptModalOpen] = useState(false);
-  const [promptDraft, setPromptDraft] = useState("");
+  const [baseInfo, setBaseInfo] = useState<{ prompt: string; version: string; fingerprint: string } | null>(null);
   const [confirm, setConfirm] = useState<ConfirmConfig | null>(null);
   const [sendModalOpen, setSendModalOpen] = useState(false);
   const [sendStatus, setSendStatus] = useState<SendStatus>("sending");
@@ -258,6 +181,9 @@ export default function CriacaoPage() {
   const draftSigRef = useRef<string | null>(null);
 
   const isPlaybookMode = generationMode === "playbook";
+
+  /** O processamento usou as diretrizes de outra conta (ou de nenhuma). */
+  const guidelinesStale = Boolean(generator) && (generator?.connection_id ?? "") !== connectionId;
   const selectedPlaybook = playbooks.find((p) => String(p.id) === playbookId) ?? null;
 
   /** Trocar de conta invalida os playbooks carregados (são por organização). */
@@ -439,6 +365,8 @@ export default function CriacaoPage() {
     setGuardrails([]);
     setDossier(null);
     setAiProcessed(false);
+    setGenerator(null);
+    setAiOutput(null);
     clearFiles();
   }
 
@@ -455,7 +383,14 @@ export default function CriacaoPage() {
     const keep = mode === "merge";
     setProcessing(true);
     try {
-      const r = await processImport(text.trim(), customPrompt || null, generationMode);
+      const { result: r, generator: g, warnings } = await processImport(
+        text.trim(),
+        generationMode,
+        connectionId || null,
+      );
+      setGenerator(g);
+      setAiOutput(r);
+      for (const w of warnings) addToast({ title: "Diretrizes", description: w, color: "warning" });
       const fill = (cur: string, next: string) => (keep && cur.trim() ? cur : next || cur);
       // O material cru em "Dados para o Roleplay" fica salvo como fonte, mas não vai
       // para a Perfecting: ele mistura o lado do vendedor (método, CRM, roteiro), e o
@@ -503,37 +438,37 @@ export default function CriacaoPage() {
     }
   }
 
-  function openPromptEditor() {
-    setPromptDraft(customPrompt || DEFAULT_IMPORT_PROMPT);
+  async function openPromptViewer() {
     setPromptModalOpen(true);
-  }
-
-  function savePrompt() {
-    const v = promptDraft.trim();
-    const isCustom = v.length > 0 && v !== DEFAULT_IMPORT_PROMPT;
+    if (baseInfo) return;
     try {
-      if (isCustom) {
-        localStorage.setItem(PROMPT_STORAGE_KEY, v);
-        // Salvou agora: fica na versão atual do padrão (tira o aviso de desatualizado).
-        localStorage.setItem(PROMPT_VERSION_KEY, String(PROMPT_VERSION));
-      } else {
-        localStorage.removeItem(PROMPT_STORAGE_KEY);
-        localStorage.removeItem(PROMPT_VERSION_KEY);
-      }
-      window.dispatchEvent(new Event(PROMPT_CHANGE_EVENT));
-    } catch {
+      setBaseInfo(await getGeneratorInfo());
+    } catch (err) {
       addToast({
-        title: "Não foi possível salvar o prompt",
-        description: "O armazenamento do navegador está indisponível.",
+        title: "Não foi possível ler o prompt base",
+        description: err instanceof Error ? err.message : String(err),
         color: "danger",
       });
-      return;
+      setPromptModalOpen(false);
     }
-    setPromptModalOpen(false);
-    addToast({
-      title: isCustom ? "Prompt personalizado salvo" : "Prompt padrão restaurado",
-      color: "success",
-    });
+  }
+
+  function dismissLegacyPrompt() {
+    try {
+      for (const k of LEGACY_PROMPT_KEYS) localStorage.removeItem(k);
+    } catch {
+      // armazenamento indisponível: o aviso continua
+    }
+    window.dispatchEvent(new Event(LEGACY_PROMPT_EVENT));
+  }
+
+  async function copyLegacyPrompt() {
+    try {
+      await navigator.clipboard.writeText(legacyPrompt);
+      addToast({ title: "Prompt copiado", description: "Cole o que importa numa diretriz.", color: "success" });
+    } catch {
+      addToast({ title: "Não foi possível copiar", color: "danger" });
+    }
   }
 
   /** Valida os campos obrigatórios do rascunho; mostra toast e retorna false se inválido. */
@@ -572,6 +507,18 @@ export default function CriacaoPage() {
     return true;
   }
 
+  /** O que mudou à mão em relação à IA, no formato em que o envio registra. */
+  function currentManualEdits() {
+    if (!aiOutput) return null;
+    const p = buildDraftPayload();
+    const sent = buildSentSnapshot({
+      scenario: p.scenario as Record<string, unknown>,
+      offers: { offer_name: p.offerName, general_description: p.offerDescription ?? p.text },
+      contexts: { target_notes: p.contextNotes },
+    });
+    return changedItems(diffGeneration(aiOutput as unknown as Record<string, unknown>, sent));
+  }
+
   /** Monta o payload do rascunho a partir do formulário atual. */
   function buildDraftPayload() {
     return {
@@ -583,6 +530,8 @@ export default function CriacaoPage() {
       meta: fileNames.length ? { filenames: fileNames } : {},
       connectionId: connectionId || null,
       contextNotes: perfil.trim() || null,
+      generator,
+      generationOutput: aiOutput,
       scenario: {
         call_context_slug: callContextSlug,
         methodology_slug: !isPlaybookMode ? methodologySlug || null : null,
@@ -736,6 +685,8 @@ export default function CriacaoPage() {
     await runSend();
   }
 
+  const manualEdits = currentManualEdits();
+
   return (
     <div className="flex flex-col gap-0">
       <PageHeader
@@ -852,27 +803,13 @@ export default function CriacaoPage() {
             </span>
             <button
               type="button"
-              onClick={openPromptEditor}
-              title="Editar o prompt de processamento"
-              aria-label="Editar o prompt de processamento"
+              onClick={openPromptViewer}
+              title="Ver o prompt base do gerador"
+              aria-label="Ver o prompt base do gerador"
               className="shrink-0 rounded-sm p-0.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
             >
-              <PencilSquareIcon className="w-4 h-4" />
+              <DocumentTextIcon className="w-4 h-4" />
             </button>
-            {customPrompt && (
-              <span
-                className={`shrink-0 rounded-sm px-1.5 py-0.5 text-[10px] font-medium ${
-                  promptOutdated ? "bg-amber-50 text-amber-700" : "bg-blue-50 text-blue-700"
-                }`}
-                title={
-                  promptOutdated
-                    ? "O prompt padrão foi atualizado. O seu continua valendo — abra o editor e use 'Restaurar padrão' para adotar a versão nova."
-                    : undefined
-                }
-              >
-                {promptOutdated ? "prompt personalizado (padrão atualizado)" : "prompt personalizado"}
-              </span>
-            )}
           </p>
           {aiProcessed && (
             <button
@@ -936,6 +873,46 @@ export default function CriacaoPage() {
             {aiProcessed ? "Reprocessar com IA" : "Processar com IA"}
           </Button>
         </div>
+
+        {legacyPrompt && (
+          <div className="flex flex-col gap-2 rounded-sm bg-amber-50 px-3 py-2 text-sm text-amber-800 sm:flex-row sm:items-center">
+            <span className="sm:mr-auto">
+              Seu prompt personalizado deste navegador deixou de valer: o gerador usa sempre o
+              prompt base, e o que a equipe quer acrescentar entra pelas{" "}
+              <Link href="/diretrizes" className="font-medium underline">
+                Diretrizes
+              </Link>
+              .
+            </span>
+            <div className="flex shrink-0 gap-2">
+              <Button variant="secondary" onPress={copyLegacyPrompt}>
+                Copiar meu prompt
+              </Button>
+              <Button variant="secondary" onPress={dismissLegacyPrompt}>
+                Descartar
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {generator ? (
+          <p className="text-xs text-slate-500">
+            Gerador {generatorVersionLabel(generator)} · diretrizes aplicadas: {guidelinesLabel(generator)}
+            {guidelinesStale && (
+              <span className="ml-1 text-amber-700">
+                — a conta de destino mudou depois do processamento; reprocesse para aplicar as
+                diretrizes da conta atual.
+              </span>
+            )}
+          </p>
+        ) : (
+          !connectionId && (
+            <p className="text-xs text-slate-500">
+              Sem conta de destino escolhida, o processamento usa só as diretrizes globais e do
+              modo. Escolha a conta antes para aplicar as dela.
+            </p>
+          )
+        )}
 
         {gaps.length > 0 && (
           <div className="flex flex-col gap-2 rounded-sm border border-slate-200 bg-slate-50 p-4">
@@ -1298,6 +1275,16 @@ export default function CriacaoPage() {
           </>
         )}
 
+        {manualEdits && (
+          <p className="text-right text-xs text-slate-500">
+            {manualEdits.length === 0
+              ? "Revisão: nada editado à mão — vai como a IA gerou."
+              : `Revisão: ${manualEdits.length} ${manualEdits.length === 1 ? "campo editado" : "campos editados"} à mão — ${manualEdits
+                  .map((i) => (i.detail ? `${i.label} (${i.detail})` : i.label))
+                  .join(", ")}. Fica registrado na linha do tempo do roleplay.`}
+          </p>
+        )}
+
         <div className="flex justify-end gap-2">
           <Button
             variant="link"
@@ -1355,44 +1342,31 @@ export default function CriacaoPage() {
 
       <Modal isOpen={promptModalOpen} onOpenChange={setPromptModalOpen} radius="sm" size="3xl">
         <ModalContent>
-          <ModalHeader>Editar prompt de processamento</ModalHeader>
+          <ModalHeader>
+            Prompt base do gerador{baseInfo ? ` · v${baseInfo.version} · ${baseInfo.fingerprint}` : ""}
+          </ModalHeader>
           <ModalBody>
             <p className="text-sm text-slate-500">
-              Estas são as instruções que a IA segue ao estruturar o material. O app adiciona
-              automaticamente a lista de tipos de chamada disponíveis e o formato de saída — você não
-              precisa incluí-los aqui.
+              São as instruções fixas que a IA segue ao estruturar o material; só mudam com uma
+              versão nova do gerador. O que a equipe quer acrescentar entra pelas{" "}
+              <Link href="/diretrizes" className="font-medium text-slate-700 underline">
+                Diretrizes
+              </Link>
+              , depois deste texto.
             </p>
-            {promptOutdated && (
-              <p className="rounded-sm bg-amber-50 px-3 py-2 text-sm text-amber-800">
-                O prompt padrão foi atualizado desde que você personalizou o seu — agora ele cobre o
-                modo playbook, as dimensões que a Perfecting espera do contexto e a variação de
-                personas. O seu texto continua valendo; para adotar o novo, use{" "}
-                <b>Restaurar padrão</b> abaixo.
-              </p>
-            )}
             <Textarea
-              value={promptDraft}
-              onValueChange={setPromptDraft}
+              value={baseInfo?.prompt ?? "Carregando…"}
+              isReadOnly
               disableAutosize
               radius="sm"
               variant="bordered"
               classNames={{ input: "h-96 overflow-y-auto resize-y font-mono text-xs" }}
             />
           </ModalBody>
-          <ModalFooter className="justify-between">
-            <button
-              type="button"
-              onClick={() => setPromptDraft(DEFAULT_IMPORT_PROMPT)}
-              className="inline-flex items-center gap-1.5 rounded-sm px-3 py-2 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-100"
-            >
-              <ArrowPathIcon className="w-4 h-4" /> Restaurar padrão
-            </button>
-            <div className="flex gap-2">
-              <Button variant="secondary" onPress={() => setPromptModalOpen(false)}>
-                Cancelar
-              </Button>
-              <Button onPress={savePrompt}>Salvar prompt</Button>
-            </div>
+          <ModalFooter>
+            <Button variant="secondary" onPress={() => setPromptModalOpen(false)}>
+              Fechar
+            </Button>
           </ModalFooter>
         </ModalContent>
       </Modal>

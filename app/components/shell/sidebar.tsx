@@ -10,6 +10,7 @@ import {
   AcademicCapIcon,
   BookOpenIcon,
   AdjustmentsHorizontalIcon,
+  DocumentTextIcon,
 } from "@heroicons/react/24/outline";
 import { RobotIcon } from "@/app/components/icons/robot-icon";
 import { cn } from "@/app/lib/cn";
@@ -40,6 +41,7 @@ const GROUPS = [
     items: [
       { href: "/conexoes", label: "Conexões", icon: LinkIcon },
       { href: "/config", label: "Config", icon: Cog6ToothIcon },
+      { href: "/diretrizes", label: "Diretrizes", icon: DocumentTextIcon },
     ],
   },
 ];

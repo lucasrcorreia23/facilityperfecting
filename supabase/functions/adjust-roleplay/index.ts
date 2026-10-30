@@ -11,7 +11,12 @@ import {
   type RegenerateWhat,
   saveAdjustSection,
 } from "../_shared/roleplay-adjust.ts";
-import { ADJUST_SECTIONS, type AdjustSection, AdjustValidationError } from "../_shared/roleplay-adjust-model.ts";
+import {
+  ADJUST_SECTIONS,
+  type AdjustSection,
+  AdjustValidationError,
+  parseAdjustReason,
+} from "../_shared/roleplay-adjust-model.ts";
 
 /**
  * Tela "Ajustar roleplay": lê e altera um roleplay que JÁ está na Perfecting
@@ -23,7 +28,8 @@ import { ADJUST_SECTIONS, type AdjustSection, AdjustValidationError } from "../_
  *   op=regenerate  ações com IA: comportamento, ou resumo da etapa seguinte
  *   op=preview     prompt que o comprador recebe hoje (+ checagem)
  *
- * Toda escrita vira uma linha em `roleplay_adjustments` (antes/depois). Em conexão
+ * Toda escrita vira uma linha em `roleplay_adjustments` (antes/depois e o motivo
+ * informado na tela: `reasonKind` + `reason`). Em conexão
  * de produção, escrever exige `confirmProd: true` — a tela pede confirmação.
  */
 
@@ -50,6 +56,8 @@ async function audit(row: {
   after: unknown;
   summary: string[];
   created_by: string | null;
+  reason_kind: string | null;
+  reason: string | null;
 }) {
   const { error } = await db.from("roleplay_adjustments").insert(row);
   if (error) console.error("histórico não gravado:", error.message);
@@ -112,6 +120,7 @@ Deno.serve(async (req) => {
           after: res.after,
           summary: res.summary,
           created_by: userId,
+          ...parseAdjustReason(body),
         });
       }
       return json({ ok: true, state: res.state, summary: res.summary });
@@ -131,6 +140,7 @@ Deno.serve(async (req) => {
         after: { what },
         summary: res.summary,
         created_by: userId,
+        ...parseAdjustReason(body),
       });
       return json({ ok: true, summary: res.summary, state: await loadAdjustState(env, token, caseSetupId) });
     }

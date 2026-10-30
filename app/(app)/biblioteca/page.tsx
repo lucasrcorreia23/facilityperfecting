@@ -50,6 +50,7 @@ import type {
   Playbook,
 } from "@/app/lib/types";
 import { perfectingRoleplayUrl } from "@/app/lib/perfecting-app";
+import { generatorLabel } from "@/app/lib/generator-label";
 
 const isPlaybookDraft = (d: DraftRow) => d.scenario?.generation_mode === "playbook";
 
@@ -907,6 +908,10 @@ export default function BibliotecaPage() {
                     <dd>
                       <StatusBadge status={detailDraft.status} />
                     </dd>
+                  </div>
+                  <div className="col-span-2">
+                    <dt className="text-xs text-slate-500">Gerado por</dt>
+                    <dd className="text-slate-700">{generatorLabel(detailDraft.generator)}</dd>
                   </div>
                   {detailDraft.playbook_run?.stage && (
                     <div>

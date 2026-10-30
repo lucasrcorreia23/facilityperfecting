@@ -479,6 +479,10 @@ export interface RoleplayDraft {
   /** Modo metodologia: progresso e veredito do fechamento (complete-roleplay). */
   completion_run: CompletionRun | null;
   error_detail: Record<string, unknown> | null;
+  /** Manifesto do gerador (process-import). null = sem processamento por IA ou anterior ao versionamento. */
+  generator: GeneratorManifest | null;
+  /** Resposta do último processamento por IA, para comparar com o que foi enviado. */
+  generation_output: ProcessImportResult | null;
   created_by: string | null;
   created_at: string;
   updated_at: string;
@@ -715,6 +719,74 @@ export interface RoleplayEvaluation {
 // ── Ajustar roleplay (roleplay já na Perfecting) ───────────────────────────
 
 /** Uma linha do histórico de ajustes (`roleplay_adjustments`). */
+// ── Versão do gerador e diretrizes da equipe (migration 0024) ──────────────
+// Espelha `supabase/functions/_shared/generator-version.ts` (o front não importa
+// módulos das funções).
+
+export type GuidelineScope = "global" | "mode" | "connection";
+
+export interface GeneratorManifest {
+  version: string;
+  fingerprint: string;
+  model: string;
+  mode: GenerationMode;
+  guidelines: Array<{
+    guideline_id: string;
+    version_id: string;
+    version_no: number;
+    scope_type: GuidelineScope;
+    title: string;
+  }>;
+  connection_id: string | null;
+  processed_at: string;
+}
+
+/** Linha de `generator_guidelines_current`: a diretriz com a versão vigente. */
+export interface GeneratorGuideline {
+  id: string;
+  target: "roleplay_import" | "playbook";
+  scope_type: GuidelineScope;
+  scope_keys: string[];
+  title: string;
+  position: number;
+  active: boolean;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+  version_id: string;
+  version_no: number;
+  body: string;
+  note: string | null;
+  version_created_by: string | null;
+  version_created_at: string;
+}
+
+export interface GuidelineVersion {
+  id: string;
+  guideline_id: string;
+  version_no: number;
+  body: string;
+  note: string | null;
+  restored_from_version_no: number | null;
+  created_by: string | null;
+  created_at: string;
+}
+
+/** De onde veio um roleplay que está na conta (gravado no envio). */
+export interface RoleplayGeneration {
+  id: string;
+  connection_id: string;
+  case_setup_id: number;
+  draft_id: string | null;
+  generator: GeneratorManifest | null;
+  /** O que a IA gerou e o que foi enviado (SentSnapshot de _shared/generation-diff.ts). */
+  ai_output: Record<string, unknown> | null;
+  sent: Record<string, unknown> | null;
+  export_version: string | null;
+  created_by: string | null;
+  created_at: string;
+}
+
 export interface RoleplayAdjustment {
   id: string;
   connection_id: string;
@@ -723,6 +795,9 @@ export interface RoleplayAdjustment {
   before: unknown;
   after: unknown;
   summary: string[];
+  /** Motivo informado ao salvar; null nos ajustes anteriores ao campo. */
+  reason_kind: string | null;
+  reason: string | null;
   created_by: string | null;
   created_at: string;
 }

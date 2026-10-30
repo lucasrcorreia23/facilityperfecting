@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { Dropdown, DropdownItem, DropdownMenu, DropdownTrigger, Tab, Tabs, addToast } from "@heroui/react";
 import { ArrowTopRightOnSquareIcon, ArrowPathIcon, ChevronDownIcon, SparklesIcon } from "@heroicons/react/24/outline";
@@ -19,8 +19,17 @@ import { GeneralTab } from "@/app/components/adjust/general-tab";
 import { StepKnowledgeTab } from "@/app/components/adjust/step-knowledge-tab";
 import { PersonaTab } from "@/app/components/adjust/persona-tab";
 import { PromptTab } from "@/app/components/adjust/prompt-tab";
-import { HistoryTab, SECTION_LABELS } from "@/app/components/adjust/history-tab";
-import { AdjustRequestError, invokeAdjust } from "@/app/lib/db";
+import { SECTION_LABELS } from "@/app/components/adjust/history-tab";
+import { TimelineTab } from "@/app/components/adjust/timeline-tab";
+import {
+  type AdjustReason,
+  EMPTY_REASON,
+  ReasonPicker,
+  ReasonPickerField,
+} from "@/app/components/adjust/reason-picker";
+import { AdjustRequestError, getRoleplayGeneration, invokeAdjust } from "@/app/lib/db";
+import { generatorLabel } from "@/app/lib/generator-label";
+import type { RoleplayGeneration } from "@/app/lib/types";
 import { perfectingRoleplayUrl } from "@/app/lib/perfecting-app";
 import {
   type AdjustObjection,
@@ -56,6 +65,14 @@ export default function AjustarRoleplayPage() {
   const [regenerating, setRegenerating] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<ConfirmConfig | null>(null);
   const [historyKey, setHistoryKey] = useState(0);
+  /** undefined = carregando; null = sem registro de origem. */
+  const [generation, setGeneration] = useState<RoleplayGeneration | null | undefined>(undefined);
+  /** Motivo do próximo salvar, por aba (cada aba salva sozinha); zera depois de salvar. */
+  const [reasons, setReasons] = useState<Partial<Record<AdjustSection, AdjustReason>>>({});
+  const reasonOf = (section: AdjustSection) => reasons[section] ?? EMPTY_REASON;
+  const setReasonOf = (section: AdjustSection, v: AdjustReason) => setReasons((r) => ({ ...r, [section]: v }));
+  /** O modal de regenerar guarda o conteúdo pronto: o motivo escolhido nele vem por aqui. */
+  const regenReason = useRef<AdjustReason>(EMPTY_REASON);
 
   const isProd = meta?.environment === "prod";
 
@@ -80,6 +97,26 @@ export default function AjustarRoleplayPage() {
       await load();
     })();
   }, [load]);
+
+  // Só informativo: falhar aqui não atrapalha a calibração.
+  useEffect(() => {
+    let alive = true;
+    getRoleplayGeneration(connectionId, caseSetupId)
+      .then((g) => alive && setGeneration(g))
+      .catch(() => alive && setGeneration(null));
+    return () => {
+      alive = false;
+    };
+  }, [connectionId, caseSetupId]);
+
+  const originLabel =
+    generation === undefined
+      ? null
+      : generation === null
+        ? "origem não registrada (criado fora da facility ou antes do versionamento)"
+        : generation.generator
+          ? generatorLabel(generation.generator)
+          : "enviado pela facility sem processamento por IA";
 
   const dirty = useMemo(() => {
     const out = new Set<AdjustSection>();
@@ -119,11 +156,14 @@ export default function AjustarRoleplayPage() {
         value: drafts[section],
         baseHash: state.hashes[section],
         confirmProd: isProd,
+        reasonKind: reasonOf(section).kind,
+        reason: reasonOf(section).text,
       });
       setState(res.state);
       // Só a aba salva volta para o que está na Perfecting; as outras mantêm o rascunho.
       setDrafts((d) => (d ? { ...d, [section]: structuredClone(res.state.sections[section]) } : d));
       setHistoryKey((k) => k + 1);
+      setReasons((r) => ({ ...r, [section]: EMPTY_REASON }));
       addToast({
         title: res.summary.length > 0 ? "Salvo — vale a partir da próxima chamada" : "Nada mudou",
         description: res.summary.join(" · ") || undefined,
@@ -165,7 +205,7 @@ export default function AjustarRoleplayPage() {
               ))}
             </ul>
           )}
-          <p className="text-xs text-slate-500">O valor anterior fica no Histórico, para desfazer à mão.</p>
+          <p className="text-xs text-slate-500">O valor anterior fica na Linha do tempo, para desfazer à mão.</p>
         </div>
       ),
       confirmLabel: "Salvar mesmo assim",
@@ -182,6 +222,8 @@ export default function AjustarRoleplayPage() {
         caseSetupId,
         what,
         confirmProd: isProd,
+        reasonKind: regenReason.current.kind,
+        reason: regenReason.current.text,
       });
       setState(res.state);
       setHistoryKey((k) => k + 1);
@@ -194,20 +236,25 @@ export default function AjustarRoleplayPage() {
   }
 
   function regenerate(what: "behavior" | "next_stage_summary") {
+    regenReason.current = EMPTY_REASON;
     setConfirm({
       title: what === "behavior" ? "Regenerar o comportamento com IA?" : "Atualizar o resumo da etapa seguinte?",
-      message:
-        what === "behavior" ? (
-          <p>
-            A IA da Perfecting reescreve o &quot;# Comportamento&quot; do comprador a partir dos blocos e do tipo de
-            chamada. Pode desfazer ajustes finos que estavam lá. Use depois de mudar bastante o conteúdo.
-          </p>
-        ) : (
-          <p>
-            A IA reescreve o resumo da chamada anterior que o vendedor vê na etapa seguinte, a partir do que este
-            roleplay tem agora.
-          </p>
-        ),
+      message: (
+        <div className="flex flex-col gap-4">
+          {what === "behavior" ? (
+            <p>
+              A IA da Perfecting reescreve o &quot;# Comportamento&quot; do comprador a partir dos blocos e do tipo
+              de chamada. Pode desfazer ajustes finos que estavam lá. Use depois de mudar bastante o conteúdo.
+            </p>
+          ) : (
+            <p>
+              A IA reescreve o resumo da chamada anterior que o vendedor vê na etapa seguinte, a partir do que este
+              roleplay tem agora.
+            </p>
+          )}
+          <ReasonPickerField onChange={(v) => (regenReason.current = v)} />
+        </div>
+      ),
       confirmLabel: "Regenerar",
       onConfirm: () => void doRegenerate(what),
     });
@@ -230,21 +277,32 @@ export default function AjustarRoleplayPage() {
   const nextStage = state.siblings.find((s) => s.is_next_stage);
   const objectionTypes = state.catalog.objection_types;
 
+  // Com alteração pendente, o rodapé pede o motivo: sem ele o Salvar fica travado,
+  // porque a linha do tempo só explica o roleplay se cada ajuste disser o porquê.
   const footer = (section: AdjustSection) => (
-    <div className="sticky bottom-0 z-10 -mx-4 mt-8 flex flex-wrap items-center justify-end gap-3 rounded-b-sm border-t border-slate-200 bg-white/95 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6">
-      {dirty.has(section) ? (
-        <>
-          <span className="text-sm text-amber-700">Alterações não salvas</span>
-          <Button variant="link" onPress={() => discard(section)}>
-            Descartar
-          </Button>
-        </>
-      ) : (
-        <span className="text-sm text-slate-400">Tudo salvo</span>
-      )}
-      <Button onPress={() => save(section)} isLoading={saving === section} isDisabled={!dirty.has(section)}>
-        Salvar
-      </Button>
+    <div className="sticky bottom-0 z-10 -mx-4 mt-8 flex flex-col gap-3 rounded-b-sm border-t border-slate-200 bg-white/95 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6">
+      {dirty.has(section) && <ReasonPicker value={reasonOf(section)} onChange={(v) => setReasonOf(section, v)} />}
+      <div className="flex flex-wrap items-center justify-end gap-3">
+        {dirty.has(section) ? (
+          <>
+            <span className="text-sm text-amber-700">
+              {reasonOf(section).kind ? "Alterações não salvas" : "Alterações não salvas — escolha o motivo para salvar"}
+            </span>
+            <Button variant="link" onPress={() => discard(section)}>
+              Descartar
+            </Button>
+          </>
+        ) : (
+          <span className="text-sm text-slate-400">Tudo salvo</span>
+        )}
+        <Button
+          onPress={() => save(section)}
+          isLoading={saving === section}
+          isDisabled={!dirty.has(section) || !reasonOf(section).kind}
+        >
+          Salvar
+        </Button>
+      </div>
     </div>
   );
 
@@ -261,7 +319,7 @@ export default function AjustarRoleplayPage() {
         title={state.case_setup.training_name || `Roleplay ${caseSetupId}`}
         description={`Roleplay ${caseSetupId} · ${meta.org_name ?? `org ${meta.org_id}`}${
           state.playbook ? ` · ${state.playbook.call_type_name}` : ""
-        }`}
+        }${originLabel ? ` · ${originLabel}` : ""}`}
         backHref={`/ajustar?connection=${connectionId}`}
         action={
           <div className="flex shrink-0 items-center gap-2">
@@ -474,9 +532,17 @@ export default function AjustarRoleplayPage() {
             <PromptTab connectionId={connectionId} caseSetupId={caseSetupId} />
           </Tab>
 
-          <Tab key="history" title="Histórico">
-            <TabIntro>Quem mudou o quê e quando, com o antes e o depois para desfazer à mão.</TabIntro>
-            <HistoryTab connectionId={connectionId} caseSetupId={caseSetupId} refreshKey={historyKey} />
+          <Tab key="history" title="Linha do tempo">
+            <TabIntro>
+              A história deste roleplay: o que o gerou, o que a equipe mudou antes de enviar, o envio e cada
+              calibração com o motivo. O antes e o depois de cada ajuste ficam aqui para desfazer à mão.
+            </TabIntro>
+            <TimelineTab
+              connectionId={connectionId}
+              caseSetupId={caseSetupId}
+              generation={generation}
+              refreshKey={historyKey}
+            />
           </Tab>
         </Tabs>
 
