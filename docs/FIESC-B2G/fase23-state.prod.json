@@ -27,9 +27,10 @@
       "company_id": 52,
       "persona_id": 55,
       "case_setups": {
-        "fase3": 257,
-        "fase2": 256
-      }
+        "fase2": 256,
+        "fase3": 270
+      },
+      "released_fase3": false
     },
     "trico-vallery": {
       "context_id": 190,
@@ -45,9 +46,10 @@
       "company_id": 54,
       "persona_id": 57,
       "case_setups": {
-        "fase3": 261,
-        "fase2": 260
-      }
+        "fase2": 260,
+        "fase3": 272
+      },
+      "released_fase3": false
     }
   }
 }

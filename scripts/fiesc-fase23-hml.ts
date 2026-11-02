@@ -19,7 +19,7 @@
  *
  * Uso:
  *   deno run -A --env-file=.env.hml.local scripts/fiesc-fase23-hml.ts
- *     [--dry-run] [--only=vale-dourado] [--release-fase3] [--no-container]
+ *     [--dry-run] [--only=vale-dourado] [--release-fase3] [--recreate-fase3] [--no-container]
  *
  * ⚠️ Cria dados reais na org do spec (14, Perfecting Demo). Nunca rode contra org de cliente.
  *
@@ -32,6 +32,13 @@
  *     roleplay sem status (NULL = visível a todos), então um verificador põe status 1 em
  *     todo roleplay novo do contexto a cada 3 s enquanto ela roda, e de novo no fim;
  *   - sem container, a não ser com `--container`.
+ *
+ * `--recreate-fase3`: para conta cuja Fase 3 foi apagada na Perfecting. Confere no
+ * contexto da conta quais roleplays existem por etapa; se a Fase 3 sumiu e a Fase 2
+ * do estado continua lá, implementa o playbook de novo no MESMO contexto (o backend
+ * sempre cria as duas etapas), apaga a Fase 2 nova (duplicada) e mantém a original.
+ * Só mexe na Fase 3: persona, guardrails, Fase 2, status da Fase 2 e container ficam
+ * como estão. Conta com Fase 3 presente é pulada.
  *
  *   deno run -A --env-file=.env.prod.local scripts/fiesc-fase23-hml.ts --env=prod \
  *     --as-user=269 [--dry-run] [--only=vale-dourado]
@@ -166,6 +173,8 @@ interface State {
 const args = new Set(Deno.args);
 const DRY = args.has("--dry-run");
 const RELEASE = args.has("--release-fase3");
+const RECREATE_F3 = args.has("--recreate-fase3");
+if (RECREATE_F3 && RELEASE) throw new Error("--recreate-fase3 não combina com --release-fase3: recrie, confira e publique depois");
 const WITH_CONTAINER = IS_PROD ? args.has("--container") : !args.has("--no-container");
 const asUserArg = Deno.args.find((a) => a.startsWith("--as-user="));
 const AS_USER = asUserArg ? Number(asUserArg.slice("--as-user=".length)) : null;
@@ -288,6 +297,10 @@ for (const [order, ct] of spec.playbook.call_types.entries()) {
       continue;
     }
     if (DRY) continue;
+    if (RECREATE_F3) {
+      // O playbook já está montado: bloco faltando (ou renomeado) é para resolver à mão.
+      throw new Error(`bloco "${b.name}" não encontrado em "${ct.name}"; --recreate-fase3 não mexe no playbook`);
+    }
     blockIds.push(
       await createPlaybookCallBlock(ENV, token, playbookId, callTypeId, { ...b, order: i }),
     );
@@ -296,7 +309,7 @@ for (const [order, ct] of spec.playbook.call_types.entries()) {
   await saveState();
 
   // Rubricas por bloco (IA): é nelas que a avaliação da sessão de playbook se apoia.
-  if (!DRY) {
+  if (!DRY && !RECREATE_F3) {
     const withRubrics = await Promise.all(
       blockIds.map((id) => countPlaybookCallBlockRubrics(ENV, token, playbookId, callTypeId, id)),
     );
@@ -318,6 +331,39 @@ for (const conta of spec.contas) {
   if (ONLY && conta.key !== ONLY) continue;
   log(`\n━━ ${conta.rotulo} ━━`);
   const st: AccountState = (state.contas[conta.key] ??= {});
+
+  // 2.0) --recreate-fase3: confere no dado vivo antes de criar qualquer coisa.
+  let keptFase2: number | null = null;
+  if (RECREATE_F3) {
+    const ctxId = st.context_id;
+    const f2 = st.case_setups?.fase2;
+    const ct2 = state.call_types?.fase2;
+    const ct3 = state.call_types?.fase3;
+    if (ctxId == null || f2 == null || st.persona_id == null || ct2 == null || ct3 == null) {
+      warn(`${conta.key}: estado sem contexto, persona, Fase 2 ou etapas; não dá para recriar a Fase 3`);
+      continue;
+    }
+    const byStage: Record<StageKey, number[]> = { fase2: [], fase3: [] };
+    for (const id of await listCaseSetupIdsByContext(ENV, token, ctxId)) {
+      const ct = (await getCaseSetup(ENV, token, id)).playbook_call_type_id;
+      if (ct === ct2) byStage.fase2.push(id);
+      else if (ct === ct3) byStage.fase3.push(id);
+    }
+    log(`  contexto ${ctxId}: Fase 2 = [${byStage.fase2.join(", ")}], Fase 3 = [${byStage.fase3.join(", ")}]`);
+    if (byStage.fase3.length > 0) {
+      log(`✓ a Fase 3 existe (${byStage.fase3.join(", ")}): nada a recriar`);
+      continue;
+    }
+    if (byStage.fase2.length !== 1 || byStage.fase2[0] !== f2) {
+      warn(`${conta.key}: esperava só a Fase 2 ${f2} no contexto ${ctxId}; não recrio`);
+      continue;
+    }
+    log(`· a Fase 3 (${st.case_setups?.fase3 ?? "—"}) não existe mais: ${DRY ? "seria recriada" : "recriando"}, mantendo a Fase 2 ${f2}`);
+    if (DRY) continue;
+    keptFase2 = f2;
+    delete st.case_setups!.fase3;
+    st.released_fase3 = false;
+  }
 
   // 2a) Contexto novo na oferta da Fase 1 (o da Fase 1 tem objeções e guardrails
   // de cold call, que vazariam para estas etapas).
@@ -372,7 +418,9 @@ for (const conta of spec.contas) {
     await saveState();
   }
   const personaId = st.persona_id;
-  if (personaId != null && !DRY) {
+  if (RECREATE_F3) {
+    log(`✓ persona ${p.nome} (${personaId}): mantida como está`);
+  } else if (personaId != null && !DRY) {
     // O spec sempre por cima do que a IA gerou (reaplicar é inofensivo).
     await updatePersona(ENV, token, personaId, {
       name: p.nome,
@@ -388,7 +436,7 @@ for (const conta of spec.contas) {
   }
 
   // 2c) Guardrails do contexto (valem para as duas etapas).
-  if (!DRY && contextId != null) {
+  if (!DRY && contextId != null && !RECREATE_F3) {
     // Nome de guardrail é único no banco inteiro: sufixo do contexto.
     const guardrails = conta.guardrails.map((g) => ({ ...g, nome: `${g.nome} · ctx ${contextId}` }));
     const g = await applyContextContent(ENV, token, contextId, [], guardrails, DIFFICULTY_LEVEL_IDS);
@@ -428,6 +476,7 @@ for (const conta of spec.contas) {
     log("… implementando o playbook (demora vários minutos)");
     const res = await openPlaybookImplementationStream(ENV, token, playbookId, contextId, personaId);
     try {
+    let ready = false;
     for await (const { event, data } of sseEvents(res)) {
       if (event === "heartbeat") continue;
       const payload = (data ?? {}) as Record<string, unknown>;
@@ -435,9 +484,34 @@ for (const conta of spec.contas) {
         log(`  ${payload.stage ?? ""} ${payload.call_type_index ?? ""}/${payload.call_type_total ?? ""}`);
       } else if (event === "implementation_ready") {
         log(`  pronto: ${JSON.stringify(payload.results ?? []).slice(0, 400)}`);
+        ready = true;
         break;
       } else if (event === "error") {
         throw new Error(`implementação falhou: ${JSON.stringify(payload).slice(0, 500)}`);
+      }
+    }
+    // O job roda no worker, não na conexão: o stream pode cair (timeout de infra) com o
+    // job ainda andando. Sem o "pronto", espera a última etapa aparecer com agente no
+    // contexto — apagar algo antes disso quebra o job (o worker relê o roleplay da etapa
+    // anterior para gerar o resumo antes de despachar a próxima).
+    if (!ready) {
+      const lastCt = state.call_types!.fase3!;
+      const deadline = Date.now() + 40 * 60_000;
+      log("  stream fechou sem o fim do job; acompanhando pelo contexto (até 40 min)");
+      let done = false;
+      while (!done && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 20_000));
+        for (const id of await listCaseSetupIdsByContext(ENV, token, contextId)) {
+          if (before.has(id)) continue;
+          const cs = await getCaseSetup(ENV, token, id);
+          if (cs.playbook_call_type_id === lastCt && cs.elevenlabs_agent_id != null) done = true;
+        }
+      }
+      if (done) {
+        log("  última etapa com agente; 90 s para o worker fechar o job");
+        await new Promise((r) => setTimeout(r, 90_000));
+      } else {
+        warn("o job não terminou em 40 min; nada será apagado");
       }
     }
     } finally {
@@ -448,12 +522,33 @@ for (const conta of spec.contas) {
       }
     }
     const created = (await listCaseSetupIdsByContext(ENV, token, contextId)).filter((id) => !before.has(id));
+    const createdByStage: Partial<Record<StageKey, number[]>> = {};
     for (const id of created) {
       const cs = await getCaseSetup(ENV, token, id);
       const key = (Object.entries(state.call_types!) as Array<[StageKey, number]>).find(
         ([, ctId]) => ctId === cs.playbook_call_type_id,
       )?.[0];
-      if (key) st.case_setups[key] = id;
+      if (key) (createdByStage[key] ??= []).push(id);
+    }
+    log(`  criados: ${JSON.stringify(createdByStage)}`);
+    if (keptFase2 != null) {
+      // A implementação sempre recria as duas etapas: a Fase 2 nova é duplicata. Só
+      // apaga depois que a Fase 3 existe (antes disso o job ainda precisa dela).
+      const newF3 = createdByStage.fase3 ?? [];
+      if (newF3.length === 1) {
+        st.case_setups.fase3 = newF3[0];
+        for (const id of createdByStage.fase2 ?? []) {
+          await api("DELETE", `/case_setup_${id}`, token);
+          log(`  ⤷ Fase 2 duplicada ${id} apagada (fica a ${keptFase2})`);
+        }
+      } else {
+        warn(`Fase 3 nova: ${JSON.stringify(newF3)}; não apaguei a Fase 2 duplicada ${JSON.stringify(createdByStage.fase2 ?? [])}`);
+      }
+      st.case_setups.fase2 = keptFase2;
+    } else {
+      for (const [key, ids] of Object.entries(createdByStage) as Array<[StageKey, number[]]>) {
+        if (ids.length > 0) st.case_setups[key] = ids[ids.length - 1];
+      }
     }
     await saveState();
   }
@@ -462,17 +557,22 @@ for (const conta of spec.contas) {
   if (cs2 == null || cs3 == null) {
     // A Fase 3 nasce visível: esconde já, mesmo com a implementação pela metade.
     if (cs3 != null && !st.released_fase3) await patchCaseSetup(ENV, token, cs3, { role_play_status_id: 1 });
-    if (cs2 != null && HIDE_ALL) await patchCaseSetup(ENV, token, cs2, { role_play_status_id: 1 });
+    if (cs2 != null && HIDE_ALL && !RECREATE_F3) await patchCaseSetup(ENV, token, cs2, { role_play_status_id: 1 });
     warn(
-      `implementação incompleta: ${JSON.stringify(st.case_setups)}. Para refazer sem duplicar, ` +
-        "apague o roleplay criado (DELETE /case_setup_{id}), limpe case_setups da conta no estado e rode de novo.",
+      RECREATE_F3
+        ? `recriação incompleta: ${JSON.stringify(st.case_setups)}. Apague o roleplay extra do contexto ` +
+            `(fica só a Fase 2 ${keptFase2}) e rode --recreate-fase3 de novo.`
+        : `implementação incompleta: ${JSON.stringify(st.case_setups)}. Para refazer sem duplicar, ` +
+            "apague o roleplay criado (DELETE /case_setup_{id}), limpe case_setups da conta no estado e rode de novo.",
     );
     continue;
   }
   log(`✓ roleplays: Fase 2 = ${cs2}, Fase 3 = ${cs3}`);
 
   // 2e) Conteúdo de cada etapa: nome, abertura, prévio, objeções, conhecimento.
-  for (const stage of ["fase2", "fase3"] as const) {
+  // Com --recreate-fase3 a Fase 2 (que pode ter edições à mão) não é tocada.
+  const stages: StageKey[] = RECREATE_F3 ? ["fase3"] : ["fase2", "fase3"];
+  for (const stage of stages) {
     const csId = st.case_setups[stage]!;
     const c = conta.fases[stage];
     const cs = await getCaseSetup(ENV, token, csId);
@@ -497,7 +597,10 @@ for (const conta of spec.contas) {
         await api("DELETE", `/case_setup_${csId}/objections/${o.id}`, token);
       }
     }
-    const ctxObjections = items(await api<unknown>("GET", `/context_${contextId}/objections`, token));
+    // Objeções de contexto valem para as duas etapas: com --recreate-fase3 ficam como estão.
+    const ctxObjections = RECREATE_F3
+      ? []
+      : items(await api<unknown>("GET", `/context_${contextId}/objections`, token));
     for (const o of ctxObjections) {
       if (o.case_setup_id == null && !allSpecTitles.has(norm(String(o.title ?? "")))) {
         await api("DELETE", `/context_${contextId}/objections/${o.id}`, token);
@@ -561,7 +664,7 @@ for (const conta of spec.contas) {
   }
 
   // 2g) Comportamento e prompt, depois de todo o conteúdo final.
-  for (const csId of [cs2, cs3]) {
+  for (const csId of RECREATE_F3 ? [cs3] : [cs2, cs3]) {
     await runCaseSetupRepairStep(ENV, token, csId, "behavior_guidance");
     await runCaseSetupRepairStep(ENV, token, csId, "update_prompt");
   }
@@ -576,7 +679,7 @@ for (const conta of spec.contas) {
     await patchCaseSetup(ENV, token, cs3, { role_play_status_id: 1 });
     log("✓ fase3 escondida (Em desenvolvimento)");
   }
-  if (HIDE_ALL) {
+  if (HIDE_ALL && !RECREATE_F3) {
     await patchCaseSetup(ENV, token, cs2, { role_play_status_id: 1 });
     log("✓ fase2 escondida (Em desenvolvimento)");
   }
@@ -584,7 +687,7 @@ for (const conta of spec.contas) {
 
   // 2i) Container da conta: Fase 2 (e a Fase 3 depois da liberação). Os roleplays da
   // Fase 1 ficam no container 9 — um roleplay só pertence a um container.
-  if (WITH_CONTAINER) {
+  if (WITH_CONTAINER && !RECREATE_F3) {
     try {
       if (st.container_id == null) {
         const found = items(await api<unknown>("GET", "/containers/list", token)).find(
@@ -609,7 +712,7 @@ for (const conta of spec.contas) {
   }
 
   // 2j) Gate: o prompt remontado de cada etapa.
-  for (const stage of ["fase2", "fase3"] as const) {
+  for (const stage of stages) {
     const csId = st.case_setups[stage]!;
     const gate = await getRolePlayPrompt(ENV, token, csId);
     const flags = ["has_persona", "has_behavior_guidance", "has_knowledge_blocks", "has_objections", "has_difficulty_level"] as const;
