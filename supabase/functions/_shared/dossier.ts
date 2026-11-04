@@ -17,6 +17,7 @@ import {
   patchStepKnowledge,
   type PerfectingEnv,
   type PersonaPainLinkInput,
+  PerfectingError,
   type PersonaProductLinkInput,
   setCaseSetupPriorKnowledge,
   setPersonaOfferProducts,
@@ -25,6 +26,17 @@ import {
   updatePersona,
 } from "./perfecting.ts";
 import { describeLeak, findHiddenPainLeaks } from "./dossier-leaks.ts";
+import {
+  describeBuyerTextIssue,
+  dossierBuyerTextIssues,
+  findReservedTerms,
+  lintPriorFacts,
+  type ObjectionText,
+  objectionTexts,
+  priorFactsOf,
+} from "./buyer-text-lint.ts";
+
+export { dossierBuyerTextIssues, priorFactsOf };
 
 /**
  * Dossiê do comprador: o material de UM roleplay avulso quando ele descreve uma conta
@@ -103,8 +115,17 @@ export interface RoleplayDossier {
     produtos: DossierPersonaProduct[];
   };
   conhecimento: {
-    /** O que o comprador já sabe ao atender (só na 1ª etapa da metodologia). */
+    /**
+     * O que o comprador já sabe ao atender, na voz do prompt dele ("Você recebeu…").
+     * Vai para o Conhecimento Prévio da 1ª etapa. NÃO é o que o representante lê.
+     */
     previo: string;
+    /**
+     * O que o representante lê na cola como "O que {persona} já sabe"
+     * (`buyer_prior_knowledge`): fatos curtos, neutros, sem "você", sem cena nem
+     * direção de atuação (`lintPriorFacts`). Ausente em rascunhos antigos.
+     */
+    ja_sabe?: string[];
     /** Fatos que ele revela se perguntado. */
     fatos: DossierFact[];
     /** O que o vendedor vê antes da call (dados de CRM). Nada de dor escondida. */
@@ -378,6 +399,30 @@ export async function applyDossierToPersona(
   return warnings;
 }
 
+/**
+ * Portão antes de escrever qualquer coisa na Perfecting: roleplay nasce pronto ou não
+ * nasce. Erro de texto do comprador (termo reservado, "já sabe" fora de forma) vira
+ * 422 com a lista, para quem revisa o rascunho corrigir ali — não no roleplay criado.
+ * Devolve os avisos (não bloqueiam).
+ */
+export function assertBuyerTextReady(
+  dossier: RoleplayDossier | null,
+  objections: readonly ObjectionText[],
+): string[] {
+  const issues = [
+    ...(dossier ? dossierBuyerTextIssues(dossier) : []),
+    ...findReservedTerms(objectionTexts(objections)),
+  ];
+  const errors = issues.filter((i) => i.nivel === "erro").map(describeBuyerTextIssue);
+  if (errors.length > 0) {
+    throw new PerfectingError(422, {
+      message: `texto do comprador com ${errors.length} problema(s): corrija no rascunho antes de enviar`,
+      issues: errors,
+    });
+  }
+  return issues.map((i) => `texto do comprador: ${describeBuyerTextIssue(i)}`);
+}
+
 /** Avisos de dor escondida repetida no prévio ou nos fatos (heurístico, não bloqueia). */
 export function dossierLeakWarnings(d: RoleplayDossier): string[] {
   return findHiddenPainLeaks(d).map((l) => `dossiê: ${describeLeak(l)}`);
@@ -511,9 +556,10 @@ export async function applyDossierToCaseSetup(
   // (case_setup 253: "já contratou agências" × "nunca contratou alguém de fora").
   // Com o dossiê, o que o comprador sabe é o que o material diz, ou nada.
   try {
-    const previo = d.conhecimento.previo.trim();
-    await setCaseSetupPriorKnowledge(env, token, caseSetupId, previo ? [previo] : []);
-    detail.prior_knowledge = previo ? 1 : 0;
+    const facts = priorFactsOf(d);
+    for (const issue of lintPriorFacts(facts)) warnings.push(`dossiê: ${describeBuyerTextIssue(issue)}`);
+    await setCaseSetupPriorKnowledge(env, token, caseSetupId, facts);
+    detail.prior_knowledge = facts.length;
   } catch (e) {
     warnings.push(`conhecimento prévio não aplicado: ${messageOf(e)}`);
   }

@@ -322,6 +322,11 @@
         "fase2": {
           "training_name": "Fase 2 · B2B · Vale Dourado — visita presencial com o seu Adalberto",
           "previo": "Esta é uma visita presencial na cooperativa, combinada depois da ligação de prospecção do vendedor com o André (RH). O André passou o assunto para você e te resumiu o pedido: capacitação em PCP, Qualidade e Eletromecânica para a manutenção de uma unidade. Você recebe o vendedor na sua sala, tem cerca de uma hora e está disposto a ouvir, mas quer entender antes de ver qualquer proposta. Ainda não houve visita técnica nem proposta: o objetivo desta conversa é diagnóstico.",
+          "ja_sabe": [
+            "O André (RH) passou o assunto adiante, com o pedido de capacitação em PCP, Qualidade e Eletromecânica para a manutenção de uma unidade",
+            "Há pedidos da cooperativa parados com o Sistema FIESC, como a NR-13 que o Renato pediu",
+            "Ainda não houve visita técnica nem proposta"
+          ],
           "briefing": {
             "Ligação de prospecção (Fase 1)": "Você ligou para o André (analista de RH), que pediu capacitação em PCP, Qualidade e Eletromecânica para a manutenção de uma unidade e topou envolver alguém da direção. Depois da ligação, você mandou um e-mail com o resumo da conversa e as soluções do Sistema FIESC ligadas à demanda.",
             "Quem você vai encontrar": "O seu Adalberto Nogueira, responsável técnico e representante legal da cooperativa, para quem o André encaminhou o assunto. Ele não participou da ligação.",
@@ -371,6 +376,12 @@
         "fase3": {
           "training_name": "Fase 3 · B2B · Vale Dourado — proposta e fechamento com o seu Adalberto",
           "previo": "Esta é uma reunião on-line para o vendedor apresentar a proposta. Na visita presencial vocês validaram que a manutenção e o PCP da unidade dependem de poucas pessoas e que a safra aperta tudo. Depois, o especialista técnico do SENAI esteve na unidade com o vendedor, viu a manutenção de perto e confirmou que a prioridade é formar gente em Eletromecânica para a manutenção, em turmas que não parem a safra. Você recebeu a proposta por e-mail, deu uma olhada e quer ouvir o vendedor antes de decidir.",
+          "ja_sabe": [
+            "Terceira reunião: a apresentação da proposta comercial",
+            "Na visita presencial, validou que a manutenção e o PCP da unidade dependem de poucas pessoas e que a safra aperta tudo",
+            "Na segunda reunião, o especialista do SENAI viu a manutenção e confirmou a prioridade: Eletromecânica, em turmas que não parem a safra",
+            "Recebeu a proposta por e-mail, deu uma olhada e quer ouvir o vendedor antes de decidir"
+          ],
           "briefing": {
             "Visita presencial (Fase 2)": "O seu Adalberto validou que a manutenção e o PCP dependem de poucas pessoas, que na safra o PCP vira improviso, com parada de máquina e lote refeito, e que ele não assina gasto solto: quer um plano com prioridade clara.",
             "Visita técnica": "O especialista do SENAI esteve na unidade, viu a manutenção e confirmou a prioridade: formar gente em Eletromecânica para a manutenção, em turmas que não parem a safra.",
@@ -547,6 +558,12 @@
         "fase2": {
           "training_name": "Fase 2 · B2B · Tricô Vallery — visita presencial com o Marcelo",
           "previo": "Esta é a visita presencial na fábrica, a reunião de diagnóstico que você mesmo aceitou na ligação de prospecção com o vendedor do Sistema FIESC. Vocês já se falaram por telefone e ele te mandou um e-mail depois. Você recebe o vendedor numa sala perto da produção, tem uns 40 minutos e está menos apressado do que no telefone, mas ainda desconfiado. A Débora não pôde participar. Ainda não houve visita técnica nem proposta.",
+          "ja_sabe": [
+            "Pediu esta reunião de diagnóstico na ligação de prospecção e recebeu depois um e-mail com as pautas",
+            "Os exames ocupacionais e os ASO combinados há meses não foram encaminhados, e a área de Saúde já cobrou isso dele",
+            "A Débora não pôde participar",
+            "Ainda não houve visita técnica nem proposta"
+          ],
           "briefing": {
             "Ligação de prospecção (Fase 1)": "Você ligou a frio para o Marcelo Fontoura (gerente de RH), que contou que cortou o treinamento externo este ano por não poder tirar gente da produção, e aceitou uma reunião de diagnóstico na fábrica. Depois da ligação, você mandou um e-mail com o resumo e as frentes do Sistema FIESC ligadas ao que ele contou.",
             "Pendência da conta": "Os exames ocupacionais (Saúde) que deveriam ter começado há meses ainda não foram encaminhados — o Marcelo sabe disso e está desconfiado.",
@@ -596,6 +613,13 @@
         "fase3": {
           "training_name": "Fase 3 · B2B · Tricô Vallery — proposta e fechamento com o Marcelo",
           "previo": "Esta é uma reunião on-line para o vendedor apresentar a proposta. Na visita presencial vocês chegaram juntos à conclusão de que o que mais pesa é a falta: atestados sem validação, colegas cobrindo com hora extra, exames e ASO fora de controle. Depois, o especialista do SESI esteve na fábrica com o vendedor, olhou o fluxo de atestados e os exames, e confirmou que o caminho é a gestão do absenteísmo. Os exames atrasados foram encaminhados. Você recebeu a proposta por e-mail e quer ouvir o vendedor antes de levar adiante.",
+          "ja_sabe": [
+            "Terceira reunião: a apresentação da proposta comercial, feita a partir do diagnóstico das reuniões anteriores",
+            "Na visita presencial, concordou que o que mais pesa são as faltas: atestados sem validação, hora extra para cobrir e exames e ASO fora de controle",
+            "Na segunda reunião, o especialista do SESI olhou atestados e exames na fábrica e confirmou o caminho: gestão do absenteísmo",
+            "Os exames atrasados já foram encaminhados",
+            "Quer entender o escopo e os valores da proposta"
+          ],
           "briefing": {
             "Visita presencial (Fase 2)": "O Marcelo validou que o que mais pesa são as faltas: muitos atestados sem validação por medo de passivo, colegas cobrindo com hora extra e exames e ASO fora de controle. Cobrou a pendência dos exames.",
             "Visita técnica": "O especialista do SESI esteve na fábrica, olhou o fluxo de atestados e os exames e confirmou que o caminho é a gestão do absenteísmo. Os exames atrasados foram encaminhados.",
@@ -734,6 +758,12 @@
         "fase2": {
           "training_name": "Fase 2 · B2G · Vila Serena — visita presencial com a secretária Cláudia",
           "previo": "Esta é uma reunião presencial na Secretaria de Educação, combinada na ligação de prospecção com o representante do SESI. A ideia era o prefeito participar, mas ele não pôde vir; você conduz a conversa e depois leva o assunto a ele. Você tem cerca de uma hora, está mais aberta do que no telefone, mas cautelosa. Ainda não houve visita técnica nem proposta: o objetivo é entender a rede.",
+          "ja_sabe": [
+            "Reunião combinada na ligação de prospecção, que retomou o contraturno do SESI: funcionou no ano passado e não foi renovado",
+            "O prefeito não pôde vir: a secretária conduz e depois leva o assunto a ele",
+            "O prefeito cobra resultado em alfabetização e tempo integral",
+            "Ainda não houve visita técnica nem proposta"
+          ],
           "briefing": {
             "Ligação de prospecção (Fase 1)": "Você ligou para a secretária Cláudia Rezende retomando o Contraturno Escolar, que não foi renovado este ano. Ela aceitou uma reunião presencial (diagnóstico da rede, com a ideia de envolver o prefeito). Depois da ligação, você mandou um e-mail com o resumo e as soluções do SESI ligadas a tempo integral e alfabetização.",
             "Quem você vai encontrar": "A secretária Cláudia. O prefeito Rogério Vale Andrade não pôde vir; ela conduz e leva o assunto a ele.",
@@ -783,6 +813,12 @@
         "fase3": {
           "training_name": "Fase 3 · B2G · Vila Serena — proposta e fechamento com a secretária Cláudia",
           "previo": "Esta é uma reunião on-line para o representante do SESI apresentar a proposta. Na visita presencial você contou que a Educação perdeu a disputa de verba por falta de dados e que o orçamento do ano que vem está sendo fechado agora. Depois, a equipe pedagógica do SESI conheceu a rede com o representante e confirmou que faz sentido retomar o contraturno com acompanhamento de indicadores, para você ter o que mostrar ao prefeito e a finanças. Você recebeu a proposta por e-mail e quer entender antes de levar ao prefeito.",
+          "ja_sabe": [
+            "Terceira e última reunião: a apresentação da proposta comercial",
+            "Na visita presencial, contou que a Educação perdeu a disputa de verba por falta de dados e que o orçamento do ano que vem está sendo fechado agora",
+            "Na segunda reunião, a equipe pedagógica do SESI conheceu a rede e confirmou que faz sentido retomar o contraturno com acompanhamento de indicadores",
+            "Recebeu a proposta por e-mail e quer entender valores e prazos antes de levar ao prefeito"
+          ],
           "briefing": {
             "Visita presencial (Fase 2)": "A secretária Cláudia contou que a Educação perdeu a disputa de verba para a Saúde por falta de dados e que o orçamento do ano que vem está sendo fechado agora. O prefeito não participou; ela conduz.",
             "Visita técnica": "A equipe pedagógica do SESI conheceu a rede e confirmou que faz sentido retomar o contraturno com acompanhamento de indicadores, para a Secretaria ter dados para o prefeito e para finanças.",
@@ -803,9 +839,9 @@
             {
               "titulo": "O orçamento está comprometido",
               "tipo": "preco-orcamento",
-              "fala_exemplo": "Esse valor eu não tenho na rubrica da Educação hoje.",
+              "fala_exemplo": "Esse valor eu não tenho no orçamento da Educação hoje.",
               "detalhes": "O orçamento do ano que vem está sendo fechado agora.",
-              "ceder_se": "Se o vendedor perguntar como a rubrica é definida e quando fecha, sem prometer verba, e oferecer o material que ela precisa para defender o investimento (indicadores, acompanhamento, caso de outro município)."
+              "ceder_se": "Se o vendedor perguntar como o orçamento da Educação é definido e quando fecha, sem prometer verba, e oferecer o material que ela precisa para defender o investimento (indicadores, acompanhamento, caso de outro município)."
             },
             {
               "titulo": "Como fica a contratação?",

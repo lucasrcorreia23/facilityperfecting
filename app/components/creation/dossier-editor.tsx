@@ -5,6 +5,10 @@ import { PlusIcon, XMarkIcon } from "@heroicons/react/24/outline";
 import { managerSelectClassNames } from "@/app/lib/select-classnames";
 import type { DossierRevealLevel, DossierTopic, RoleplayDossier } from "@/app/lib/types";
 import { describeLeak, findHiddenPainLeaks } from "@/supabase/functions/_shared/dossier-leaks";
+import {
+  describeBuyerTextIssue,
+  dossierBuyerTextIssues,
+} from "@/supabase/functions/_shared/buyer-text-lint";
 
 const REVEAL_OPTIONS: Array<{ key: DossierRevealLevel; label: string; hint: string }> = [
   { key: "superficie", label: "Superfície", hint: "diz logo no início" },
@@ -110,6 +114,9 @@ export function DossierEditor({
   const d = value;
   const persona = d.persona;
   const leaks = findHiddenPainLeaks(d);
+  const textIssues = dossierBuyerTextIssues(d);
+  const textErrors = textIssues.filter((i) => i.nivel === "erro");
+  const textWarnings = textIssues.filter((i) => i.nivel === "aviso");
   const setPersona = (patch: Partial<RoleplayDossier["persona"]>) =>
     onChange({ ...d, persona: { ...persona, ...patch } });
 
@@ -396,7 +403,7 @@ export function DossierEditor({
       <div className="flex flex-col gap-3">
         <SectionTitle title="O que o comprador sabe" />
         <Textarea
-          label="Ao atender"
+          label="Ao atender (vai para o prompt do comprador)"
           labelPlacement="outside"
           value={d.conhecimento.previo}
           onValueChange={(v) => onChange({ ...d, conhecimento: { ...d.conhecimento, previo: v } })}
@@ -404,6 +411,33 @@ export function DossierEditor({
           variant="bordered"
           minRows={2}
         />
+        <Textarea
+          label="O que o representante vê na cola (um fato por linha, sem sujeito)"
+          labelPlacement="outside"
+          description="Ex.: “Recebeu a proposta por e-mail”. Sem “você”, sem cena e sem postura do comprador."
+          value={(d.conhecimento.ja_sabe ?? []).join("\n")}
+          onValueChange={(v) =>
+            onChange({ ...d, conhecimento: { ...d.conhecimento, ja_sabe: v.split("\n") } })
+          }
+          radius="sm"
+          variant="bordered"
+          minRows={3}
+        />
+        {textErrors.length > 0 && (
+          <div className="flex flex-col gap-1 rounded-sm bg-red-50 p-3 text-xs text-red-800">
+            <p className="font-medium">O envio é recusado enquanto houver:</p>
+            {textErrors.map((i, k) => (
+              <p key={k}>{describeBuyerTextIssue(i)}</p>
+            ))}
+          </div>
+        )}
+        {textWarnings.length > 0 && (
+          <div className="flex flex-col gap-1 rounded-sm bg-amber-50 p-3 text-xs text-amber-800">
+            {textWarnings.map((i, k) => (
+              <p key={k}>{describeBuyerTextIssue(i)}</p>
+            ))}
+          </div>
+        )}
         {leaks.length > 0 && (
           <div className="flex flex-col gap-1 rounded-sm bg-amber-50 p-3 text-xs text-amber-800">
             <p className="font-medium">Dor escondida que parece repetida no que o comprador sabe de saída:</p>

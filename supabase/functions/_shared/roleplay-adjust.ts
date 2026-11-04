@@ -63,6 +63,21 @@ import {
   setPersonaPains,
   updatePersona,
 } from "./perfecting.ts";
+import {
+  type BuyerTextIssue,
+  describeBuyerTextIssue,
+  findReservedTerms,
+  lintPriorFacts,
+  objectionTexts,
+} from "./buyer-text-lint.ts";
+
+/** Erros do lint de texto do comprador viram 422 da tela, com a lista. */
+function rejectBuyerText(issues: BuyerTextIssue[]): void {
+  const errors = issues.filter((i) => i.nivel === "erro");
+  if (errors.length > 0) {
+    throw new AdjustValidationError(errors.map(describeBuyerTextIssue).join("; "));
+  }
+}
 
 const str = (v: unknown) => (typeof v === "string" ? v : "");
 const num = (v: unknown) => (typeof v === "number" ? v : null);
@@ -341,6 +356,11 @@ export async function saveAdjustSection(
     case "prior_knowledge": {
       const next = (value as string[]).map((s) => s.trim()).filter(Boolean);
       if (stableHash(next) !== stableHash(current.sections.prior_knowledge)) {
+        // É o "O que {persona} já sabe" da cola: fatos neutros, nunca direção ao comprador.
+        rejectBuyerText([
+          ...lintPriorFacts(next, "o que o comprador já sabe"),
+          ...findReservedTerms(next.map((t, i) => ({ onde: `o que o comprador já sabe[${i}]`, text: t }))),
+        ]);
         await setCaseSetupPriorKnowledge(env, token, caseSetupId, next);
         summary.push(`${next.length} item(ns) no que o comprador já sabe`);
       }
@@ -353,6 +373,7 @@ export async function saveAdjustSection(
       break;
     }
     case "objections": {
+      rejectBuyerText(findReservedTerms(objectionTexts(value as AdjustObjection[])));
       const types = await listObjectionTypes(env, token);
       const caseObj = await listCaseSetupObjectionsFull(env, token, caseSetupId);
       const ctxObj = contextId != null ? await listContextObjectionsFull(env, token, contextId) : [];

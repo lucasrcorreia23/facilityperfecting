@@ -157,7 +157,10 @@ export interface RoleplayDossier {
     produtos: Array<{ produto: string; postura: string }>;
   };
   conhecimento: {
+    /** Conhecimento Prévio do prompt do comprador (voz dele). */
     previo: string;
+    /** "O que {persona} já sabe" da cola do representante: fatos curtos e neutros. */
+    ja_sabe?: string[];
     /** `etapa` = momento da conversa em que o fato surge (1-4; 0 = qualquer). */
     fatos: Array<DossierTopic & { etapa?: number }>;
     briefing: DossierTopic[];

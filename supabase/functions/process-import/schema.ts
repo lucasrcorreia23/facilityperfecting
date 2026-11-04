@@ -234,7 +234,13 @@ const DOSSIE_SCHEMA = {
         previo: {
           type: "string",
           description:
-            "O que o comprador já sabe DESTA conversa ao atender, em 2-4 frases: se é a primeira conversa, quem marcou e por quê, o que ele sabe do vendedor e da empresa dele. Não descreva o comprador nem a empresa dele (perfil e temperamento já estão na persona): o vendedor lê este texto na tela da chamada. Sem dores 'sondada' ou 'oculta' (o comprador as diria logo no início).",
+            "O que o comprador já sabe DESTA conversa ao atender, em 2-4 frases, para o prompt DELE (pode falar com ele: \"Você recebeu…\"): se é a primeira conversa, quem marcou e por quê, o que ele sabe do vendedor e da empresa dele. Não descreva o comprador nem a empresa dele (perfil e temperamento já estão na persona). Sem dores 'sondada' ou 'oculta' (o comprador as diria logo no início). O vendedor NÃO lê este texto: o que ele lê é ja_sabe.",
+        },
+        ja_sabe: {
+          type: "array",
+          description:
+            "O que o VENDEDOR lê na tela da chamada como \"O que {comprador} já sabe\": os mesmos fatos do previo, reescritos como 2 a 5 itens curtos (até 160 caracteres cada), um fato por item, SEM sujeito (\"Recebeu a proposta por e-mail\", não \"Você recebeu\" nem \"O Marcelo recebeu\"). Nada de cena (\"Esta é uma reunião…\"), de postura ou reação do comprador (\"apresenta hesitação\", \"tem interesse\") nem de instrução. Sem dores 'sondada' ou 'oculta'.",
+          items: { type: "string" },
         },
         fatos: {
           type: "array",
@@ -249,7 +255,7 @@ const DOSSIE_SCHEMA = {
           items: topic,
         },
       },
-      required: ["previo", "fatos", "briefing"],
+      required: ["previo", "ja_sabe", "fatos", "briefing"],
     },
     abertura: {
       type: "array",

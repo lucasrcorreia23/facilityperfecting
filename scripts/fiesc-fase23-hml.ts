@@ -46,6 +46,8 @@
 import { applyContextContent, messageOf } from "../supabase/functions/_shared/context-content.ts";
 import type { GuardrailSeed, ObjectionSeed } from "../supabase/functions/_shared/context-content.ts";
 import { NO_INVENTED_NUMBERS } from "../supabase/functions/_shared/dossier.ts";
+import { objectionTextPatch, stageTextIssues } from "./fiesc-fase23-lint.ts";
+import { describeBuyerTextIssue } from "../supabase/functions/_shared/buyer-text-lint.ts";
 import { sseEvents } from "../supabase/functions/_shared/sse.ts";
 import {
   addPlaybookCallTypeMethodology,
@@ -115,7 +117,10 @@ interface CallTypeSpec {
 
 interface StageContent {
   training_name: string;
+  /** Conhecimento Prévio do prompt do comprador (voz dele), só no 1º bloco. */
   previo: string;
+  /** "O que {persona} já sabe" da cola do representante: fatos curtos e neutros. */
+  ja_sabe: string[];
   briefing: Record<string, string>;
   fatos: Record<string, string>;
   abertura: string[];
@@ -187,6 +192,21 @@ const onlyArg = Deno.args.find((a) => a.startsWith("--only="));
 const ONLY = onlyArg ? onlyArg.slice("--only=".length) : null;
 
 const spec: Spec = JSON.parse(await Deno.readTextFile(SPEC_PATH));
+
+// Antes de qualquer chamada: texto do comprador fora de forma não chega à Perfecting.
+{
+  const issues = spec.contas.flatMap((conta) =>
+    (Object.entries(conta.fases) as Array<[string, StageContent]>).flatMap(([stage, c]) =>
+      stageTextIssues(c, `${conta.key}.${stage}`),
+    ),
+  );
+  for (const i of issues.filter((x) => x.nivel === "aviso")) console.warn(`  ⚠️  ${describeBuyerTextIssue(i)}`);
+  const errors = issues.filter((x) => x.nivel === "erro");
+  if (errors.length > 0) {
+    for (const i of errors) console.error(`  ✗ ${describeBuyerTextIssue(i)}`);
+    throw new Error(`spec com ${errors.length} problema(s) de texto do comprador: corrija ${SPEC_PATH} antes de rodar`);
+  }
+}
 const state: State = await Deno.readTextFile(STATE_PATH).then(JSON.parse).catch(() => ({}));
 const warnings: string[] = [];
 
@@ -583,7 +603,8 @@ for (const conta of spec.contas) {
       buyer_agent_first_messages: c.abertura,
       difficulty_level_id: spec.difficulty_level_id,
     });
-    await setCaseSetupPriorKnowledge(ENV, token, csId, [c.previo]);
+    // A cola do representante lê este campo; o prévio do comprador vai no 1º bloco.
+    await setCaseSetupPriorKnowledge(ENV, token, csId, c.ja_sabe);
 
     // Objeções: as do spec por etapa, com persona_id (o backend usa SÓ as da persona
     // quando ela tem alguma — as geradas pela IA saem, no roleplay e no contexto).
@@ -611,6 +632,19 @@ for (const conta of spec.contas) {
         .filter((o) => specTitles.has(norm(String(o.title ?? ""))))
         .map((o) => `${norm(String(o.title))}|${o.difficulty_level_id}`),
     );
+    // Mesmo título, texto diferente do spec: atualiza (só pelo título, trocar a fala
+    // não mudava nada no roleplay).
+    let patchedObjections = 0;
+    for (const row of csObjections) {
+      const o = c.objecoes.find((x) => norm(x.titulo) === norm(String(row.title ?? "")));
+      if (!o) continue;
+      const patch = objectionTextPatch(row, o);
+      if (patch) {
+        await api("PATCH", `/case_setup_${csId}/objections/${row.id}`, token, patch);
+        patchedObjections++;
+      }
+    }
+    if (patchedObjections > 0) log(`✓ ${stage}: ${patchedObjections} linha(s) de objeção com texto atualizado`);
     let createdObjections = 0;
     for (const o of c.objecoes) {
       const typeId = objectionTypeId(o.tipo);

@@ -5,6 +5,24 @@ import { TrashIcon, XMarkIcon } from "@heroicons/react/24/outline";
 import { managerSelectClassNames, selectItemClassNames } from "@/app/lib/select-classnames";
 import { AddButton } from "@/app/components/creation/dossier-editor";
 import { AddItemButton, Badge, EmptyNote, fieldClassNames } from "@/app/components/adjust/ui";
+import {
+  describeBuyerTextIssue,
+  findReservedTerms,
+  objectionTexts,
+} from "@/supabase/functions/_shared/buyer-text-lint";
+
+/** Termo reservado ("rubrica"…) na objeção: o envio é recusado, então avisa já aqui. */
+function ObjectionTextIssues({ items }: { items: EditableObjection[] }) {
+  const issues = findReservedTerms(objectionTexts(items));
+  if (issues.length === 0) return null;
+  return (
+    <div className="flex flex-col gap-1 rounded-sm bg-red-50 p-3 text-xs text-red-800">
+      {issues.map((i, k) => (
+        <p key={k}>{describeBuyerTextIssue(i)}</p>
+      ))}
+    </div>
+  );
+}
 
 /** O mínimo que o editor mexe; o resto do item (ids, escopo) passa intacto. */
 export interface EditableObjection {
@@ -47,6 +65,7 @@ export function ObjectionListEditor<T extends EditableObjection>({
   if (layout === "card") {
     return (
       <div className="flex flex-col gap-4">
+        <ObjectionTextIssues items={items} />
         {items.length === 0 && <EmptyNote>Nenhuma objeção. O comprador não vai resistir a nada.</EmptyNote>}
         {items.map((o, i) => {
           const extra = badge?.(o);
@@ -142,6 +161,7 @@ export function ObjectionListEditor<T extends EditableObjection>({
 
   return (
     <div className="flex flex-col gap-3">
+      <ObjectionTextIssues items={items} />
       {items.map((o, i) => {
         const extra = badge?.(o);
         return (

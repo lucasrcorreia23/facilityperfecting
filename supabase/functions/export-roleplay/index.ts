@@ -7,6 +7,7 @@ import type { CompletionRun } from "../_shared/roleplay-completion.ts";
 import {
   applyDossierToPersona,
   applyPortfolio,
+  assertBuyerTextReady,
   createDossierPersona,
   dossierLeakWarnings,
   hasDossier,
@@ -128,6 +129,13 @@ async function exportDraft(draftId: string): Promise<{ caseSetupId: number }> {
 
   const connection = draft.connections;
 
+  // Antes de qualquer escrita: texto do comprador fora de forma barra o envio (422),
+  // para o roleplay nascer pronto em vez de ser corrigido depois (FIESC, 04/11/2026).
+  const buyerTextWarnings = assertBuyerTextReady(
+    hasDossier(draft.scenario?.dossier) ? (draft.scenario.dossier as RoleplayDossier) : null,
+    (draft.scenario?.objections ?? []) as ObjectionSeed[],
+  );
+
   // Defaults globais (app_settings) — usados quando o draft não traz scenario.
   const { data: settings } = await db
     .from("app_settings")
@@ -206,7 +214,7 @@ async function exportDraft(draftId: string): Promise<{ caseSetupId: number }> {
   const dossier: RoleplayDossier | null = hasDossier(draft.scenario?.dossier)
     ? (draft.scenario.dossier as RoleplayDossier)
     : null;
-  const dossierWarnings: string[] = [];
+  const dossierWarnings: string[] = [...buyerTextWarnings];
   let portfolio: PortfolioIds | null = null;
   let personaId: number | null = null;
   if (dossier) {

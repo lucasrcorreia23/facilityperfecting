@@ -4,6 +4,7 @@ import { requireUser } from "../_shared/auth.ts";
 import { authenticateConnection, resolveOfferContext } from "../_shared/destination.ts";
 import { sseEvents } from "../_shared/sse.ts";
 import { applyBlockObjections } from "../_shared/block-objections.ts";
+import { assertBuyerTextReady } from "../_shared/dossier.ts";
 import {
   applyStepObjections,
   assignObjectionsToCallTypes,
@@ -441,6 +442,10 @@ async function run(draftId: string): Promise<void> {
     const playbookId = playbookRun.playbook_id;
     if (typeof playbookId !== "number") {
       throw new PerfectingError(400, "rascunho sem playbook_id");
+    }
+    // Antes de qualquer escrita: objeção com termo reservado barra a implementação.
+    for (const w of assertBuyerTextReady(null, (draft.scenario?.objections ?? []) as ObjectionSeed[])) {
+      addWarning(playbookRun, w);
     }
 
     const { env, token } = await authenticateConnection(draft.connections);

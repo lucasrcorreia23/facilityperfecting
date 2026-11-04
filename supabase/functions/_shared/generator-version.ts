@@ -15,14 +15,19 @@
  *      regras de datas/valores e guardrails sem encerrar a ligação.
  *  v5: dossiê do comprador por metodologia; prompt base fixo no servidor e
  *      diretrizes da equipe por cima (sem prompt personalizado no navegador).
+ *  v6: "ja_sabe" separado do "previo" (a cola do representante deixa de receber o
+ *      prévio na voz do comprador) e vocabulário reservado (rubrica, checklist,
+ *      playbook, roleplay) fora de tudo que o comprador diz — FIESC Fase 3, 04/11.
  */
-export const GENERATOR_VERSION = "5";
+export const GENERATOR_VERSION = "6";
 
 /**
  * Versão do que o envio faz com o resultado (export-roleplay, implement-playbook,
  * dossiê, fechamento). Sobe quando muda como o conteúdo vira roleplay na Perfecting.
+ *  v2: portão de texto do comprador antes de escrever (buyer-text-lint) e o
+ *      buyer_prior_knowledge vindo do ja_sabe.
  */
-export const EXPORT_VERSION = "1";
+export const EXPORT_VERSION = "2";
 
 export interface GuidelineRef {
   guideline_id: string;
