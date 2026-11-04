@@ -239,7 +239,7 @@ const DOSSIE_SCHEMA = {
         ja_sabe: {
           type: "array",
           description:
-            "O que o VENDEDOR lê na tela da chamada como \"O que {comprador} já sabe\": os mesmos fatos do previo, reescritos como 2 a 5 itens curtos (até 160 caracteres cada), um fato por item, SEM sujeito (\"Recebeu a proposta por e-mail\", não \"Você recebeu\" nem \"O Marcelo recebeu\"). Nada de cena (\"Esta é uma reunião…\"), de postura ou reação do comprador (\"apresenta hesitação\", \"tem interesse\") nem de instrução. Sem dores 'sondada' ou 'oculta'.",
+            "O que o VENDEDOR lê na tela da chamada como \"O que {comprador} já sabe\": os mesmos fatos do previo, reescritos como 2 a 5 itens curtos (até 180 caracteres cada), um fato por item, SEM sujeito (\"Recebeu a proposta por e-mail\", não \"Você recebeu\" nem \"O Marcelo recebeu\"). Nada de cena (\"Esta é uma reunião…\"), de postura ou reação do comprador (\"apresenta hesitação\", \"tem interesse\") nem de instrução. Sem dores 'sondada' ou 'oculta'.",
           items: { type: "string" },
         },
         fatos: {

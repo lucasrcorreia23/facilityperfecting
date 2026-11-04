@@ -1,5 +1,4 @@
 import { readFileSync } from "node:fs";
-import { execSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { hasBlockingIssue } from "../supabase/functions/_shared/buyer-text-lint.ts";
 import { objectionTextPatch, type StageText, stageTextIssues } from "./fiesc-fase23-lint.ts";
@@ -16,14 +15,38 @@ describe("spec das Fases 2/3", () => {
     });
   }
 
-  it("a versão de 30/10 (a que criou 259/270/272) seria barrada", () => {
-    const old = execSync("git show 9f3d3de:docs/FIESC-B2G/fase23-spec.prod.json", {
-      cwd: new URL("..", import.meta.url),
-      encoding: "utf8",
-    });
-    const issues = issuesOf(JSON.parse(old) as Spec);
+  it("o texto que criou 259/270/272 (30/10) seria barrado", () => {
+    // Trechos do spec de 9f3d3de, inline para não depender do histórico do git.
+    const old: Spec = {
+      contas: [
+        {
+          key: "vila-serena",
+          fases: {
+            fase3: {
+              previo: "Esta é uma reunião on-line para o representante do SESI apresentar a proposta.",
+              fatos: {},
+              abertura: ["Bom dia."],
+              objecoes: [
+                {
+                  titulo: "O orçamento está comprometido",
+                  fala_exemplo: "Esse valor eu não tenho na rubrica da Educação hoje.",
+                  detalhes: "O orçamento do ano que vem está sendo fechado agora.",
+                  ceder_se: "Se o vendedor perguntar como a rubrica é definida e quando fecha.",
+                },
+              ],
+            },
+          },
+        },
+        {
+          key: "trico-vallery",
+          fases: { fase3: { previo: "Você recebeu a proposta por e-mail.", fatos: {}, abertura: [], objecoes: [] } },
+        },
+      ],
+    };
+    const issues = issuesOf(old);
     expect(hasBlockingIssue(issues)).toBe(true);
     expect(issues.some((i) => i.onde.includes("vila-serena.fase3 objeção") && i.motivo.includes("rubrica"))).toBe(true);
+    // Sem ja_sabe, a cola ficaria vazia.
     expect(issues.some((i) => i.onde === "trico-vallery.fase3.ja_sabe")).toBe(true);
   });
 });

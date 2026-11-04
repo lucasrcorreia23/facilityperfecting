@@ -358,7 +358,7 @@ export async function saveAdjustSection(
       if (stableHash(next) !== stableHash(current.sections.prior_knowledge)) {
         // É o "O que {persona} já sabe" da cola: fatos neutros, nunca direção ao comprador.
         rejectBuyerText([
-          ...lintPriorFacts(next, "o que o comprador já sabe"),
+          ...lintPriorFacts(next, "o que o comprador já sabe", { allowEmpty: true }),
           ...findReservedTerms(next.map((t, i) => ({ onde: `o que o comprador já sabe[${i}]`, text: t }))),
         ]);
         await setCaseSetupPriorKnowledge(env, token, caseSetupId, next);

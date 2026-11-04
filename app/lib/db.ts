@@ -212,7 +212,12 @@ export async function invokeExport(draftIds: string[]) {
     body: { draftIds },
   });
   if (error) throw new Error(await functionErrorMessage(error, "Falha ao exportar"));
-  return data;
+  // Lote responde 207 com o erro por rascunho: o portão de texto do comprador (422)
+  // traz a lista do que corrigir, e sem isto ela só aparecia como JSON no detalhe.
+  const failures = ((data?.results ?? []) as Array<{ ok: boolean; error?: unknown }>)
+    .filter((r) => !r.ok)
+    .map((r) => describeFunctionError(r.error));
+  return { ...data, failures } as typeof data & { failures: string[] };
 }
 
 /** Playbooks da org de destino (para o seletor de modo na Criação). */
@@ -657,16 +662,23 @@ export async function listCallContexts(): Promise<CallContextType[]> {
 }
 
 /** Extrai a mensagem real do corpo de uma FunctionsHttpError (em vez do genérico "non-2xx"). */
+/** Mensagem legível de um erro de Edge Function, com a lista de `issues` do portão. */
+export function describeFunctionError(e: unknown): string {
+  if (typeof e === "string") return e;
+  const err = e as { message?: string; detail?: { message?: string; issues?: unknown } } | null;
+  const issues = Array.isArray(err?.detail?.issues) ? (err!.detail!.issues as unknown[]).map(String) : [];
+  const message = err?.detail?.message ?? err?.message;
+  if (message) return issues.length > 0 ? `${message}: ${issues.join("; ")}` : message;
+  return JSON.stringify(e);
+}
+
 async function functionErrorMessage(error: unknown, fallback: string): Promise<string> {
   try {
     const ctx = (error as { context?: Response }).context;
     if (ctx && typeof ctx.json === "function") {
       const body = await ctx.json();
       const e = body?.error;
-      if (typeof e === "string") return e;
-      if (e?.detail?.message) return e.detail.message;
-      if (e?.message) return e.message;
-      if (e) return JSON.stringify(e);
+      if (e) return describeFunctionError(e);
     }
   } catch {
     // sem corpo legível — usa o fallback

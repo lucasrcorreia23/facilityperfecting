@@ -318,7 +318,11 @@ export default function BibliotecaPage() {
         return d ? isPlaybookDraft(d) : false;
       });
       const methodologyIds = ids.filter((id) => !playbookIds.includes(id));
-      if (methodologyIds.length > 0) await invokeExport(methodologyIds);
+      if (methodologyIds.length > 0) {
+        const { failures } = await invokeExport(methodologyIds);
+        // O lote segue: o rascunho recusado fica em "erro", com o que corrigir.
+        for (const f of failures) addToast({ title: "Rascunho não enviado", description: f, color: "danger" });
+      }
       for (const id of playbookIds) await invokeExportPlaybook(id);
       setSelected(new Set());
       await refresh();

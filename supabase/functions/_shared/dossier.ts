@@ -557,9 +557,16 @@ export async function applyDossierToCaseSetup(
   // Com o dossiê, o que o comprador sabe é o que o material diz, ou nada.
   try {
     const facts = priorFactsOf(d);
-    for (const issue of lintPriorFacts(facts)) warnings.push(`dossiê: ${describeBuyerTextIssue(issue)}`);
-    await setCaseSetupPriorKnowledge(env, token, caseSetupId, facts);
-    detail.prior_knowledge = facts.length;
+    if (facts.length === 0 && d.conhecimento.previo.trim()) {
+      // Rascunho antigo (sem ja_sabe) com o prévio na voz do comprador: não serve para a
+      // cola, e gravar [] apagaria a de um roleplay já no ar (run em voo no deploy).
+      warnings.push("dossiê sem ja_sabe e prévio na voz do comprador: cola mantida como estava");
+      detail.prior_knowledge = "mantido";
+    } else {
+      for (const issue of lintPriorFacts(facts)) warnings.push(`dossiê: ${describeBuyerTextIssue(issue)}`);
+      await setCaseSetupPriorKnowledge(env, token, caseSetupId, facts);
+      detail.prior_knowledge = facts.length;
+    }
   } catch (e) {
     warnings.push(`conhecimento prévio não aplicado: ${messageOf(e)}`);
   }

@@ -242,6 +242,25 @@ describe("applyDossierToCaseSetup", () => {
     expect(mocked.setCaseSetupPriorKnowledge).toHaveBeenCalledWith("hml", "t", 99, []);
   });
 
+  it("a cola recebe o ja_sabe, não o prévio do comprador", async () => {
+    mocked.listFeedbackRubricTypes.mockResolvedValue([{ id: 1, name: "seller_rubric" }]);
+    mocked.listCaseSetupRubricsFull.mockResolvedValue([]);
+    const d = makeDossier();
+    d.conhecimento = { previo: "Você recebeu a proposta por e-mail.", ja_sabe: ["Recebeu a proposta por e-mail", ""], fatos: [], briefing: [] };
+    await applyDossierToCaseSetup("hml", "t", 99, 5, d);
+    expect(mocked.setCaseSetupPriorKnowledge).toHaveBeenCalledWith("hml", "t", 99, ["Recebeu a proposta por e-mail"]);
+  });
+
+  it("rascunho antigo com prévio na voz do comprador não apaga a cola: mantém e avisa", async () => {
+    mocked.listFeedbackRubricTypes.mockResolvedValue([{ id: 1, name: "seller_rubric" }]);
+    mocked.listCaseSetupRubricsFull.mockResolvedValue([]);
+    const d = makeDossier();
+    d.conhecimento = { previo: "Esta é uma reunião on-line. Você recebeu a proposta.", fatos: [], briefing: [] };
+    const { warnings } = await applyDossierToCaseSetup("hml", "t", 99, 5, d);
+    expect(mocked.setCaseSetupPriorKnowledge).not.toHaveBeenCalled();
+    expect(warnings.some((w) => w.includes("cola mantida"))).toBe(true);
+  });
+
   it("sem a ordem das etapas, volta a copiar tudo e avisa", async () => {
     mocked.listFeedbackRubricTypes.mockResolvedValue([{ id: 1, name: "seller_rubric" }]);
     mocked.listCaseSetupRubricsFull.mockResolvedValue([]);

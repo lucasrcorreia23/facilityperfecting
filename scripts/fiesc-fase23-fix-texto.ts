@@ -121,7 +121,7 @@ for (const conta of spec.contas) {
       // Só corrige linha que viola a regra: o resto do diff é ajuste feito à mão em PROD
       // (o spec ficou para trás) e reaplicar o spec desfaria a calibração do time.
       const live = { titulo: String(row.title ?? ""), fala_exemplo: String(row.description ?? ""), detalhes: String(row.details ?? ""), ceder_se: String(row.to_give_in_if ?? "") };
-      if (findReservedTerms(objectionTexts([live])).length === 0) {
+      if (!findReservedTerms(objectionTexts([live])).some((i) => i.nivel === "erro")) {
         drift.push(`${label}: objeção ${row.id} "${row.title}" (nível ${row.difficulty_level_id}) difere do spec, mantida`);
         continue;
       }

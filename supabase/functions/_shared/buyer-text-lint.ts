@@ -49,7 +49,8 @@ const RESERVED_TERMS: ReadonlyArray<{ re: RegExp; termo: string; nivel: BuyerTex
   { re: /\bchecklists?\b/, termo: "checklist", nivel: "erro", troca: "lista, conferência" },
   { re: /\bplaybooks?\b/, termo: "playbook", nivel: "erro", troca: "roteiro, processo" },
   { re: /\brole ?plays?\b/, termo: "roleplay", nivel: "erro", troca: "reunião, conversa" },
-  { re: /\bcriterios? de avaliacao\b/, termo: "critério de avaliação", nivel: "erro", troca: "o que pesa na decisão" },
+  // Aviso, não erro: em licitação ("critérios de avaliação do edital") é a fala do comprador.
+  { re: /\bcriterios? de avaliacao\b/, termo: "critério de avaliação", nivel: "aviso", troca: "o que pesa na decisão" },
   { re: /\bfeedback\b/, termo: "feedback", nivel: "aviso", troca: "retorno, opinião" },
   { re: /\bpontuacao\b/, termo: "pontuação", nivel: "aviso", troca: "resultado" },
 ];
@@ -92,28 +93,36 @@ const PRIOR_FACT_RULES: ReadonlyArray<{ re: RegExp; motivo: string }> = [
     motivo: "fala com o comprador (\"você\"): a cola é lida pelo representante; escreva o fato sem sujeito",
   },
   {
-    re: /^(esta|essa|este|esse|isto|isso) e (uma|um)\b/,
+    // Só a cena da conversa: "Essa é uma conta estratégica da regional" é fato.
+    re: /^(esta|essa|este|esse|isto|isso) e (uma|um|a|o) (reuniao|ligacao|visita|chamada|conversa|videochamada|apresentacao)\b/,
     motivo: "descreve a cena (\"Esta é uma reunião…\"): o tipo de ligação já diz isso; fique só com o fato",
   },
   {
-    re: /\b(apresenta|demonstra|mostra|tem) (hesitacao|resistencia|interesse|desconfianca|ceticismo)\b/,
+    // "Tem interesse em expandir para o Nordeste" é fato; postura diante da oferta, não.
+    re: /\b((apresenta|demonstra|mostra) (hesitacao|resistencia|interesse|desconfianca|ceticismo)|tem (hesitacao|resistencia|desconfianca|ceticismo)|tem interesse (na|pela|em) (oferta|proposta|solucao))\b/,
     motivo: "direção de atuação: postura do comprador vai no comportamento ou na dificuldade, não aqui",
   },
   {
-    // Sem "nunca"/"sempre"/"deve" soltos: "Nunca contratou consultoria" e "o orçamento
-    // deve fechar em novembro" são fatos.
-    re: /\b(nao deve|mantenha|reaja|responda|aja como|finja)\b/,
+    // Sem "nunca"/"sempre"/"deve"/"não deve" soltos: "Nunca contratou consultoria" e "a
+    // licitação não deve sair antes de março" são fatos.
+    re: /\b(mantenha|reaja|responda|aja como|finja)\b/,
     motivo: "instrução ao comprador: aqui vão só fatos que ele já conhece",
   },
 ];
 
 /**
- * Lint do `buyer_prior_knowledge` ("O que {persona} já sabe" da cola). Lista vazia é
- * erro: o rodapé só lê este campo, e vazio a cola fica sem nada.
+ * Lint do `buyer_prior_knowledge` ("O que {persona} já sabe" da cola). Na criação, lista
+ * vazia é erro: o rodapé só lê este campo, e vazio a cola fica sem nada.
  */
-export function lintPriorFacts(items: readonly string[], onde = "ja_sabe"): BuyerTextIssue[] {
+export function lintPriorFacts(
+  items: readonly string[],
+  onde = "ja_sabe",
+  /** Edição de roleplay já criado: esvaziar a cola é decisão de quem edita. */
+  { allowEmpty = false }: { allowEmpty?: boolean } = {},
+): BuyerTextIssue[] {
   const facts = items.map((s) => s.trim()).filter(Boolean);
   if (facts.length === 0) {
+    if (allowEmpty) return [];
     return [{ onde, nivel: "erro", motivo: "vazio: o \"O que o comprador já sabe\" da cola fica sem nada", trecho: "" }];
   }
   const out: BuyerTextIssue[] = [];

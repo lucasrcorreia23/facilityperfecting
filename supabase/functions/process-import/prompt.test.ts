@@ -15,7 +15,7 @@ describe("impressão digital do gerador", () => {
     // GENERATOR_VERSION em _shared/generator-version.ts e atualize os dois valores aqui.
     expect({ version: GENERATOR_VERSION, fingerprint: await generatorFingerprint("claude-sonnet-5") }).toEqual({
       version: "6",
-      fingerprint: "d1c3a5f4",
+      fingerprint: "08f69e0d",
     });
   });
 });

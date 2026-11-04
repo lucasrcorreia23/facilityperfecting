@@ -224,7 +224,7 @@ export default function PlanoTrilhasPage() {
         await setDraftConnection(draftId, pickerConn);
       }
       const res = await invokeExport(sendableDrafts);
-      if (res?.ok === false) throw new Error(JSON.stringify(res?.error ?? res));
+      if (res?.ok === false) throw new Error(res.failures?.join(" | ") || JSON.stringify(res?.error ?? res));
       setSendStatus("success");
       setTimeout(() => setSendModalOpen(false), 1800);
       await refresh();

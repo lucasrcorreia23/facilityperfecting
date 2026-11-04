@@ -927,6 +927,12 @@ Deno.serve(async (req) => {
         return json({ ok: false, error: "rascunho sem playbook selecionado" }, 400);
       }
       const objections = (draft.scenario?.objections ?? []) as ObjectionSeed[];
+      try {
+        assertBuyerTextReady(null, objections);
+      } catch (e) {
+        if (e instanceof PerfectingError) return json({ ok: false, error: { status: e.status, detail: e.detail } }, 422);
+        throw e;
+      }
       const apply = async () => {
         const { env, token } = await authenticateConnection(draft.connections);
         return applyBlockObjections(env, token, playbookId, objections, {
@@ -1058,6 +1064,16 @@ Deno.serve(async (req) => {
       Date.now() - startedAt < RUNNING_WINDOW_MS
     ) {
       return json({ ok: false, error: "implementação já em andamento para este rascunho" }, 409);
+    }
+
+    // Antes de mudar o status e de disparar qualquer estágio: objeção com termo
+    // reservado não chega ao playbook (o apply_block_objections abaixo escreve no
+    // catálogo compartilhado em paralelo ao run()).
+    try {
+      assertBuyerTextReady(null, (draft.scenario?.objections ?? []) as ObjectionSeed[]);
+    } catch (e) {
+      if (e instanceof PerfectingError) return json({ ok: false, error: { status: e.status, detail: e.detail } }, 422);
+      throw e;
     }
 
     const playbookRun: PlaybookRun = {

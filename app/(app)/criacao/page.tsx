@@ -616,7 +616,8 @@ export default function CriacaoPage() {
       const data = await invokeExport([draftId]);
       const result = data?.results?.[0];
       if (!data?.ok || !result?.ok) {
-        throw new Error(formatExportError(result?.error) ?? "Falha ao enviar para o destino");
+        // `failures` já traz a mensagem do portão com a lista do que corrigir.
+        throw new Error(data?.failures?.[0] ?? formatExportError(result?.error) ?? "Falha ao enviar para o destino");
       }
       setSendStatus("success");
     } catch (err) {

@@ -35,7 +35,10 @@ describe("findReservedTerms", () => {
 
   it("casa sem acento e no plural; não confunde palavras comuns", () => {
     expect(findReservedTerms([{ onde: "x", text: "Deixa eu ver minhas RUBRICAS" }])).toHaveLength(1);
-    expect(findReservedTerms([{ onde: "x", text: "Critérios de Avaliação do edital" }])).toHaveLength(1);
+    const edital = findReservedTerms([{ onde: "x", text: "Critérios de Avaliação do edital" }]);
+    expect(edital).toHaveLength(1);
+    // Vocabulário de licitação: só avisa.
+    expect(hasBlockingIssue(edital)).toBe(false);
     expect(
       findReservedTerms([
         { onde: "x", text: "Pagamento 30 dias após a nota fiscal; a avaliação dos alunos e o critério da prefeitura; na etapa seguinte" },
@@ -72,8 +75,20 @@ describe("lintPriorFacts", () => {
     ).toEqual([]);
   });
 
-  it("vazio é erro: a cola fica sem nada", () => {
+  it("vazio é erro na criação, mas pode na edição", () => {
     expect(hasBlockingIssue(lintPriorFacts(["", "  "]))).toBe(true);
+    expect(lintPriorFacts([], "x", { allowEmpty: true })).toEqual([]);
+  });
+
+  it("não barra fatos que parecem regra (revisão de 04/11)", () => {
+    expect(
+      lintPriorFacts([
+        "A licitação não deve sair antes de março",
+        "Essa é uma conta estratégica da regional",
+        "Tem interesse em expandir para o Nordeste",
+      ]),
+    ).toEqual([]);
+    expect(hasBlockingIssue(lintPriorFacts(["Tem interesse na proposta, mas quer prazo"]))).toBe(true);
   });
 
   it("mais de 6 itens só avisa", () => {
