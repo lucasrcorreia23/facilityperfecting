@@ -1,5 +1,6 @@
 import { buildSchema, PART_NOTES, SCHEMA_PARTS, type SchemaPart } from "./schema.ts";
 import { codeFingerprint } from "../_shared/generator-version.ts";
+import { buildDebateSchema, DEBATE_PART_NOTES, DEBATE_PARTS, DEBATE_SYSTEM } from "./debate-prompt.ts";
 
 /**
  * Pré-prompt mestre de ingestão (modo NÃO-interativo): extrai → organiza nos blocos
@@ -94,6 +95,9 @@ export function generatorFingerprint(model: string): Promise<string> {
     SYSTEM_BASE,
     JSON.stringify(parts.map((p) => buildSchema(["x"], ["x"], p))),
     JSON.stringify(PART_NOTES),
+    DEBATE_SYSTEM,
+    JSON.stringify(DEBATE_PARTS.map((p) => buildDebateSchema(p, 3))),
+    JSON.stringify(DEBATE_PART_NOTES),
     model,
   ]);
 }

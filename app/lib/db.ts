@@ -38,6 +38,7 @@ import type {
   TrailPlanDetail,
 } from "@/app/lib/types";
 import { defaultEvalWeights } from "@/app/lib/evaluation-criteria";
+import type { DebateAnchors, MethodologyStepRef } from "@/supabase/functions/_shared/debate";
 
 const DEFAULT_WEIGHTS: CriteriaWeights = {
   weight_prompt: 0.3,
@@ -1367,4 +1368,49 @@ export async function listAdjustments(connectionId: string, caseSetupId: number)
     .limit(100);
   if (error) throw error;
   return (data ?? []) as RoleplayAdjustment[];
+}
+
+// ── Debate (motor 3) ────────────────────────────────────────────────────────
+
+/** Metodologias que a org de destino enxerga e, com `methodologyId`, as etapas. */
+export async function listDestinationMethodologies(
+  connectionId: string,
+  methodologyId?: number,
+): Promise<{ items: Methodology[]; steps: MethodologyStepRef[] | null }> {
+  const supabase = createClient();
+  const { data, error } = await supabase.functions.invoke("list-methodologies", {
+    body: { connectionId, ...(methodologyId != null ? { methodologyId } : {}) },
+  });
+  if (error) throw new Error(await functionErrorMessage(error, "Falha ao listar as metodologias da conta"));
+  if (!data?.ok) throw new Error(JSON.stringify(data?.error ?? data));
+  return {
+    items: (data.items ?? []) as Methodology[],
+    steps: (data.steps ?? null) as MethodologyStepRef[] | null,
+  };
+}
+
+/** Processa o material no modo debate: devolve a saída crua das duas fatias. */
+export async function processDebateImport(params: {
+  text: string;
+  anchors: DebateAnchors;
+  steps: MethodologyStepRef[];
+  connectionId: string;
+}): Promise<{ result: Record<string, unknown>; generator: GeneratorManifest | null; warnings: string[] }> {
+  const supabase = createClient();
+  const { data, error } = await supabase.functions.invoke("process-import", {
+    body: {
+      text: params.text,
+      mode: "debate",
+      anchors: params.anchors,
+      steps: params.steps.map((s) => ({ name: s.name })),
+      connection_id: params.connectionId,
+    },
+  });
+  if (error) throw new Error(await functionErrorMessage(error, "Falha ao processar o debate"));
+  if (!data?.ok) throw new Error(describeFunctionError(data?.error ?? data));
+  return {
+    result: (data.result ?? {}) as Record<string, unknown>,
+    generator: (data.generator ?? null) as GeneratorManifest | null,
+    warnings: (data.warnings ?? []) as string[],
+  };
 }

@@ -44,6 +44,7 @@ import {
   truncateForApi,
 } from "../_shared/perfecting.ts";
 import { recordGenerations } from "../_shared/generations.ts";
+import { exportDebateDraft } from "../_shared/debate-export.ts";
 
 const VALID_DIFFICULTIES = new Set(["easy", "medium", "hard"]);
 
@@ -155,6 +156,31 @@ async function exportDraft(draftId: string): Promise<{ caseSetupId: number }> {
 
   // 1) login + impersonação no ambiente da conexão (hml | prod)
   const { env, token } = await authenticateConnection(connection);
+
+  // Debate tem envio próprio (motor 3, tudo verbatim, sem fechamento): o caminho de
+  // venda abaixo gravaria persona, prompt e conteúdo por etapa de comprador.
+  if (draft.scenario?.generation_mode === "debate") {
+    const result = await exportDebateDraft(env, token, draft, (step) => setJob({ step }));
+    const detail = {
+      persona_id: result.personaId,
+      created: result.created,
+      ...(result.warnings.length > 0 && { warnings: result.warnings }),
+    };
+    await db
+      .from("roleplay_drafts")
+      .update({
+        status: "exported",
+        perfecting_case_setup_id: result.caseSetupId,
+        elevenlabs_agent_id: result.elevenlabsAgentId,
+        error_detail: result.warnings.length > 0 ? detail : null,
+      })
+      .eq("id", draftId);
+    // Sem a saída da IA: o diff da linha do tempo compara campos de venda e marcaria
+    // tudo como editado. O manifesto (versão, diretrizes) continua registrado.
+    await recordGenerations(db, { ...draft, generation_output: null }, [result.caseSetupId]);
+    await setJob({ state: "done", finished_at: new Date().toISOString(), error_detail: detail });
+    return { caseSetupId: result.caseSetupId };
+  }
 
   // resolver call_context: scenario do draft → default global. Sem fallback: cair no
   // 1º da lista (Cold Call) mudava o tipo da ligação em silêncio — o comprador de uma

@@ -18,8 +18,10 @@
  *  v6: "ja_sabe" separado do "previo" (a cola do representante deixa de receber o
  *      prévio na voz do comprador) e vocabulário reservado (rubrica, checklist,
  *      playbook, roleplay) fora de tudo que o comprador diz — FIESC Fase 3, 04/11.
+ *  v7: modo debate (motor 3 da Perfecting): prompt e schema próprios, com obra,
+ *      moção, lado e oponente fixados pelo usuário — 08/11.
  */
-export const GENERATOR_VERSION = "6";
+export const GENERATOR_VERSION = "7";
 
 /**
  * Versão do que o envio faz com o resultado (export-roleplay, implement-playbook,
@@ -41,7 +43,7 @@ export interface GeneratorManifest {
   version: string;
   fingerprint: string;
   model: string;
-  mode: "methodology" | "playbook";
+  mode: "methodology" | "playbook" | "debate";
   guidelines: GuidelineRef[];
   /** A conta já escolhida no processamento (sem ela, só valem global e modo). */
   connection_id: string | null;

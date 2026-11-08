@@ -1,3 +1,4 @@
+import type { DebateDraft } from "@/supabase/functions/_shared/debate";
 /** Tipos do domínio do produto (espelham o schema Postgres em supabase/migrations). */
 
 /**
@@ -59,7 +60,7 @@ export interface Context {
 }
 
 /** "playbook" = a jornada inteira do playbook (1 roleplay por etapa). */
-export type GenerationMode = "methodology" | "playbook";
+export type GenerationMode = "methodology" | "playbook" | "debate";
 
 export interface ScenarioConfig {
   call_context_slug?: string | null;
@@ -72,6 +73,8 @@ export interface ScenarioConfig {
   // Modo playbook: call_context/dificuldade/instruções acima não se aplicam —
   // vêm das etapas do playbook.
   generation_mode?: GenerationMode | null;
+  /** Modo debate: o rascunho inteiro (ver `_shared/debate.ts`). */
+  debate?: DebateDraft | null;
   playbook_id?: number | null;
   playbook_name?: string | null;
   // Modo playbook, múltiplas personas: 1..10 (default 1 = comportamento antigo,

@@ -2507,3 +2507,131 @@ export async function listOrganizationCaseSetups(
     await getJson<unknown>(`${rp(env)}/case_setup/organization/list?apply_visibility_filter=false`, token),
   );
 }
+
+// ── Debate (motor 3) ──────────────────────────────────────────────────────
+// Escritas do envio de debate (`debate-export.ts`). Criação sem retry: nenhum destes
+// endpoints tem dedupe, e um 5xx depois de gravar duplicaria o registro.
+
+/** POST de criação sem retry; devolve o corpo (com `id`). */
+export function createOnce<T = { id?: number }>(
+  env: PerfectingEnv,
+  token: string,
+  path: string,
+  body: unknown,
+): Promise<T> {
+  return sendJson<T>("POST", `${rp(env)}${path}`, token, body, 0);
+}
+
+/** `case_setup/create` com payload pronto (sem os builders legados de venda). */
+export async function createCaseSetupRaw(
+  env: PerfectingEnv,
+  token: string,
+  payload: Record<string, unknown>,
+  generateCasePrompt: boolean,
+): Promise<number> {
+  const data = await sendJson<{ id?: number }>(
+    "POST",
+    `${rp(env)}/case_setup/create?generate_case_prompt=${generateCasePrompt}`,
+    token,
+    payload,
+    0,
+  );
+  if (typeof data.id !== "number") throw new PerfectingError(502, "case_setup/create sem id");
+  return data.id;
+}
+
+/**
+ * Merge parcial no case_setup pelo PUT (`?generate_case_prompt=false` é obrigatório:
+ * o PUT não regenera mais o prompt). É por aqui que entram o motor e a persona.
+ */
+export async function putCaseSetupFields(
+  env: PerfectingEnv,
+  token: string,
+  caseSetupId: number,
+  fields: Record<string, unknown>,
+): Promise<void> {
+  await putJson(`${rp(env)}/case_setup_${caseSetupId}?generate_case_prompt=false`, token, fields);
+}
+
+export async function putCaseSetupFeedbackConfig(
+  env: PerfectingEnv,
+  token: string,
+  caseSetupId: number,
+  config: Record<string, unknown>,
+): Promise<void> {
+  await putJson(`${rp(env)}/case_setup_${caseSetupId}/feedback_processing_config`, token, config);
+}
+
+/** Vozes v1 (catálogo do case_setup). Rota pública em `/data_objects`. */
+export async function listVoicesV1(
+  env: PerfectingEnv,
+  token: string,
+): Promise<Array<{ id: number; gender_id: number | null; voice_model_id: string }>> {
+  const data = await getJson<unknown>(`${apiBase(env)}/data_objects/persona_voices`, token);
+  return records(data)
+    .filter((v) => typeof v.id === "number" && typeof v.voice_model_id === "string")
+    .map((v) => ({
+      id: v.id as number,
+      gender_id: typeof v.gender_id === "number" ? v.gender_id : null,
+      voice_model_id: v.voice_model_id as string,
+    }));
+}
+
+/** Vozes v2 (as da persona). Rota de superadmin: o token do "entrar como" serve. */
+export async function listPersonaVoicesV2(
+  env: PerfectingEnv,
+  token: string,
+): Promise<Array<{ id: number; gender_id: number | null; age_group_id: number | null }>> {
+  const data = await getJson<unknown>(`${apiBase(env)}/superadmin/persona-voices-v2`, token);
+  return records(data)
+    .filter((v) => typeof v.id === "number")
+    .map((v) => ({
+      id: v.id as number,
+      gender_id: typeof v.gender_id === "number" ? v.gender_id : null,
+      age_group_id: typeof v.age_group_id === "number" ? v.age_group_id : null,
+    }));
+}
+
+export async function listPersonaAvatars(
+  env: PerfectingEnv,
+  token: string,
+): Promise<Array<{ id: number; gender_id: number | null; age_group_id: number | null; is_active: boolean }>> {
+  const data = await getJson<unknown>(`${apiBase(env)}/superadmin/persona-avatars`, token);
+  return records(data)
+    .filter((a) => typeof a.id === "number")
+    .map((a) => ({
+      id: a.id as number,
+      gender_id: typeof a.gender_id === "number" ? a.gender_id : null,
+      age_group_id: typeof a.age_group_id === "number" ? a.age_group_id : null,
+      is_active: a.is_active !== false,
+    }));
+}
+
+export async function listAvatarVoiceLinks(
+  env: PerfectingEnv,
+  token: string,
+  avatarId: number,
+): Promise<Array<{ persona_avatar_id: number; persona_voice_v2_id: number }>> {
+  const data = await getJson<unknown>(`${apiBase(env)}/superadmin/persona-avatars/${avatarId}/voices`, token);
+  return records(data)
+    .filter((l) => typeof l.persona_voice_v2_id === "number")
+    .map((l) => ({ persona_avatar_id: avatarId, persona_voice_v2_id: l.persona_voice_v2_id as number }));
+}
+
+/** Conteúdo por etapa já gravado, com o vínculo de etapa (para conferir o POST). */
+export async function listStepKnowledgeLinks(
+  env: PerfectingEnv,
+  token: string,
+  caseSetupId: number,
+): Promise<Array<{ id: number; title: string; methodology_step_ids: number[] }>> {
+  const data = await getJson<unknown>(`${rp(env)}/case_setup_${caseSetupId}/step_knowledge`, token);
+  return records(data)
+    .filter((r) => typeof r.id === "number")
+    .map((r) => ({
+      id: r.id as number,
+      title: String(r.title ?? ""),
+      methodology_step_ids: Array.isArray(r.methodology_step_ids)
+        ? r.methodology_step_ids.filter((n): n is number => typeof n === "number")
+        : [],
+    }));
+}

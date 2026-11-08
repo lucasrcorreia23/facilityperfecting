@@ -11,6 +11,7 @@ import {
   BookOpenIcon,
   AdjustmentsHorizontalIcon,
   DocumentTextIcon,
+  ChatBubbleLeftRightIcon,
 } from "@heroicons/react/24/outline";
 import { RobotIcon } from "@/app/components/icons/robot-icon";
 import { cn } from "@/app/lib/cn";
@@ -21,6 +22,7 @@ const GROUPS = [
     label: "Criar",
     items: [
       { href: "/criacao", label: "Criação", icon: RobotIcon },
+      { href: "/debate", label: "Debate", icon: ChatBubbleLeftRightIcon },
       { href: "/trilhas", label: "Trilhas", icon: AcademicCapIcon },
       { href: "/playbooks", label: "Playbooks", icon: BookOpenIcon },
     ],

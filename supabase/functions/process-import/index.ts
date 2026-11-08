@@ -7,6 +7,14 @@ import { GENERATOR_VERSION, type GeneratorManifest } from "../_shared/generator-
 import { guidelineRefs, loadGuidelines, renderGuidelinesBlock, selectGuidelines } from "../_shared/guidelines.ts";
 import { readAnthropicStream } from "../_shared/anthropic.ts";
 import {
+  buildDebateSchema,
+  DEBATE_PART_NOTES,
+  DEBATE_PARTS,
+  DEBATE_SYSTEM,
+  debateAnchorsBlock,
+  parseDebateAnchors,
+} from "./debate-prompt.ts";
+import {
   listCallContexts,
   listObjectionTypes,
   loginSuperadmin,
@@ -51,6 +59,119 @@ const PART_LABELS: Record<SchemaPart, string> = {
 
 
 
+/** Uma chamada estruturada à Anthropic, com prazo. Usada pelo modo debate. */
+async function askStructured(
+  system: Array<{ type: "text"; text: string; cache_control?: { type: "ephemeral" } }>,
+  schema: unknown,
+  text: string,
+  label: string,
+): Promise<{ parsed: Record<string, unknown>; usage: Record<string, unknown> | null | undefined }> {
+  const startedAt = Date.now();
+  const signal = AbortSignal.timeout(PART_DEADLINE_MS);
+  let res: Response;
+  try {
+    res = await fetch(ANTHROPIC_URL, {
+      signal,
+      method: "POST",
+      headers: {
+        "x-api-key": ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model: MODEL,
+        max_tokens: 32000,
+        stream: true,
+        output_config: { format: { type: "json_schema", schema } },
+        system,
+        messages: [{ role: "user", content: text }],
+      }),
+    });
+  } catch (e) {
+    if (signal.aborted) throw new PartError(`A parte "${label}" passou do tempo. Tente de novo.`);
+    throw e;
+  }
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new PartError({ status: res.status, detail: data?.error?.message ?? data?.error ?? data });
+  }
+  const { text: generated, stopReason, usage } = await readAnthropicStream(res);
+  console.log(`process-import[${label}]: ${num(usage?.output_tokens)} tokens em ${Math.round((Date.now() - startedAt) / 1000)}s`);
+  if (stopReason === "max_tokens") throw new PartError(`A parte "${label}" ficou grande demais. Reduza o material.`);
+  try {
+    return { parsed: JSON.parse(generated) as Record<string, unknown>, usage };
+  } catch {
+    throw new PartError(`A parte "${label}" voltou incompleta. Tente de novo.`);
+  }
+}
+
+/**
+ * Modo debate: âncoras (obra, tema, moção, lado, oponente) e etapas da metodologia vêm
+ * da tela; a IA preenche o resto em duas fatias paralelas. Devolve a saída crua das
+ * fatias — quem monta o rascunho é `mergeDebateAiResult` no front.
+ */
+async function processDebate(body: Record<string, unknown>, text: string): Promise<Response> {
+  const anchors = parseDebateAnchors(body.anchors);
+  if (!anchors) return json({ ok: false, error: "âncoras do debate incompletas (obra, tema, moção, lado, nome, idade e gênero da oponente)" }, 400);
+  const steps = Array.isArray(body.steps)
+    ? (body.steps as Array<Record<string, unknown>>).map((s) => ({ name: String(s?.name ?? "").trim() })).filter((s) => s.name)
+    : [];
+  if (steps.length === 0) return json({ ok: false, error: "escolha uma metodologia com etapas antes de processar" }, 400);
+  const connectionId = typeof body.connection_id === "string" && body.connection_id ? body.connection_id : null;
+  const { selected: guidelines, skipped } = selectGuidelines(await loadGuidelines(db, "roleplay_import"), {
+    target: "roleplay_import",
+    mode: "debate",
+    connectionId,
+  });
+  const guidelinesBlock = renderGuidelinesBlock(guidelines);
+  const anchorsBlock = debateAnchorsBlock(anchors, steps);
+  let parts;
+  try {
+    parts = await Promise.all(
+      DEBATE_PARTS.map((part) =>
+        askStructured(
+          [
+            { type: "text", text: DEBATE_SYSTEM, cache_control: { type: "ephemeral" } },
+            ...(guidelinesBlock ? [{ type: "text" as const, text: guidelinesBlock }] : []),
+            { type: "text", text: DEBATE_PART_NOTES[part] },
+            { type: "text", text: anchorsBlock },
+          ],
+          buildDebateSchema(part, steps.length),
+          text,
+          part,
+        )
+      ),
+    );
+  } catch (e) {
+    if (e instanceof PartError) return json({ ok: false, error: e.payload }, 502);
+    throw e;
+  }
+  const result: Record<string, unknown> = {};
+  for (const { parsed } of parts) Object.assign(result, parsed);
+  const generator: GeneratorManifest = {
+    version: GENERATOR_VERSION,
+    fingerprint: await generatorFingerprint(MODEL),
+    model: MODEL,
+    mode: "debate",
+    guidelines: guidelineRefs(guidelines),
+    connection_id: connectionId,
+    processed_at: new Date().toISOString(),
+  };
+  return json({
+    ok: true,
+    result,
+    mode: "debate",
+    generator,
+    usage: {
+      input_tokens: parts.reduce((t, p) => t + num(p.usage?.input_tokens), 0),
+      output_tokens: parts.reduce((t, p) => t + num(p.usage?.output_tokens), 0),
+    },
+    ...(skipped.length > 0 && {
+      warnings: [`${skipped.length} diretriz(es) ficaram de fora por passar do limite de tamanho: ${skipped.map((g) => g.title).join(", ")}`],
+    }),
+  });
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   const denied = await requireUser(req);
@@ -73,6 +194,7 @@ Deno.serve(async (req) => {
     }
     const text = typeof body.text === "string" ? body.text.trim() : "";
     if (!text) return json({ ok: false, error: "texto vazio" }, 400);
+    if (body.mode === "debate") return await processDebate(body, text);
     // No modo playbook, cenário e rubricas vêm das etapas — não vale gerá-los.
     const mode = body.mode === "playbook" ? "playbook" : "methodology";
     // Sem conta escolhida, valem só as diretrizes globais e do modo.
