@@ -13,6 +13,7 @@ import {
 import { Card } from "@/app/components/ui/card";
 import { ConfirmDialog, type ConfirmConfig } from "@/app/components/ui/confirm-dialog";
 import { blockHasContent, nextDefaultName } from "@/app/lib/playbook-draft";
+import { createSaveTracker, type SaveTracker } from "@/app/lib/save-tracker";
 import {
   CALL_BLOCK_DESCRIPTION_MAX,
   CALL_BLOCK_NAME_MAX,
@@ -76,6 +77,7 @@ function CallBlockEditor({
   block,
   index,
   total,
+  saves,
   onMove,
   onDelete,
   onChanged,
@@ -83,6 +85,7 @@ function CallBlockEditor({
   block: PlaybookDraftCallBlock;
   index: number;
   total: number;
+  saves: SaveTracker;
   onMove: (index: number, dir: -1 | 1) => void;
   onDelete: (block: PlaybookDraftCallBlock) => void;
   onChanged: () => void;
@@ -97,7 +100,10 @@ function CallBlockEditor({
 
   async function persist(patch: Parameters<typeof updatePlaybookCallBlock>[1]) {
     try {
-      await updatePlaybookCallBlock(block.id, patch);
+      // A chave é o campo: regravar o mesmo campo com sucesso limpa uma falha anterior.
+      await saves.run(`block:${block.id}:${Object.keys(patch).sort().join(",")}`, () =>
+        updatePlaybookCallBlock(block.id, patch),
+      );
       onChanged();
     } catch (err) {
       toastError("Falha ao salvar a subetapa", err);
@@ -263,6 +269,7 @@ function CallTypeEditor({
   callContexts,
   methodologies,
   nameDuplicated,
+  saves,
   onMove,
   onDelete,
   onConfirm,
@@ -275,6 +282,7 @@ function CallTypeEditor({
   methodologies: Methodology[];
   /** Outra etapa do playbook tem este mesmo nome (a Perfecting recusa). */
   nameDuplicated: boolean;
+  saves: SaveTracker;
   onMove: (index: number, dir: -1 | 1) => void;
   onDelete: (callType: PlaybookDraftCallTypeWithBlocks) => void;
   onConfirm: (config: ConfirmConfig) => void;
@@ -284,10 +292,13 @@ function CallTypeEditor({
   const [description, setDescription] = useState(callType.description ?? "");
   const blocks = callType.playbook_call_blocks;
   const blocksAtLimit = blocks.length >= MAX_CALL_BLOCKS_PER_CALL_TYPE;
+  const [addingBlock, setAddingBlock] = useState(false);
 
   async function persist(patch: Parameters<typeof updatePlaybookCallType>[1]) {
     try {
-      await updatePlaybookCallType(callType.id, patch);
+      await saves.run(`type:${callType.id}:${Object.keys(patch).sort().join(",")}`, () =>
+        updatePlaybookCallType(callType.id, patch),
+      );
       onChanged();
     } catch (err) {
       toastError("Falha ao salvar a etapa", err);
@@ -300,7 +311,11 @@ function CallTypeEditor({
     const ordered = [...blocks];
     [ordered[blockIndex], ordered[target]] = [ordered[target], ordered[blockIndex]];
     try {
-      await reorderPlaybookCallBlocks(ordered.map((b, i) => ({ id: b.id, position: i })));
+      await saves.run(
+        `reorder-blocks:${callType.id}`,
+        () => reorderPlaybookCallBlocks(ordered.map((b, i) => ({ id: b.id, position: i }))),
+        { retryable: false },
+      );
       onChanged();
     } catch (err) {
       toastError("Falha ao reordenar", err);
@@ -322,6 +337,7 @@ function CallTypeEditor({
         </>
       ),
       confirmLabel: "Excluir subetapa",
+      tone: "danger",
       onConfirm: () => {
         void removeBlock(block);
       },
@@ -330,7 +346,9 @@ function CallTypeEditor({
 
   async function removeBlock(block: PlaybookDraftCallBlock) {
     try {
-      await deletePlaybookCallBlock(block.id);
+      await saves.run(`delete-block:${block.id}`, () => deletePlaybookCallBlock(block.id), {
+        retryable: false,
+      });
       onChanged();
     } catch (err) {
       toastError("Falha ao excluir a subetapa", err);
@@ -338,15 +356,24 @@ function CallTypeEditor({
   }
 
   async function addBlock() {
+    if (addingBlock) return; // clique duplo criava duas subetapas
+    setAddingBlock(true);
     try {
-      await createPlaybookCallBlock({
-        callTypeId: callType.id,
-        position: blocks.length,
-        name: "Nova subetapa",
-      });
+      await saves.run(
+        `add-block:${callType.id}`,
+        () =>
+          createPlaybookCallBlock({
+            callTypeId: callType.id,
+            position: blocks.length,
+            name: "Nova subetapa",
+          }),
+        { retryable: false },
+      );
       onChanged();
     } catch (err) {
       toastError("Falha ao adicionar subetapa", err);
+    } finally {
+      setAddingBlock(false);
     }
   }
 
@@ -481,6 +508,7 @@ function CallTypeEditor({
             block={block}
             index={i}
             total={blocks.length}
+            saves={saves}
             onMove={moveBlock}
             onDelete={requestRemoveBlock}
             onChanged={onChanged}
@@ -490,10 +518,11 @@ function CallTypeEditor({
           <button
             type="button"
             onClick={() => void addBlock()}
-            disabled={blocksAtLimit}
-            className="inline-flex items-center gap-1.5 self-start rounded-sm px-2 py-1.5 text-sm font-medium text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-slate-500"
+            disabled={blocksAtLimit || addingBlock}
+            aria-busy={addingBlock}
+            className="inline-flex min-h-[44px] items-center gap-1.5 self-start rounded-sm px-2 py-1.5 text-sm font-medium text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-slate-500 sm:min-h-0"
           >
-            <PlusIcon className="w-4 h-4" /> Adicionar subetapa
+            <PlusIcon className="w-4 h-4" /> {addingBlock ? "Adicionando…" : "Adicionar subetapa"}
           </button>
           {blocks.length > MAX_CALL_BLOCKS_PER_CALL_TYPE ? (
             <p className="text-xs font-medium text-red-600">
@@ -517,21 +546,32 @@ export function PlaybookEditor({
   callTypes,
   callContexts,
   methodologies,
+  saves: savesProp,
   onChanged,
 }: {
   playbookId: string;
   callTypes: PlaybookDraftCallTypeWithBlocks[];
   callContexts: CallContextType[];
   methodologies: Methodology[];
+  /** Contador das gravações — a tela passa o dela para o indicador e para o envio esperar. */
+  saves?: SaveTracker;
   onChanged: () => void;
 }) {
+  const [ownSaves] = useState(createSaveTracker);
+  const saves = savesProp ?? ownSaves;
+  const [addingType, setAddingType] = useState(false);
+
   async function moveCallType(index: number, dir: -1 | 1) {
     const target = index + dir;
     if (target < 0 || target >= callTypes.length) return;
     const ordered = [...callTypes];
     [ordered[index], ordered[target]] = [ordered[target], ordered[index]];
     try {
-      await reorderPlaybookCallTypes(ordered.map((ct, i) => ({ id: ct.id, position: i })));
+      await saves.run(
+        `reorder-types:${playbookId}`,
+        () => reorderPlaybookCallTypes(ordered.map((ct, i) => ({ id: ct.id, position: i }))),
+        { retryable: false },
+      );
       onChanged();
     } catch (err) {
       toastError("Falha ao reordenar", err);
@@ -557,6 +597,7 @@ export function PlaybookEditor({
         </>
       ),
       confirmLabel: "Excluir etapa",
+      tone: "danger",
       onConfirm: () => {
         void removeCallType(callType);
       },
@@ -565,7 +606,9 @@ export function PlaybookEditor({
 
   async function removeCallType(callType: PlaybookDraftCallTypeWithBlocks) {
     try {
-      await deletePlaybookCallType(callType.id);
+      await saves.run(`delete-type:${callType.id}`, () => deletePlaybookCallType(callType.id), {
+        retryable: false,
+      });
       onChanged();
     } catch (err) {
       toastError("Falha ao excluir a etapa", err);
@@ -573,19 +616,28 @@ export function PlaybookEditor({
   }
 
   async function addCallType() {
+    if (addingType) return; // clique duplo criava duas etapas de mesmo nome
+    setAddingType(true);
     try {
-      await createPlaybookCallType({
-        playbookId,
-        position: callTypes.length,
-        // Nome único: duas "Nova etapa" derrubam o envio (unicidade por playbook).
-        name: nextDefaultName(
-          "Nova etapa",
-          callTypes.map((ct) => ct.name),
-        ),
-      });
+      await saves.run(
+        `add-type:${playbookId}`,
+        () =>
+          createPlaybookCallType({
+            playbookId,
+            position: callTypes.length,
+            // Nome único: duas "Nova etapa" derrubam o envio (unicidade por playbook).
+            name: nextDefaultName(
+              "Nova etapa",
+              callTypes.map((ct) => ct.name),
+            ),
+          }),
+        { retryable: false },
+      );
       onChanged();
     } catch (err) {
       toastError("Falha ao adicionar etapa", err);
+    } finally {
+      setAddingType(false);
     }
   }
 
@@ -602,6 +654,7 @@ export function PlaybookEditor({
           callContexts={callContexts}
           methodologies={methodologies}
           nameDuplicated={duplicated.has(normalizeName(callType.name))}
+          saves={saves}
           onMove={moveCallType}
           onDelete={requestRemoveCallType}
           onConfirm={setConfirm}
@@ -611,9 +664,11 @@ export function PlaybookEditor({
       <button
         type="button"
         onClick={() => void addCallType()}
-        className="inline-flex items-center gap-1.5 self-start rounded-sm px-2 py-1.5 text-sm font-medium text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700"
+        disabled={addingType}
+        aria-busy={addingType}
+        className="inline-flex min-h-[44px] items-center gap-1.5 self-start rounded-sm px-2 py-1.5 text-sm font-medium text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-40 sm:min-h-0"
       >
-        <PlusIcon className="w-4 h-4" /> Adicionar etapa
+        <PlusIcon className="w-4 h-4" /> {addingType ? "Adicionando…" : "Adicionar etapa"}
       </button>
       <ConfirmDialog config={confirm} onClose={() => setConfirm(null)} />
     </div>

@@ -14,7 +14,9 @@ import { PlanStatusBanner } from "@/app/components/trilhas/plan-status-banner";
 import { PlaybookEditor } from "@/app/components/playbooks/playbook-editor";
 import { ConnectionPicker } from "@/app/components/ui/connection-picker";
 import { DestinationSummary } from "@/app/components/ui/destination-summary";
+import { SaveIndicator } from "@/app/components/ui/save-indicator";
 import { useConnections } from "@/app/lib/use-connections";
+import { createSaveTracker } from "@/app/lib/save-tracker";
 import { countLabel, isProduction } from "@/app/lib/connection-label";
 import { createClient } from "@/app/lib/supabase/client";
 import { classifyPlaybookFailure, playbookEmptyState } from "@/app/lib/playbook-draft";
@@ -50,6 +52,9 @@ export default function PlaybookDetailPage() {
   const [loading, setLoading] = useState(true);
   const [retrying, setRetrying] = useState(false);
   const [confirm, setConfirm] = useState<ConfirmConfig | null>(null);
+  /** Gravações do editor (salva no blur): alimenta o indicador e segura o envio. */
+  const [saves] = useState(createSaveTracker);
+  const [openingPicker, setOpeningPicker] = useState(false);
 
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerConn, setPickerConn] = useState("");
@@ -153,15 +158,36 @@ export default function PlaybookDetailPage() {
         </span>
       ),
       confirmLabel: "Apagar e regerar",
+      tone: "danger",
       onConfirm: () => {
         void retryGeneration();
       },
     });
   }
 
-  function openPicker() {
-    setPickerConn(playbook?.export_run?.connection_id ?? "");
-    setPickerOpen(true);
+  /**
+   * Clicar em "Enviar" com um campo em foco dispara o blur (que grava) e o clique
+   * em sequência: espera a gravação terminar e relê o playbook antes de seguir.
+   */
+  async function openPicker() {
+    if (openingPicker) return;
+    setOpeningPicker(true);
+    try {
+      const { ok } = await saves.whenIdle();
+      if (!ok) {
+        addToast({
+          title: "Há uma alteração que não foi salva",
+          description: "Use “Tentar salvar de novo”, ao lado do botão de enviar, antes de enviar.",
+          color: "warning",
+        });
+        return;
+      }
+      await refresh();
+      setPickerConn(playbook?.export_run?.connection_id ?? "");
+      setPickerOpen(true);
+    } finally {
+      setOpeningPicker(false);
+    }
   }
 
   async function retryGeneration() {
@@ -289,13 +315,17 @@ export default function PlaybookDetailPage() {
         title={playbook.name}
         description="Revise as etapas e subetapas antes de criar o playbook na conta do cliente."
         action={
-          <Button
-            onPress={openPicker}
-            isDisabled={!canSend}
-            startContent={<PaperAirplaneIcon className="w-4 h-4" />}
-          >
-            Enviar para conta
-          </Button>
+          <div className="flex flex-wrap items-center gap-3">
+            <SaveIndicator tracker={saves} />
+            <Button
+              onPress={() => void openPicker()}
+              isDisabled={!canSend}
+              isLoading={openingPicker}
+              startContent={!openingPicker ? <PaperAirplaneIcon className="w-4 h-4" /> : undefined}
+            >
+              Enviar para conta
+            </Button>
+          </div>
         }
       />
 
@@ -343,7 +373,7 @@ export default function PlaybookDetailPage() {
                 )}
               </div>
             </div>
-            <Button variant="secondary" onPress={openPicker} className="shrink-0">
+            <Button variant="secondary" onPress={() => void openPicker()} className="shrink-0">
               Reenviar
             </Button>
           </div>
@@ -416,6 +446,7 @@ export default function PlaybookDetailPage() {
                 callTypes={callTypes}
                 callContexts={callContexts}
                 methodologies={methodologies}
+                saves={saves}
                 onChanged={refresh}
               />
             )}
@@ -426,6 +457,7 @@ export default function PlaybookDetailPage() {
             callTypes={callTypes}
             callContexts={callContexts}
             methodologies={methodologies}
+            saves={saves}
             onChanged={refresh}
           />
         )}

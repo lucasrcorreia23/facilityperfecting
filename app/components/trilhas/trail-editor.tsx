@@ -14,6 +14,8 @@ import {
 import { Card } from "@/app/components/ui/card";
 import { Button } from "@/app/components/ui/button";
 import { StatusBadge } from "@/app/components/ui/status-badge";
+import { ConfirmDialog, type ConfirmConfig } from "@/app/components/ui/confirm-dialog";
+import { createSaveTracker, type SaveTracker } from "@/app/lib/save-tracker";
 import { managerSelectClassNames, selectItemClassNames } from "@/app/lib/select-classnames";
 import {
   createTrailItem,
@@ -43,6 +45,7 @@ function ItemEditor({
   index,
   total,
   callContexts,
+  saves,
   onMove,
   onDelete,
   onChanged,
@@ -51,6 +54,7 @@ function ItemEditor({
   index: number;
   total: number;
   callContexts: CallContextType[];
+  saves: SaveTracker;
   onMove: (index: number, dir: -1 | 1) => void;
   onDelete: (item: TrailItemRow) => void;
   onChanged: () => void;
@@ -63,7 +67,9 @@ function ItemEditor({
 
   async function persist(patch: Parameters<typeof updateTrailItem>[1]) {
     try {
-      await updateTrailItem(item.id, patch);
+      await saves.run(`item:${item.id}:${Object.keys(patch).sort().join(",")}`, () =>
+        updateTrailItem(item.id, patch),
+      );
       onChanged();
     } catch (err) {
       toastError("Falha ao salvar o roleplay", err);
@@ -234,14 +240,21 @@ export function TrailEditor({
   onChanged,
   onGenerate,
   generating,
+  saves: savesProp,
 }: {
   trail: TrailWithItems;
   callContexts: CallContextType[];
   onChanged: () => void;
   onGenerate: (trailId: string) => void;
   generating?: boolean;
+  /** Contador das gravações — a tela passa o dela para o indicador e para gerar/enviar esperar. */
+  saves?: SaveTracker;
 }) {
   const pendingCount = trail.items.filter((it) => !it.draft_id).length;
+  const [ownSaves] = useState(createSaveTracker);
+  const saves = savesProp ?? ownSaves;
+  const [adding, setAdding] = useState(false);
+  const [confirm, setConfirm] = useState<ConfirmConfig | null>(null);
 
   async function moveItem(index: number, dir: -1 | 1) {
     const target = index + dir;
@@ -249,16 +262,40 @@ export function TrailEditor({
     const ordered = [...trail.items];
     [ordered[index], ordered[target]] = [ordered[target], ordered[index]];
     try {
-      await reorderTrailItems(ordered.map((it, i) => ({ id: it.id, position: i })));
+      await saves.run(
+        `reorder:${trail.id}`,
+        () => reorderTrailItems(ordered.map((it, i) => ({ id: it.id, position: i }))),
+        { retryable: false },
+      );
       onChanged();
     } catch (err) {
       toastError("Falha ao reordenar", err);
     }
   }
 
+  /** Excluir não tem desfazer: pergunta antes, dizendo o que acontece com o rascunho. */
+  function requestRemoveItem(item: TrailItemRow) {
+    setConfirm({
+      title: "Excluir o roleplay da trilha?",
+      message: (
+        <>
+          O roleplay <b>{item.titulo}</b> sai desta trilha, com o objetivo e as instruções escritas
+          nele.{" "}
+          {item.draft_id
+            ? "O rascunho já gerado continua na Biblioteca."
+            : "Ele ainda não virou rascunho, então nada fica na Biblioteca."}{" "}
+          Não dá para desfazer.
+        </>
+      ),
+      confirmLabel: "Excluir roleplay",
+      tone: "danger",
+      onConfirm: () => void removeItem(item),
+    });
+  }
+
   async function removeItem(item: TrailItemRow) {
     try {
-      await deleteTrailItem(item.id);
+      await saves.run(`delete:${item.id}`, () => deleteTrailItem(item.id), { retryable: false });
       onChanged();
     } catch (err) {
       toastError("Falha ao excluir o roleplay", err);
@@ -266,15 +303,24 @@ export function TrailEditor({
   }
 
   async function addItem() {
+    if (adding) return; // clique duplo criava dois roleplays
+    setAdding(true);
     try {
-      await createTrailItem({
-        trailId: trail.id,
-        position: trail.items.length,
-        titulo: "Novo roleplay",
-      });
+      await saves.run(
+        `add:${trail.id}`,
+        () =>
+          createTrailItem({
+            trailId: trail.id,
+            position: trail.items.length,
+            titulo: "Novo roleplay",
+          }),
+        { retryable: false },
+      );
       onChanged();
     } catch (err) {
       toastError("Falha ao adicionar roleplay", err);
+    } finally {
+      setAdding(false);
     }
   }
 
@@ -325,19 +371,23 @@ export function TrailEditor({
             index={index}
             total={trail.items.length}
             callContexts={callContexts}
+            saves={saves}
             onMove={moveItem}
-            onDelete={removeItem}
+            onDelete={requestRemoveItem}
             onChanged={onChanged}
           />
         ))}
         <button
           type="button"
           onClick={() => void addItem()}
-          className="inline-flex items-center gap-1.5 self-start rounded-sm px-2 py-1.5 text-sm font-medium text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700"
+          disabled={adding}
+          aria-busy={adding}
+          className="inline-flex min-h-[44px] items-center gap-1.5 self-start rounded-sm px-2 py-1.5 text-sm font-medium text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-40 sm:min-h-0"
         >
-          <PlusIcon className="w-4 h-4" /> Adicionar roleplay
+          <PlusIcon className="w-4 h-4" /> {adding ? "Adicionando…" : "Adicionar roleplay"}
         </button>
       </div>
+      <ConfirmDialog config={confirm} onClose={() => setConfirm(null)} />
     </Card>
   );
 }

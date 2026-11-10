@@ -20,7 +20,9 @@ import { RadarView } from "@/app/components/trilhas/radar-view";
 import { TrailEditor } from "@/app/components/trilhas/trail-editor";
 import { ConnectionPicker } from "@/app/components/ui/connection-picker";
 import { DestinationSummary } from "@/app/components/ui/destination-summary";
+import { SaveIndicator } from "@/app/components/ui/save-indicator";
 import { useConnections } from "@/app/lib/use-connections";
+import { createSaveTracker } from "@/app/lib/save-tracker";
 import { countLabel, isProduction } from "@/app/lib/connection-label";
 import { createClient } from "@/app/lib/supabase/client";
 import {
@@ -47,6 +49,8 @@ export default function PlanoTrilhasPage() {
   const [retrying, setRetrying] = useState(false);
   const [generatingTrail, setGeneratingTrail] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<ConfirmConfig | null>(null);
+  /** Gravações dos editores de trilha (salvam no blur): indicador + gerar/enviar esperam. */
+  const [saves] = useState(createSaveTracker);
 
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerConn, setPickerConn] = useState<string>("");
@@ -159,8 +163,23 @@ export default function PlanoTrilhasPage() {
     }
   }
 
+  /** Espera o que o blur ainda está gravando; false = ficou alteração sem salvar. */
+  async function savesSettled(): Promise<boolean> {
+    const { ok } = await saves.whenIdle();
+    if (!ok) {
+      addToast({
+        title: "Há uma alteração que não foi salva",
+        description: "Use “Tentar salvar de novo”, no topo da página, antes de continuar.",
+        color: "warning",
+      });
+    }
+    return ok;
+  }
+
   async function generateDrafts(trailIds?: string[]) {
     try {
+      // Os rascunhos são criados a partir do que está gravado, não do que está na tela.
+      if (!(await savesSettled())) return;
       const { created } = await generateTrailDrafts(planId, trailIds);
       addToast({
         title:
@@ -207,7 +226,8 @@ export default function PlanoTrilhasPage() {
     .filter((it) => it.draft && (it.draft.status === "draft" || it.draft.status === "error"))
     .map((it) => it.draft!.id);
 
-  function openSendPicker() {
+  async function openSendPicker() {
+    if (!(await savesSettled())) return;
     if (sendableDrafts.length === 0) {
       addToast({
         title: "Nenhum rascunho pendente de envio",
@@ -308,6 +328,7 @@ export default function PlanoTrilhasPage() {
         }
         action={
           <div className="flex flex-wrap items-center gap-2">
+            <SaveIndicator tracker={saves} />
             <Button
               variant="secondary"
               onPress={downloadMarkdown}
@@ -325,7 +346,7 @@ export default function PlanoTrilhasPage() {
               Gerar roleplays
             </Button>
             <Button
-              onPress={openSendPicker}
+              onPress={() => void openSendPicker()}
               isDisabled={sendableDrafts.length === 0}
               startContent={<PaperAirplaneIcon className="w-4 h-4" />}
             >
@@ -383,6 +404,7 @@ export default function PlanoTrilhasPage() {
                   key={trail.id}
                   trail={trail}
                   callContexts={callContexts}
+                  saves={saves}
                   onChanged={() => void refresh()}
                   generating={generatingTrail === trail.id}
                   onGenerate={(trailId) => {
