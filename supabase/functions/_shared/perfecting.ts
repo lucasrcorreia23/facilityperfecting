@@ -20,6 +20,8 @@
  * cria a persona depois, copiando o comprador (buildPersonaFromCaseSetup).
  */
 
+import { retryDelayMs, shouldRetry } from "./retry-policy.ts";
+
 export type PerfectingEnv = "hml" | "prod";
 
 export interface PerfectingEnvConfig {
@@ -80,7 +82,7 @@ function rps(env: PerfectingEnv): string {
 }
 
 const FETCH_TIMEOUT_MS = 180_000; // /generate levam minutos
-const MAX_RETRIES = 2; // 2 retries (3 tentativas) em 5xx/timeout
+const MAX_RETRIES = 2; // 2 repetições (3 tentativas) — quando, ver retry-policy.ts
 
 export class PerfectingError extends Error {
   status: number;
@@ -121,7 +123,11 @@ async function fetchWithTimeout(url: string, init: RequestInit): Promise<Respons
   }
 }
 
-/** POST/PUT JSON com retries/backoff em 5xx/timeout. NUNCA retenta 422 (validação). */
+/**
+ * POST/PUT/PATCH JSON. Quando repetir é decidido por `shouldRetry`
+ * (retry-policy.ts): 502/503/504 e falha de rede repetem; timeout só em PUT;
+ * HTTP 500 e 4xx NUNCA — salvo `retryServerError` (geração com IA sem gravação).
+ */
 async function sendJson<T = unknown>(
   method: "POST" | "PUT" | "PATCH",
   url: string,
@@ -129,14 +135,13 @@ async function sendJson<T = unknown>(
   body: unknown,
   /** 0 para operações que não podem repetir (ex.: criar agente, regenerar com IA). */
   maxRetries = MAX_RETRIES,
+  /** Repetir também em HTTP 500. Só para chamadas que não gravam nada. */
+  retryServerError = false,
 ): Promise<T> {
-  let attempt = 0;
-  // deno-lint-ignore no-explicit-any
-  let lastErr: any;
-  while (attempt <= maxRetries) {
-    attempt++;
+  for (let attempt = 1; ; attempt++) {
+    let res: Response;
     try {
-      const res = await fetchWithTimeout(url, {
+      res = await fetchWithTimeout(url, {
         method,
         headers: {
           "Content-Type": "application/json",
@@ -144,68 +149,72 @@ async function sendJson<T = unknown>(
         },
         body: JSON.stringify(body),
       });
-      // Lê o corpo como texto primeiro e tenta JSON — assim um 500 com corpo
-      // não-JSON (ou vazio) ainda preserva o conteúdo bruto no error_detail.
-      const raw = await res.text().catch(() => "");
-      let data: unknown = {};
-      if (raw) {
-        try {
-          data = JSON.parse(raw);
-        } catch {
-          data = { raw };
-        }
-      }
-      if (res.ok) return data as T;
-      // Extrai um detalhe útil: usa `.detail` quando existe e não é vazio;
-      // senão cai pro corpo bruto (evita o inútil {"detail":{}}).
-      const detailOf = (d: unknown): unknown => {
-        const det = (d as { detail?: unknown })?.detail;
-        const empty =
-          det == null ||
-          (typeof det === "object" && det !== null && Object.keys(det).length === 0) ||
-          (typeof det === "string" && det.trim() === "");
-        return empty ? raw || d : det;
-      };
-      // Em 5xx o `.detail` costuma ser um genérico "Internal server error." sem
-      // pista nenhuma — guarda também endpoint + corpo bruto pra dar pra investigar
-      // qual chamada específica quebrou (offer/generate vs offer/create etc.).
-      const detail5xx = (): unknown => ({
-        endpoint: url.replace(/^https?:\/\/[^/]+/, ""),
-        apiDetail: detailOf(data),
-        raw: raw.slice(0, 4000),
-      });
-      // 422 = validação → não retenta
-      if (res.status === 422) {
-        throw new PerfectingError(422, detailOf(data));
-      }
-      // 5xx → retenta
-      if (res.status >= 500 && attempt <= maxRetries) {
-        lastErr = new PerfectingError(res.status, detail5xx());
-        await new Promise((r) => setTimeout(r, 1200 * attempt));
-        continue;
-      }
-      throw new PerfectingError(res.status, res.status >= 500 ? detail5xx() : detailOf(data));
     } catch (e) {
+      // Sempre PerfectingError: quem trata o erro (e a UI) classifica pelo status.
+      // 408 = estourou o nosso timeout; 0 = a conexão não completou.
       const isAbort = e instanceof DOMException && e.name === "AbortError";
-      if (isAbort && attempt <= maxRetries) {
-        lastErr = new PerfectingError(408, "timeout");
-        await new Promise((r) => setTimeout(r, 1200 * attempt));
+      const kind = isAbort ? "timeout" : "network";
+      if (shouldRetry({ method, kind, attempt, maxRetries })) {
+        await new Promise((r) => setTimeout(r, retryDelayMs(attempt)));
         continue;
       }
-      if (e instanceof PerfectingError) throw e;
-      if (attempt > maxRetries) throw lastErr ?? e;
-      lastErr = e;
-      await new Promise((r) => setTimeout(r, 1200 * attempt));
+      throw isAbort
+        ? new PerfectingError(408, "timeout")
+        : new PerfectingError(0, `falha de rede: ${e instanceof Error ? e.message : String(e)}`);
     }
+
+    // Lê o corpo como texto primeiro e tenta JSON — assim um 500 com corpo
+    // não-JSON (ou vazio) ainda preserva o conteúdo bruto no error_detail.
+    const raw = await res.text().catch(() => "");
+    let data: unknown = {};
+    if (raw) {
+      try {
+        data = JSON.parse(raw);
+      } catch {
+        data = { raw };
+      }
+    }
+    if (res.ok) return data as T;
+
+    if (shouldRetry({ method, kind: "http", status: res.status, attempt, maxRetries, retryServerError })) {
+      await new Promise((r) => setTimeout(r, retryDelayMs(attempt)));
+      continue;
+    }
+
+    // Extrai um detalhe útil: usa `.detail` quando existe e não é vazio;
+    // senão cai pro corpo bruto (evita o inútil {"detail":{}}).
+    const det = (data as { detail?: unknown })?.detail;
+    const empty =
+      det == null ||
+      (typeof det === "object" && det !== null && Object.keys(det).length === 0) ||
+      (typeof det === "string" && det.trim() === "");
+    const detail = empty ? raw || data : det;
+    if (res.status < 500) throw new PerfectingError(res.status, detail);
+    // Em 5xx o `.detail` costuma ser um genérico "Internal server error." sem
+    // pista nenhuma — guarda também endpoint + corpo bruto pra dar pra investigar
+    // qual chamada específica quebrou (offer/generate vs offer/create etc.).
+    throw new PerfectingError(res.status, {
+      endpoint: url.replace(/^https?:\/\/[^/]+/, ""),
+      apiDetail: detail,
+      raw: raw.slice(0, 4000),
+    });
   }
-  throw lastErr;
+}
+
+/**
+ * Geração com IA que só DEVOLVE texto (offer/generate, context/generate,
+ * role_plays/generate): não grava nada, então repetir é seguro — e nelas um 500
+ * pode ser falha passageira do modelo. É o único lugar com `retryServerError`.
+ */
+function postJsonGenerate<T = unknown>(url: string, token: string, body: unknown): Promise<T> {
+  return sendJson<T>("POST", url, token, body, MAX_RETRIES, true);
 }
 
 function postJson<T = unknown>(url: string, token: string, body: unknown): Promise<T> {
   return sendJson<T>("POST", url, token, body);
 }
 
-/** PUT idempotente: mesma política de retry do POST (seguro em PUT). */
+/** PUT idempotente: além de 502/503/504 e rede, repete também em timeout. */
 function putJson<T = unknown>(url: string, token: string, body: unknown): Promise<T> {
   return sendJson<T>("PUT", url, token, body);
 }
@@ -564,7 +573,7 @@ export async function generateOffer(
   description: string,
 ): Promise<GeneratedOffer> {
   // ⚠️ campo é offer_description no generate
-  return postJson<GeneratedOffer>(`${rp(env)}/offer/generate`, token, {
+  return postJsonGenerate<GeneratedOffer>(`${rp(env)}/offer/generate`, token, {
     offer_name: offerName,
     offer_description: description,
     infer: true,
@@ -674,7 +683,7 @@ export async function generateContext(
   offerId: number,
   additionalInstructions: string,
 ): Promise<Record<string, unknown>> {
-  return postJson(`${rp(env)}/context/generate`, token, {
+  return postJsonGenerate(`${rp(env)}/context/generate`, token, {
     offer_id: offerId,
     aditional_instructions: additionalInstructions, // typo real da API
     infer: true,
@@ -1116,7 +1125,7 @@ export async function generateCaseSetup(
   scenario: ScenarioInput,
 ): Promise<Record<string, unknown>> {
   // ⚠️ é /role_plays/generate, NÃO /case_setup/generate
-  return postJson(`${rp(env)}/generate`, token, {
+  return postJsonGenerate(`${rp(env)}/generate`, token, {
     context_id: contextId,
     ...(scenario.call_context_type_id != null && {
       call_context_type_id: scenario.call_context_type_id,
