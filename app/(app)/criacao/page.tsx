@@ -32,9 +32,15 @@ import { ConfirmDialog, type ConfirmConfig } from "@/app/components/ui/confirm-d
 import { SendStatusModal, type SendStatus } from "@/app/components/ui/send-status-modal";
 import { managerSelectClassNames } from "@/app/lib/select-classnames";
 import { DossierEditor } from "@/app/components/creation/dossier-editor";
+import {
+  coherenceSummary,
+  type CoherenceModalState,
+  PlaybookCoherenceModal,
+} from "@/app/components/creation/playbook-coherence-modal";
 import { ObjectionListEditor } from "@/app/components/content/objection-list-editor";
 import { GuardrailListEditor } from "@/app/components/content/guardrail-list-editor";
 import {
+  checkPlaybookCoherence,
   createDraftFromText,
   getGeneratorInfo,
   invokeExport,
@@ -65,6 +71,11 @@ import type {
 import { ROLE_PLAY_STATUSES } from "@/supabase/functions/_shared/roleplay-adjust-model";
 import { generatorVersionLabel, guidelinesLabel } from "@/app/lib/generator-label";
 import { buildSentSnapshot, changedItems, diffGeneration } from "@/supabase/functions/_shared/generation-diff";
+import {
+  type CoherenceCheckResult,
+  coherenceSignature,
+  createCoherenceCache,
+} from "@/supabase/functions/_shared/playbook-coherence";
 
 /** Ligação de abertura de conta: a frio, prospecção ou para passar pela triagem. */
 function isProspectingCall(slug: string): boolean {
@@ -85,6 +96,13 @@ const DIFFICULTIES = [
 
 /** Quantidade de personas no modo playbook. 1 = comportamento antigo (persona única). */
 const PERSONA_COUNTS = Array.from({ length: 10 }, (_, i) => String(i + 1));
+
+/** Como a checagem de coerência terminou — vira uma linha na confirmação do envio. */
+type CoherenceOutcome =
+  | { kind: "clean"; result: CoherenceCheckResult }
+  | { kind: "accepted"; result: CoherenceCheckResult }
+  | { kind: "failed" }
+  | { kind: "skipped" };
 
 /** Chave do Select para "sem status" (o id é null). */
 const NO_STATUS = "__none__";
@@ -179,6 +197,14 @@ export default function CriacaoPage() {
   // formulário mudar, o próximo envio cria um novo rascunho (evita reenviar
   // dados obsoletos); "Tentar novamente" sem edição reusa o mesmo (sem duplicar).
   const draftSigRef = useRef<string | null>(null);
+  const [coherence, setCoherence] = useState<CoherenceModalState | null>(null);
+  /**
+   * Última checagem que deu certo: não refaz se rascunho, conta e playbook são os
+   * mesmos. Tem prazo de validade porque o playbook pode ser corrigido na conta.
+   */
+  const [coherenceCache] = useState(() => createCoherenceCache());
+  /** Só a checagem mais recente pode mexer na tela (pular/cancelar invalida a anterior). */
+  const coherenceRunRef = useRef(0);
 
   const isPlaybookMode = generationMode === "playbook";
 
@@ -510,13 +536,19 @@ export default function CriacaoPage() {
   /** O que mudou à mão em relação à IA, no formato em que o envio registra. */
   function currentManualEdits() {
     if (!aiOutput) return null;
+    return changedItems(
+      diffGeneration(aiOutput as unknown as Record<string, unknown>, currentSentSnapshot()),
+    );
+  }
+
+  /** O rascunho como vai para a conta — a mesma foto que o envio registra. */
+  function currentSentSnapshot() {
     const p = buildDraftPayload();
-    const sent = buildSentSnapshot({
+    return buildSentSnapshot({
       scenario: p.scenario as Record<string, unknown>,
       offers: { offer_name: p.offerName, general_description: p.offerDescription ?? p.text },
       contexts: { target_notes: p.contextNotes },
     });
-    return changedItems(diffGeneration(aiOutput as unknown as Record<string, unknown>, sent));
   }
 
   /** Monta o payload do rascunho a partir do formulário atual. */
@@ -626,60 +658,141 @@ export default function CriacaoPage() {
     }
   }
 
+  /** Playbook cria vários roleplays de uma vez na conta do cliente — confirma antes. */
+  function openPlaybookConfirm(outcome: CoherenceOutcome) {
+    const total = playbookCallTypes.length;
+    const personas = Number(personaCount) || 1;
+    setConfirm({
+      title: total
+        ? `Criar ${total} roleplay(s)${personas > 1 ? ` e ${personas} personas` : ""} nesta conta?`
+        : "Iniciar a implementação?",
+      message: (
+        <>
+          A Perfecting vai criar <b>um roleplay por etapa</b> do playbook{" "}
+          <b>{selectedPlaybook?.name ?? ""}</b>
+          {total ? ` (${total} no total)` : ""}, usando a oferta e o contexto extraídos do
+          material.{" "}
+          {personas > 1 ? (
+            <>
+              Serão criadas <b>{personas} personas</b> nesse contexto — as etapas aceitam
+              qualquer uma delas, e quem escolhe é o vendedor, na hora da call.
+              {fixedCallTypeIds.size > 0 && (
+                <>
+                  {" "}
+                  <b>
+                    {fixedCallTypeIds.size}{" "}
+                    {fixedCallTypeIds.size === 1 ? "etapa" : "etapas"}
+                  </b>{" "}
+                  {fixedCallTypeIds.size === 1 ? "fica" : "ficam"} travada
+                  {fixedCallTypeIds.size === 1 ? "" : "s"} na persona principal.
+                </>
+              )}
+            </>
+          ) : (
+            <>A persona também é extraída do material.</>
+          )}{" "}
+          {objections.length > 0 && (
+            <>
+              As <b>{objections.length} objeções</b> revisadas acima entram no contexto e valem
+              para todas as etapas.{" "}
+            </>
+          )}
+          Leva alguns minutos — dá para acompanhar na Biblioteca.
+          <span className="mt-3 block border-t border-slate-200 pt-3 text-slate-500">
+            {outcome.kind === "clean" && (
+              <>
+                Checagem de coerência: nenhuma divergência encontrada entre o rascunho e o
+                playbook.
+              </>
+            )}
+            {outcome.kind === "accepted" && (
+              <>
+                Checagem de coerência: {coherenceSummary(outcome.result.divergences)} entre o
+                rascunho e o playbook — você escolheu enviar mesmo assim.
+              </>
+            )}
+            {(outcome.kind === "clean" || outcome.kind === "accepted") &&
+              outcome.result.truncated.length > 0 && (
+                <>
+                  {" "}
+                  Parte do conteúdo foi encurtada para caber na checagem e pode ter ficado sem
+                  comparação: {outcome.result.truncated.join("; ")}.
+                </>
+              )}
+            {outcome.kind === "failed" && (
+              <>
+                Não foi possível checar a coerência entre o rascunho e o playbook. O envio
+                segue sem essa checagem.
+              </>
+            )}
+            {outcome.kind === "skipped" && (
+              <>A checagem de coerência entre o rascunho e o playbook foi pulada.</>
+            )}
+          </span>
+        </>
+      ),
+      confirmLabel: "Criar roleplays",
+      onConfirm: async () => {
+        setSendModalOpen(true);
+        await runSend();
+      },
+    });
+  }
+
+  /** Resultado da checagem: divergência ganha um passo próprio; o resto segue direto. */
+  function settleCoherence(result: CoherenceCheckResult) {
+    if (result.divergences.length > 0) {
+      setCoherence({ phase: "found", result });
+      return;
+    }
+    setCoherence(null);
+    openPlaybookConfirm({ kind: "clean", result });
+  }
+
+  /**
+   * Compara o rascunho com o playbook da conta antes da confirmação. É aviso: falha
+   * da checagem não impede o envio. `force` ignora o resultado guardado (o playbook
+   * pode ter sido corrigido na conta, o que a assinatura não enxerga).
+   */
+  async function runCoherenceCheck(force = false) {
+    const draft = currentSentSnapshot();
+    const id = Number(playbookId);
+    const sig = coherenceSignature({ connectionId, playbookId: id, draft });
+    const cached = force ? null : coherenceCache.get(sig);
+    if (cached) {
+      settleCoherence(cached);
+      return;
+    }
+    const run = ++coherenceRunRef.current;
+    setCoherence({ phase: "checking" });
+    try {
+      const result = await checkPlaybookCoherence(connectionId, id, selectedPlaybook?.name ?? "", draft);
+      // Só resultado bom é guardado — falha tem de poder ser tentada de novo.
+      coherenceCache.set(sig, result);
+      if (run !== coherenceRunRef.current) return;
+      settleCoherence(result);
+    } catch (err) {
+      if (run !== coherenceRunRef.current) return;
+      console.warn("checagem de coerência com o playbook falhou:", err);
+      setCoherence(null);
+      openPlaybookConfirm({ kind: "failed" });
+    }
+  }
+
+  /** Fecha o passo da checagem; uma resposta que ainda chegue não reabre nada. */
+  function closeCoherence() {
+    coherenceRunRef.current++;
+    setCoherence(null);
+  }
+
   async function handleSendToDestination() {
     if (!validateInputs()) return;
     if (!connectionId) {
       addToast({ title: "Selecione uma conta de destino", color: "warning" });
       return;
     }
-    // Playbook cria vários roleplays de uma vez na conta do cliente — confirma antes.
     if (isPlaybookMode) {
-      const total = playbookCallTypes.length;
-      const personas = Number(personaCount) || 1;
-      setConfirm({
-        title: total
-          ? `Criar ${total} roleplay(s)${personas > 1 ? ` e ${personas} personas` : ""} nesta conta?`
-          : "Iniciar a implementação?",
-        message: (
-          <>
-            A Perfecting vai criar <b>um roleplay por etapa</b> do playbook{" "}
-            <b>{selectedPlaybook?.name ?? ""}</b>
-            {total ? ` (${total} no total)` : ""}, usando a oferta e o contexto extraídos do
-            material.{" "}
-            {personas > 1 ? (
-              <>
-                Serão criadas <b>{personas} personas</b> nesse contexto — as etapas aceitam
-                qualquer uma delas, e quem escolhe é o vendedor, na hora da call.
-                {fixedCallTypeIds.size > 0 && (
-                  <>
-                    {" "}
-                    <b>
-                      {fixedCallTypeIds.size}{" "}
-                      {fixedCallTypeIds.size === 1 ? "etapa" : "etapas"}
-                    </b>{" "}
-                    {fixedCallTypeIds.size === 1 ? "fica" : "ficam"} travada
-                    {fixedCallTypeIds.size === 1 ? "" : "s"} na persona principal.
-                  </>
-                )}
-              </>
-            ) : (
-              <>A persona também é extraída do material.</>
-            )}{" "}
-            {objections.length > 0 && (
-              <>
-                As <b>{objections.length} objeções</b> revisadas acima entram no contexto e valem
-                para todas as etapas.{" "}
-              </>
-            )}
-            Leva alguns minutos — dá para acompanhar na Biblioteca.
-          </>
-        ),
-        confirmLabel: "Criar roleplays",
-        onConfirm: async () => {
-          setSendModalOpen(true);
-          await runSend();
-        },
-      });
+      await runCoherenceCheck();
       return;
     }
     setSendModalOpen(true);
@@ -1333,6 +1446,7 @@ export default function CriacaoPage() {
               extracting ||
               saving ||
               processing ||
+              coherence?.phase === "checking" ||
               (sendModalOpen && sendStatus === "sending")
             }
           >
@@ -1371,6 +1485,23 @@ export default function CriacaoPage() {
           </ModalFooter>
         </ModalContent>
       </Modal>
+
+      <PlaybookCoherenceModal
+        state={coherence}
+        playbookName={selectedPlaybook?.name ?? "playbook"}
+        onBack={closeCoherence}
+        onSkip={() => {
+          closeCoherence();
+          openPlaybookConfirm({ kind: "skipped" });
+        }}
+        onSendAnyway={() => {
+          if (coherence?.phase !== "found") return;
+          const { result } = coherence;
+          closeCoherence();
+          openPlaybookConfirm({ kind: "accepted", result });
+        }}
+        onRecheck={() => void runCoherenceCheck(true)}
+      />
 
       <ConfirmDialog config={confirm} onClose={() => setConfirm(null)} />
 

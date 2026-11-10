@@ -73,6 +73,7 @@ supabase functions deploy list-orgs
 supabase functions deploy export-roleplay
 supabase functions deploy complete-roleplay
 supabase functions deploy process-import
+supabase functions deploy check-playbook-coherence
 ```
 
 ## 4. Front local

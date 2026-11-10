@@ -46,6 +46,11 @@ import {
   SendError,
 } from "@/app/lib/send-error";
 import type { DebateAnchors, MethodologyStepRef } from "@/supabase/functions/_shared/debate";
+import {
+  COHERENCE_DRAFT_FIELDS,
+  type CoherenceCheckResult,
+  type CoherenceDraftInput,
+} from "@/supabase/functions/_shared/playbook-coherence";
 
 const DEFAULT_WEIGHTS: CriteriaWeights = {
   weight_prompt: 0.3,
@@ -251,6 +256,37 @@ export async function listPlaybookCallTypes(
   if (error) throw new Error(await functionErrorMessage(error, "Falha ao listar as etapas"));
   if (!data?.ok) throw new Error(describeFunctionError(data?.error ?? data));
   return (data.callTypes ?? []) as PlaybookCallType[];
+}
+
+/**
+ * Compara o rascunho com as etapas e subetapas do playbook da conta, antes de
+ * implementar. Só lê a conta e chama a IA uma vez; não grava nada. Lança quando
+ * não deu para checar — quem chama segue o envio sem a checagem.
+ */
+export async function checkPlaybookCoherence(
+  connectionId: string,
+  playbookId: number,
+  /** A tela já tem o nome: evita um request à conta só para rotular o prompt. */
+  playbookName: string,
+  draft: CoherenceDraftInput,
+): Promise<CoherenceCheckResult> {
+  const supabase = createClient();
+  const { data, error } = await supabase.functions.invoke("check-playbook-coherence", {
+    body: {
+      connectionId,
+      playbookId,
+      playbookName,
+      // Só os campos que chegam à conta no modo playbook.
+      draft: Object.fromEntries(COHERENCE_DRAFT_FIELDS.map(({ key }) => [key, draft[key]])),
+    },
+  });
+  if (error) throw new Error(await functionErrorMessage(error, "Falha ao checar a coerência com o playbook"));
+  if (!data?.ok) throw new Error(describeFunctionError(data?.error ?? data));
+  return {
+    divergences: (data.divergences ?? []) as CoherenceCheckResult["divergences"],
+    truncated: (data.truncated ?? []) as string[],
+    stats: data.stats as CoherenceCheckResult["stats"],
+  };
 }
 
 /**

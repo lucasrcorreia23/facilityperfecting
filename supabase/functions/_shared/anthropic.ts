@@ -51,14 +51,18 @@ export async function askStructured<T>({
   schema,
   maxTokens,
   what,
+  signal,
 }: {
   system: string;
   user: string;
   schema: Record<string, unknown>;
   maxTokens: number;
   what: string;
+  /** Prazo de quem chama: abortar interrompe também a leitura do stream. */
+  signal?: AbortSignal;
 }): Promise<T> {
   const res = await fetch("https://api.anthropic.com/v1/messages", {
+    signal,
     method: "POST",
     headers: {
       "x-api-key": Deno.env.get("ANTHROPIC_API_KEY") ?? "",

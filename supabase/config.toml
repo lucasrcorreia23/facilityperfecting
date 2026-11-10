@@ -57,6 +57,9 @@ verify_jwt = true
 [functions.list-playbooks]
 verify_jwt = true
 
+[functions.check-playbook-coherence]
+verify_jwt = true
+
 [functions.list-methodologies]
 verify_jwt = true
 

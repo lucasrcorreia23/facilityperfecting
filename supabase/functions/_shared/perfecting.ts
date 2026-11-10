@@ -1478,8 +1478,13 @@ export async function listPlaybookCallTypes(
   env: PerfectingEnv,
   token: string,
   playbookId: number,
+  opts: RequestTimeoutOptions = {},
 ): Promise<PlaybookCallType[]> {
-  const data = await getJson<unknown>(`${rp(env)}/playbook_${playbookId}/call_types`, token);
+  const data = await getJson<unknown>(
+    `${rp(env)}/playbook_${playbookId}/call_types`,
+    token,
+    opts.timeoutMs,
+  );
   const items = Array.isArray(data) ? data : [];
   return items
     .filter((c): c is Record<string, unknown> => Boolean(c) && typeof c === "object")
@@ -1924,19 +1929,28 @@ export interface PlaybookCallBlock {
   name: string;
   description: string | null;
   objective: string | null;
+  sample_questions: string[];
   what_to_do: string[];
+  what_to_avoid: string[];
   order: number | null;
+  /** Subetapa dentro de outra; null na raiz da etapa. */
+  parent_call_block_id: number | null;
 }
+
+const stringItems = (v: unknown): string[] =>
+  Array.isArray(v) ? v.filter((w): w is string => typeof w === "string") : [];
 
 export async function listPlaybookCallBlocks(
   env: PerfectingEnv,
   token: string,
   playbookId: number,
   callTypeId: number,
+  opts: RequestTimeoutOptions = {},
 ): Promise<PlaybookCallBlock[]> {
   const data = await getJson<unknown>(
     `${rp(env)}/playbook_${playbookId}/call_types/${callTypeId}/call_blocks`,
     token,
+    opts.timeoutMs,
   );
   const items = Array.isArray(data) ? data : [];
   return items
@@ -1947,10 +1961,12 @@ export async function listPlaybookCallBlocks(
       name: typeof b.name === "string" ? b.name : `Bloco ${b.id}`,
       description: typeof b.description === "string" ? b.description : null,
       objective: typeof b.objective === "string" ? b.objective : null,
-      what_to_do: Array.isArray(b.what_to_do)
-        ? b.what_to_do.filter((w): w is string => typeof w === "string")
-        : [],
+      sample_questions: stringItems(b.sample_questions),
+      what_to_do: stringItems(b.what_to_do),
+      what_to_avoid: stringItems(b.what_to_avoid),
       order: typeof b.order === "number" ? b.order : null,
+      parent_call_block_id:
+        typeof b.parent_call_block_id === "number" ? b.parent_call_block_id : null,
     }))
     .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
 }

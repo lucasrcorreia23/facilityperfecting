@@ -170,5 +170,10 @@ export function diffGeneration(ai: Record<string, unknown> | null | undefined, s
   return items;
 }
 
+/** Campos que chegam à conta num modo (chave + rótulo), na ordem da tela. */
+export function sentFieldsFor(mode: SentSnapshot["mode"]): Array<{ key: DiffItem["key"]; label: string }> {
+  return FIELDS.filter((f) => f.modes.includes(mode)).map(({ key, label }) => ({ key, label }));
+}
+
 /** Só o que mudou, para resumos ("3 campos editados à mão: …"). */
 export const changedItems = (items: DiffItem[] | null) => (items ?? []).filter((i) => i.status !== "same");
