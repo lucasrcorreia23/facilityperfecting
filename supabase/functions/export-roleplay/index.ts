@@ -48,6 +48,7 @@ import {
 } from "../_shared/perfecting.ts";
 import { recordGenerations } from "../_shared/generations.ts";
 import { exportDebateDraft } from "../_shared/debate-export.ts";
+import { caseSetupCreateIssues } from "../_shared/case-setup-contract.ts";
 import {
   adoptableCaseSetup,
   caseSetupPayloadIssues,
@@ -311,6 +312,36 @@ async function exportDraft(
     }
   }
 
+  // Payload escrito à mão em PROD vai verbatim: o contrato do `case_setup/create` é
+  // conferido aqui, ANTES da primeira escrita — o FastAPI só recusaria (422) depois de
+  // oferta e contexto criados. O `context_id` é fictício (o contexto pode não existir
+  // ainda); o resto é o payload do envio. Envio que retoma um roleplay já criado não
+  // passa pelo create e não é barrado.
+  const verbatimDraft = draft.scenario?.case_setup_payload as Record<string, unknown> | null | undefined;
+  const resuming = typeof created.case_setup_id === "number" || created.pending_case_setup != null;
+  if (env === "prod" && verbatimDraft && !resuming) {
+    const contractIssues = caseSetupCreateIssues(
+      buildCaseSetupCreatePayload(
+        env,
+        { ...verbatimDraft, call_context_type_id: callContextTypeId, scenario_difficulty_level: difficulty },
+        0,
+        callContextTypeId,
+        connection.default_user_group_id ?? null,
+        {
+          ...(methodologyId != null && { methodologyIds: [methodologyId] }),
+          ...(difficultyLevelId != null && { difficultyLevelId }),
+        },
+      ),
+    );
+    if (contractIssues.length > 0) {
+      throw new PerfectingError(422, {
+        message:
+          "O roleplay não seria aceito pela Perfecting como está: corrija o payload do rascunho e envie de novo (nada foi criado na conta)",
+        issues: contractIssues,
+      });
+    }
+  }
+
   // 2/3) OFFER + CONTEXT (reuso por conexão)
   const { perfectingOfferId, perfectingContextId } = await resolveOfferContext(
     db,
@@ -346,8 +377,10 @@ async function exportDraft(
 
   // 3) DOSSIÊ — quando o material descreve uma conta concreta: produtos e dores na
   // oferta e o comprador criado com as dores dele. Em HML o comprador nasce aqui
-  // (antes das objeções, que passam a ser só dele); em PROD, que ainda não tem as
-  // rotas de portfólio, o prompt dele é ajustado depois do case_setup (passo 5).
+  // (antes das objeções, que passam a ser só dele); em PROD o comprador é criado depois
+  // do case_setup (passo 5) e o dossiê é aplicado nele lá. As rotas de portfólio
+  // existem nos dois ambientes (OpenAPI de PROD, 10/11/2026); `applyPortfolio` decide
+  // pelo 404, não pelo ambiente.
   const dossier: RoleplayDossier | null = hasDossier(draft.scenario?.dossier)
     ? (draft.scenario.dossier as RoleplayDossier)
     : null;
@@ -519,7 +552,12 @@ async function exportDraft(
       userGroupId,
       createOptions,
     );
-    const payloadIssues = caseSetupPayloadIssues(payload);
+    // Em PROD entra também o contrato do create (obrigatórios, tipos, enum): pega o
+    // payload gerado pela Perfecting, que a conferência do início do envio não vê.
+    const payloadIssues = [
+      ...caseSetupPayloadIssues(payload),
+      ...(env === "prod" ? caseSetupCreateIssues(payload) : []),
+    ];
     if (payloadIssues.length > 0) {
       throw new PerfectingError(422, {
         message: verbatim
