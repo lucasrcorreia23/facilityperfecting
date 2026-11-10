@@ -21,6 +21,7 @@ import {
 } from "../_shared/context-content.ts";
 import {
   applyRoleplayStatus,
+  buildCaseSetupCreatePayload,
   buildPersonaFromCaseSetup,
   createCaseSetup,
   createPersona,
@@ -30,9 +31,11 @@ import {
   generatePersonaFromContext,
   getCaseSetup,
   getCaseSetupRaw,
+  getPersona,
   isHmlCaseSetupComplete,
   listCallContexts,
   listCaseSetupIdsByContext,
+  listCaseSetupsByContextFull,
   overlayVerbatimOnGenerated,
   type PerfectingEnv,
   PerfectingError,
@@ -45,6 +48,22 @@ import {
 } from "../_shared/perfecting.ts";
 import { recordGenerations } from "../_shared/generations.ts";
 import { exportDebateDraft } from "../_shared/debate-export.ts";
+import {
+  adoptableCaseSetup,
+  caseSetupPayloadIssues,
+  findCaseSetupByName,
+  previousCreated,
+  type SendCreated,
+  startCreated,
+  toCaseSetupRefs,
+  withCreated,
+} from "../_shared/send-progress.ts";
+import {
+  isStaleSend,
+  ROLEPLAY_SEND_STALE_MS,
+  SEND_IN_PROGRESS_MESSAGE,
+  staleSendError,
+} from "../_shared/send-staleness.ts";
 
 const VALID_DIFFICULTIES = new Set(["easy", "medium", "hard"]);
 
@@ -68,9 +87,15 @@ async function attachProdPersona(
   token: string,
   contextId: number,
   caseSetupId: number,
+  adopted = false,
 ): Promise<{ personaId: number | null; warning: string | null }> {
   let personaId: number | null = null;
   try {
+    // Roleplay retomado de um envio que não terminou: a persona pode já estar travada.
+    if (adopted) {
+      const own = await getCaseSetup(env, token, caseSetupId);
+      if (own.persona_id != null) return { personaId: own.persona_id, warning: null };
+    }
     const otherIds = (await listCaseSetupIdsByContext(env, token, contextId)).filter(
       (id) => id !== caseSetupId,
     );
@@ -119,8 +144,16 @@ async function attachProdPersona(
  * comportamento são outros endpoints (minutos de IA, não cabem aqui). Por isso o
  * rascunho termina em "completing" e quem o marca como exportado — ou incompleto —
  * é o gate da complete-roleplay.
+ *
+ * `progress.created` é de quem chama e vai sendo gravado no rascunho
+ * (`error_detail.created`) a cada id criado: se o envio lança ou a função é
+ * encerrada, o registro fica, e o reenvio de um envio que não terminou continua no
+ * mesmo roleplay em vez de criar outro (ver send-progress.ts).
  */
-async function exportDraft(draftId: string): Promise<{ caseSetupId: number }> {
+async function exportDraft(
+  draftId: string,
+  progress: { created: SendCreated },
+): Promise<{ caseSetupId: number }> {
   const { data: draft, error } = await db
     .from("roleplay_drafts")
     .select("*, offers(*), contexts(*), connections(*)")
@@ -155,7 +188,24 @@ async function exportDraft(draftId: string): Promise<{ caseSetupId: number }> {
     .eq("created_by", draft.created_by)
     .maybeSingle();
 
-  await db.from("roleplay_drafts").update({ status: "exporting", error_detail: null }).eq("id", draftId);
+  // O que a tentativa anterior deixou na conta — lido ANTES de limpar o error_detail.
+  // Só vale para envio que não terminou (erro, ou "exporting" vencido).
+  const previous = previousCreated(
+    draft,
+    isStaleSend(draft.updated_at, Date.now(), ROLEPLAY_SEND_STALE_MS),
+  );
+  const created = progress.created;
+  Object.assign(created, startCreated(previous, isDebate ? "debate" : "sale"));
+  /** Grava o registro no rascunho (e o que mais vier em `patch`). Nunca derruba o envio. */
+  const saveProgress = async (patch: Record<string, unknown> = {}) => {
+    const { error: saveErr } = await db
+      .from("roleplay_drafts")
+      .update({ error_detail: Object.keys(created).length > 0 ? { created } : null, ...patch })
+      .eq("id", draftId);
+    if (saveErr) console.error("export-roleplay: falha ao registrar o progresso do envio:", saveErr.message);
+  };
+
+  await saveProgress({ status: "exporting" });
   const { data: job } = await db
     .from("export_jobs")
     .insert({ draft_id: draftId, state: "running", started_at: new Date().toISOString(), created_by: draft.created_by })
@@ -171,7 +221,24 @@ async function exportDraft(draftId: string): Promise<{ caseSetupId: number }> {
   // Debate tem envio próprio (motor 3, tudo verbatim, sem fechamento): o caminho de
   // venda abaixo gravaria persona, prompt e conteúdo por etapa de comprador.
   if (isDebate) {
-    const result = await exportDebateDraft(env, token, draft, (step) => setJob({ step }));
+    const result = await exportDebateDraft(env, token, draft, (step) => setJob({ step }), {
+      created,
+      // O id do roleplay vai para a coluna assim que existe, não só no fim do envio.
+      onCreated: () =>
+        saveProgress(
+          typeof created.case_setup_id === "number"
+            ? { perfecting_case_setup_id: created.case_setup_id }
+            : {},
+        ),
+    });
+    // Tentativas anteriores que pararam no meio deixaram oferta/contexto/persona na
+    // conta (debate não retoma): o aviso fica no item até alguém apagar o que sobrou.
+    const leftovers = created.previous_attempts?.length ?? 0;
+    if (leftovers > 0) {
+      result.warnings.push(
+        `${leftovers} tentativa(s) anterior(es) deste envio pararam no meio e deixaram registros na conta — os ids estão em "created.previous_attempts", no detalhe`,
+      );
+    }
     const detail = {
       persona_id: result.personaId,
       created: result.created,
@@ -249,6 +316,30 @@ async function exportDraft(draftId: string): Promise<{ caseSetupId: number }> {
     token,
     (step) => setJob({ step }),
   );
+  // Persona e roleplay registrados numa tentativa anterior só valem neste contexto
+  // (a ponte pode ter sido recriada: oferta/contexto apagados na Perfecting).
+  if (created.context_id !== perfectingContextId) {
+    delete created.persona_id;
+    delete created.case_setup_id;
+    delete created.pending_case_setup;
+  }
+  created.offer_id = perfectingOfferId;
+  created.context_id = perfectingContextId;
+
+  // Comprador da tentativa anterior (HML): gerar outro deixaria mais uma persona no
+  // contexto, e roleplay sem persona travada sorteia entre todas a cada call.
+  let reusedPersonaId: number | null = null;
+  if (env === "hml" && previous && typeof created.persona_id === "number") {
+    try {
+      const persona = await getPersona(env, token, created.persona_id);
+      if (persona.context_id == null || persona.context_id === perfectingContextId) {
+        reusedPersonaId = created.persona_id;
+      }
+    } catch (e) {
+      if (!(e instanceof PerfectingError && e.status === 404)) throw e;
+    }
+    if (reusedPersonaId == null) delete created.persona_id;
+  }
 
   // 3) DOSSIÊ — quando o material descreve uma conta concreta: produtos e dores na
   // oferta e o comprador criado com as dores dele. Em HML o comprador nasce aqui
@@ -267,9 +358,17 @@ async function exportDraft(draftId: string): Promise<{ caseSetupId: number }> {
     dossierWarnings.push(...portfolio.warnings);
     if (env === "hml") {
       await setJob({ step: "persona" });
-      const created = await createDossierPersona(env, token, perfectingContextId, dossier, portfolio);
-      personaId = created.personaId;
-      dossierWarnings.push(...created.warnings);
+      if (reusedPersonaId != null) {
+        personaId = reusedPersonaId;
+        // O envio anterior pode ter parado entre criar a persona e aplicar o dossiê.
+        dossierWarnings.push(...(await applyDossierToPersona(env, token, personaId, dossier, portfolio)));
+      } else {
+        const dossierPersona = await createDossierPersona(env, token, perfectingContextId, dossier, portfolio);
+        personaId = dossierPersona.personaId;
+        dossierWarnings.push(...dossierPersona.warnings);
+      }
+      created.persona_id = personaId;
+      await saveProgress();
       await setJob({ error_detail: { persona_id: personaId } });
     }
   }
@@ -307,13 +406,19 @@ async function exportDraft(draftId: string): Promise<{ caseSetupId: number }> {
   // o comprador descrito (aluno → professora).
   if (env === "hml" && personaId == null) {
     await setJob({ step: "persona" });
-    const persona = await generatePersonaFromContext(
-      env,
-      token,
-      perfectingContextId,
-      profilePersonaInstructions(draft.contexts?.target_notes),
-    );
-    personaId = persona.id;
+    if (reusedPersonaId != null) {
+      personaId = reusedPersonaId;
+    } else {
+      const persona = await generatePersonaFromContext(
+        env,
+        token,
+        perfectingContextId,
+        profilePersonaInstructions(draft.contexts?.target_notes),
+      );
+      personaId = persona.id;
+    }
+    created.persona_id = personaId;
+    await saveProgress();
     await setJob({ error_detail: { persona_id: personaId } });
   }
 
@@ -337,37 +442,148 @@ async function exportDraft(draftId: string): Promise<{ caseSetupId: number }> {
       ? truncateForApi(draft.scenario.aditional_instructions)
       : undefined,
   };
-  let genCase: Record<string, unknown>;
-  if (verbatim) {
-    const withIds = {
-      ...verbatim,
-      call_context_type_id: callContextTypeId,
-      scenario_difficulty_level: difficulty,
-    };
-    if (env === "hml" && !isHmlCaseSetupComplete(withIds)) {
-      const generated = await generateCaseSetup(env, token, perfectingContextId, scenarioInput);
-      genCase = overlayVerbatimOnGenerated(generated, withIds);
-    } else {
-      genCase = withIds;
-    }
-  } else {
-    genCase = await generateCaseSetup(env, token, perfectingContextId, scenarioInput);
-  }
+  // Roleplays que já existem no contexto: para retomar o da tentativa anterior e para
+  // recusar nome repetido antes do POST (`_case_setup_uc` devolve 500 genérico).
+  const contextCaseSetups = toCaseSetupRefs(
+    await listCaseSetupsByContextFull(env, token, perfectingContextId),
+  );
+  const adopted = adoptableCaseSetup(previous ? created : null, perfectingContextId, contextCaseSetups);
 
-  const { id: caseSetupId, elevenlabs_agent_id } = await createCaseSetup(
-    env,
-    token,
-    genCase,
-    perfectingContextId,
-    callContextTypeId,
-    connection.default_user_group_id ?? null,
-    {
+  let caseSetupId: number;
+  let elevenlabs_agent_id: string | null;
+  if (adopted) {
+    // A tentativa anterior criou este roleplay e não terminou. Criar outro duplicaria.
+    const raw = await getCaseSetupRaw(env, token, adopted.id);
+    const agentId = typeof raw.elevenlabs_agent_id === "string" && raw.elevenlabs_agent_id
+      ? raw.elevenlabs_agent_id
+      : null;
+    if (!agentId) {
+      // O create da Perfecting grava o roleplay e só depois monta prompt e agente de
+      // voz: sem agente, ele ficou pela metade (ou ainda está sendo montado). Não
+      // reparamos sozinhos — o reparo recriaria o prompt por outro caminho.
+      throw new PerfectingError(409, {
+        message:
+          `O roleplay ${adopted.id} ("${adopted.training_name}") foi criado na conta por um envio anterior, ` +
+          "mas está sem agente de voz. Se aquele envio acabou de falhar por tempo, aguarde um minuto e envie de novo " +
+          "(a Perfecting pode estar terminando de montá-lo). Se continuar assim, apague-o na Perfecting e envie de novo — " +
+          "enquanto ele existir, o envio não cria outro",
+      });
+    }
+    caseSetupId = adopted.id;
+    elevenlabs_agent_id = agentId;
+    sendWarnings.push(
+      `roleplay ${adopted.id} reaproveitado de um envio anterior que não terminou (não foi criado outro)`,
+    );
+  } else {
+    let genCase: Record<string, unknown>;
+    if (verbatim) {
+      const withIds = {
+        ...verbatim,
+        call_context_type_id: callContextTypeId,
+        scenario_difficulty_level: difficulty,
+      };
+      if (env === "hml" && !isHmlCaseSetupComplete(withIds)) {
+        const generated = await generateCaseSetup(env, token, perfectingContextId, scenarioInput);
+        genCase = overlayVerbatimOnGenerated(generated, withIds);
+      } else {
+        genCase = withIds;
+      }
+    } else {
+      genCase = await generateCaseSetup(env, token, perfectingContextId, scenarioInput);
+    }
+
+    const createOptions = {
       // omite generate_case_prompt → usa o default da API (true), igual aos exports
       // normais: a Perfecting monta o case prompt a partir dos nossos campos exatos.
       ...(methodologyId != null && { methodologyIds: [methodologyId] }),
       ...(difficultyLevelId != null && { difficultyLevelId }),
-    },
-  );
+    };
+    const userGroupId = connection.default_user_group_id ?? null;
+
+    // Conferência do payload EXATO do create, antes do POST. O backend grava o
+    // roleplay e só depois lê `buyer_agent_first_messages[0]` para criar o agente:
+    // sem primeira fala ele nasce pela metade e a resposta é um 500 sem pista.
+    const payload = buildCaseSetupCreatePayload(
+      env,
+      genCase,
+      perfectingContextId,
+      callContextTypeId,
+      userGroupId,
+      createOptions,
+    );
+    const payloadIssues = caseSetupPayloadIssues(payload);
+    if (payloadIssues.length > 0) {
+      throw new PerfectingError(422, {
+        message: verbatim
+          ? "O roleplay não pode ser criado como está: corrija o payload do rascunho e envie de novo"
+          : "A Perfecting gerou um roleplay incompleto: envie de novo (o conteúdo é gerado a cada envio)",
+        issues: payloadIssues,
+      });
+    }
+    const trainingName = String(payload.training_name);
+    const clash = findCaseSetupByName(contextCaseSetups, trainingName);
+    if (clash) {
+      throw new PerfectingError(422, {
+        message:
+          `Já existe um roleplay chamado "${trainingName}" neste contexto da conta (roleplay ${clash.id}), ` +
+          "e a Perfecting não aceita dois com o mesmo nome",
+        issues: [
+          verbatim
+            ? `mude o nome do treino no rascunho, ou apague o roleplay ${clash.id} na Perfecting, e envie de novo`
+            : `envie de novo (o nome é gerado a cada envio), ou apague o roleplay ${clash.id} na Perfecting`,
+        ],
+      });
+    }
+
+    // O nome enviado fica registrado ANTES do POST: se a resposta se perder (função
+    // encerrada, timeout), é por ele que o reenvio acha o roleplay que já nasceu.
+    created.pending_case_setup = { context_id: perfectingContextId, training_name: trainingName };
+    await saveProgress();
+    try {
+      ({ id: caseSetupId, elevenlabs_agent_id } = await createCaseSetup(
+        env,
+        token,
+        genCase,
+        perfectingContextId,
+        callContextTypeId,
+        userGroupId,
+        createOptions,
+      ));
+    } catch (e) {
+      // O create pode ter gravado o roleplay antes de falhar. Sem conferir, o reenvio
+      // criaria outro (nome gerado pela IA muda a cada tentativa).
+      let half: { id: number } | undefined;
+      let checked = false;
+      try {
+        half = findCaseSetupByName(
+          toCaseSetupRefs(await listCaseSetupsByContextFull(env, token, perfectingContextId)),
+          trainingName,
+        );
+        checked = true;
+      } catch (lookupErr) {
+        console.error("export-roleplay: não deu para conferir se o roleplay nasceu:", String(lookupErr));
+      }
+      if (half) {
+        created.case_setup_id = half.id;
+        delete created.pending_case_setup;
+        const status = e instanceof PerfectingError ? e.status : 500;
+        throw new PerfectingError(status, {
+          message:
+            `A Perfecting gravou o roleplay ${half.id} mas não terminou de montá-lo (prompt e agente de voz). ` +
+            "Aguarde um minuto e envie de novo: o envio continua nesse roleplay, sem criar outro",
+          cause: e instanceof PerfectingError ? e.detail : String(e),
+        });
+      }
+      // Conferido e não existe: nada a retomar. Sem conferir, o nome fica registrado.
+      if (checked) delete created.pending_case_setup;
+      throw e;
+    }
+  }
+  // O id vai para o rascunho AGORA, não no fim: persona, status e fechamento ainda
+  // podem falhar, e sem o id o reenvio não teria como saber que o roleplay existe.
+  created.case_setup_id = caseSetupId;
+  delete created.pending_case_setup;
+  await saveProgress({ perfecting_case_setup_id: caseSetupId, elevenlabs_agent_id });
 
   // 4a) Status na conta — logo depois do create, que nasce sem status (visível para
   // todos) e não aceita o campo. Falha vira aviso: o roleplay já existe.
@@ -393,7 +609,7 @@ async function exportDraft(draftId: string): Promise<{ caseSetupId: number }> {
   let personaWarning: string | null = null;
   if (env === "prod") {
     await setJob({ step: "persona" });
-    const attached = await attachProdPersona(env, token, perfectingContextId, caseSetupId);
+    const attached = await attachProdPersona(env, token, perfectingContextId, caseSetupId, adopted != null);
     personaId = attached.personaId;
     personaWarning = attached.warning;
     if (personaWarning) console.warn("export-roleplay[persona]:", personaWarning);
@@ -479,23 +695,83 @@ Deno.serve(async (req) => {
   if (denied) return denied;
 
   let draftIds: string[] = [];
+  let stage = "";
   try {
     const body = await req.json();
     if (Array.isArray(body.draftIds)) draftIds = body.draftIds;
     else if (body.draftId) draftIds = [body.draftId];
+    stage = typeof body.stage === "string" ? body.stage : "";
   } catch {
     return json({ ok: false, error: "corpo inválido" }, 400);
   }
   if (draftIds.length === 0) return json({ ok: false, error: "nenhum draftId" }, 400);
 
+  // Consulta de envios em andamento: só destrava o que venceu (função encerrada no
+  // meio, sem gravar sucesso nem erro). A Biblioteca chama enquanto há rascunho de
+  // roleplay em "exporting"; nunca dispara um envio.
+  if (stage === "poll") {
+    const released: string[] = [];
+    for (const id of draftIds) {
+      const { data: cur } = await db
+        .from("roleplay_drafts")
+        .select("status, updated_at, scenario, error_detail")
+        .eq("id", id)
+        .maybeSingle();
+      // "exporting" de rascunho de playbook é do implement-playbook (até 90 min).
+      if (!cur || cur.status !== "exporting" || cur.scenario?.generation_mode === "playbook") continue;
+      if (!isStaleSend(cur.updated_at, Date.now(), ROLEPLAY_SEND_STALE_MS)) continue;
+      // Mantém o registro do que já foi criado: é ele que evita duplicar no reenvio.
+      const kept = previousCreated(cur, true) ?? {};
+      const detail = withCreated(staleSendError(), kept);
+      const { error: releaseErr } = await db
+        .from("roleplay_drafts")
+        .update({ status: "error", error_detail: detail })
+        .eq("id", id)
+        .eq("status", "exporting");
+      if (releaseErr) {
+        console.error("export-roleplay: falha ao destravar envio vencido:", releaseErr.message);
+        continue;
+      }
+      await db
+        .from("export_jobs")
+        .update({ state: "error", error_detail: detail, finished_at: new Date().toISOString() })
+        .eq("draft_id", id)
+        .eq("state", "running");
+      released.push(id);
+    }
+    return json({ ok: true, released });
+  }
+
   // Lote: sequencial (cada export = ~3 gerações de IA → limitar concorrência).
   const results: Array<{ draftId: string; ok: boolean; caseSetupId?: number; error?: unknown }> = [];
   for (const id of draftIds) {
+    // Envio vivo deste rascunho: entrar junto criaria um segundo roleplay. A recusa
+    // fica FORA do try — o catch marcaria erro num envio que ainda está rodando.
+    const { data: cur } = await db
+      .from("roleplay_drafts")
+      .select("status, updated_at, scenario")
+      .eq("id", id)
+      .maybeSingle();
+    if (
+      cur?.status === "exporting" &&
+      (cur.scenario?.generation_mode === "playbook" ||
+        !isStaleSend(cur.updated_at, Date.now(), ROLEPLAY_SEND_STALE_MS))
+    ) {
+      results.push({ draftId: id, ok: false, error: { status: 409, detail: SEND_IN_PROGRESS_MESSAGE } });
+      continue;
+    }
+
+    const progress: { created: SendCreated } = { created: {} };
     try {
-      const { caseSetupId } = await exportDraft(id);
+      const { caseSetupId } = await exportDraft(id, progress);
       results.push({ draftId: id, ok: true, caseSetupId });
     } catch (e) {
-      const detail = e instanceof PerfectingError ? { status: e.status, detail: e.detail } : { message: String(e) };
+      // Com o que já foi criado na conta: o reenvio retoma por aqui, e quem precisar
+      // desfazer à mão sabe quais ids apagar.
+      const detail = withCreated(
+        e instanceof PerfectingError ? { status: e.status, detail: e.detail } : { message: String(e) },
+        progress.created,
+      );
       await db.from("roleplay_drafts").update({ status: "error", error_detail: detail }).eq("id", id);
       await db
         .from("export_jobs")

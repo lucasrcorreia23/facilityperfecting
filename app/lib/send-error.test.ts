@@ -207,3 +207,32 @@ describe("envio destravado por tempo", () => {
     expect(info.title).toBe("Tempo limite excedido");
   });
 });
+
+describe("erros do envio de roleplay com registro do que foi criado", () => {
+  it("o campo created não atrapalha a mensagem", () => {
+    const info = humanizeSendError({
+      status: 409,
+      detail: { message: "O roleplay 12 foi criado na conta por um envio anterior, mas está sem agente de voz." },
+      created: { case_setup_id: 12, context_id: 3 },
+    });
+    expect(info.message).toContain("roleplay 12");
+    expect(info.message).not.toContain("created");
+  });
+
+  it("422 de nome repetido traz a orientação como issue", () => {
+    const info = humanizeSendError({
+      status: 422,
+      detail: {
+        message: 'Já existe um roleplay chamado "Cold call" neste contexto da conta (roleplay 9)',
+        issues: ["envie de novo (o nome é gerado a cada envio), ou apague o roleplay 9 na Perfecting"],
+      },
+    });
+    expect(info.message).toContain("Já existe um roleplay");
+    expect(info.issues).toEqual(["envie de novo (o nome é gerado a cada envio), ou apague o roleplay 9 na Perfecting"]);
+  });
+
+  it("envio em andamento (409 com texto) é legível", () => {
+    const info = humanizeSendError({ status: 409, detail: "Já existe um envio em andamento para este item." });
+    expect(info.message).toContain("envio em andamento");
+  });
+});

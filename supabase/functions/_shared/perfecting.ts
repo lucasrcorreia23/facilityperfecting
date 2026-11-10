@@ -1412,6 +1412,33 @@ export function applyCaseSetupExtras(
   };
 }
 
+/**
+ * O payload exato que o `case_setup/create` recebe. Separado do POST para quem envia
+ * conferir ANTES (nome repetido no contexto, primeira fala ausente) e registrar o nome
+ * enviado — ver `createCaseSetup`.
+ */
+export function buildCaseSetupCreatePayload(
+  env: PerfectingEnv,
+  generated: Record<string, unknown>,
+  contextId: number,
+  callContextTypeId: number | undefined,
+  userGroupId: number | null,
+  options: CaseSetupCreateOptions = {},
+): Record<string, unknown> {
+  const base =
+    env === "hml"
+      ? buildHmlCaseSetupCreate(generated, contextId, callContextTypeId, userGroupId)
+      : buildProdCaseSetupCreate(generated, contextId, callContextTypeId, userGroupId);
+  return applyCaseSetupExtras(base, options);
+}
+
+/**
+ * SEM retry, de propósito. O backend (`s32_case_setup_crud.py`, Create) faz commit do
+ * roleplay e só depois gera o prompt (IA) e cria o agente de voz; a chamada leva
+ * minutos. Um 502/504 do gateway ou uma queda de conexão no meio chega aqui com a
+ * linha já gravada — repetir criava um segundo roleplay (ou batia em `_case_setup_uc`
+ * e devolvia 500). Quem chama trata a falha procurando o roleplay pelo nome.
+ */
 export async function createCaseSetup(
   env: PerfectingEnv,
   token: string,
@@ -1421,11 +1448,7 @@ export async function createCaseSetup(
   userGroupId: number | null,
   options: CaseSetupCreateOptions = {},
 ): Promise<{ id: number; elevenlabs_agent_id: string | null }> {
-  const base =
-    env === "hml"
-      ? buildHmlCaseSetupCreate(generated, contextId, callContextTypeId, userGroupId)
-      : buildProdCaseSetupCreate(generated, contextId, callContextTypeId, userGroupId);
-  const payload = applyCaseSetupExtras(base, options);
+  const payload = buildCaseSetupCreatePayload(env, generated, contextId, callContextTypeId, userGroupId, options);
   const { generateCasePrompt } = options;
   // undefined → omite o param (API usa default = true), igual aos exports normais.
   // true/false → envia explícito (usado p/ isolar o crash de geração de prompt).
@@ -1433,10 +1456,12 @@ export async function createCaseSetup(
     generateCasePrompt === undefined
       ? `${rp(env)}/case_setup/create`
       : `${rp(env)}/case_setup/create?generate_case_prompt=${generateCasePrompt}`;
-  const data = await postJson<{ id?: number; elevenlabs_agent_id?: string }>(
+  const data = await sendJson<{ id?: number; elevenlabs_agent_id?: string }>(
+    "POST",
     url,
     token,
     payload,
+    0,
   );
   if (typeof data.id !== "number") throw new PerfectingError(502, "case_setup/create sem id");
   return { id: data.id, elevenlabs_agent_id: data.elevenlabs_agent_id ?? null };
