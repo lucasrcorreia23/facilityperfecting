@@ -2605,6 +2605,16 @@ export async function listOrganizationCaseSetups(
   );
 }
 
+/** Ofertas da org do token (id + nome) — o nome é único por organização (`_offer_uc`). */
+export async function listOffers(
+  env: PerfectingEnv,
+  token: string,
+): Promise<Array<{ id: number; name: string }>> {
+  return records(await getJson<unknown>(`${rp(env)}/offer/list`, token))
+    .filter((r) => typeof r.id === "number")
+    .map((r) => ({ id: r.id as number, name: String(r.name ?? "") }));
+}
+
 // ── Debate (motor 3) ──────────────────────────────────────────────────────
 // Escritas do envio de debate (`debate-export.ts`). Criação sem retry: nenhum destes
 // endpoints tem dedupe, e um 5xx depois de gravar duplicaria o registro.

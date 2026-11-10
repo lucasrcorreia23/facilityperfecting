@@ -80,6 +80,15 @@ describe("rascunho de debate", () => {
     expect(issues.some((i) => i.includes("tem 2 etapa(s) e o rascunho tem 3"))).toBe(true);
   });
 
+  it("duas regras com o mesmo nome barram o envio (o nome é único na Perfecting)", () => {
+    const d = fullDraft();
+    d.guardrails = [
+      { nome: "Sem página neste debate", instrucao: "Não cite página." },
+      { nome: " sem página neste debate ", instrucao: "Outra." },
+    ];
+    expect(debateDraftIssues(d)).toContain('regra 2: nome repetido ("sem página neste debate")');
+  });
+
   it("etapa sem regra ou sem fala barra o envio", () => {
     const d = fullDraft();
     d.etapas[1] = { ...d.etapas[1], regras: [], primeiras_falas: [" "] };
