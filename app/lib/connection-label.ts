@@ -97,29 +97,31 @@ export function filterConnections<T extends ConnectionLike>(
 /** A partir de quantas contas o seletor ganha campo de busca. */
 export const CONNECTION_SEARCH_THRESHOLD = 8;
 
-export interface DestinationGroup {
-  /** "Produção · Org X" */
-  label: string;
+export interface DestinationGroup<T extends ConnectionLike = ConnectionLike> {
+  connection: T | null;
   count: number;
-  production: boolean;
 }
 
 /**
  * Agrupa um lote pelo destino de cada item ("3 → Produção · X, 2 → Homolog · Y").
- * Produção vem primeiro: é a linha que não pode passar despercebida.
+ * Produção vem primeiro: é a linha que não pode passar despercebida. Item sem
+ * conta forma o seu próprio grupo — nunca some do resumo.
  */
-export function summarizeDestinations(
-  connections: Array<ConnectionLike | null | undefined>,
-): DestinationGroup[] {
-  const groups = new Map<string, DestinationGroup>();
-  for (const connection of connections) {
-    const label = destinationLabel(connection);
-    const group = groups.get(label);
+export function groupDestinations<T extends ConnectionLike>(
+  connections: Array<T | null | undefined>,
+): DestinationGroup<T>[] {
+  const groups = new Map<string, DestinationGroup<T>>();
+  for (const item of connections) {
+    const connection = item ?? null;
+    const key = connection ? (connection.id ?? destinationLabel(connection)) : "";
+    const group = groups.get(key);
     if (group) group.count += 1;
-    else groups.set(label, { label, count: 1, production: isProduction(connection) });
+    else groups.set(key, { connection, count: 1 });
   }
   return Array.from(groups.values()).sort(
-    (a, b) => Number(b.production) - Number(a.production) || a.label.localeCompare(b.label, "pt-BR"),
+    (a, b) =>
+      Number(isProduction(b.connection)) - Number(isProduction(a.connection)) ||
+      destinationLabel(a.connection).localeCompare(destinationLabel(b.connection), "pt-BR"),
   );
 }
 

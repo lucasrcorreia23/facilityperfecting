@@ -8,9 +8,9 @@ import {
   environmentKind,
   environmentLabel,
   filterConnections,
+  groupDestinations,
   isProduction,
   matchesConnectionQuery,
-  summarizeDestinations,
 } from "./connection-label";
 
 const prod = { id: "p", environment: "prod", org_id: 52, org_name: "FIESC", target_user_id: 9 };
@@ -79,23 +79,36 @@ describe("busca", () => {
   });
 });
 
-describe("resumo de destinos do lote", () => {
+describe("destinos do lote", () => {
   it("agrupa por conta, com produção primeiro", () => {
-    expect(summarizeDestinations([hml, prod, hml, prod, prod])).toEqual([
-      { label: "Produção · FIESC", count: 3, production: true },
-      { label: "Homolog · FIESC", count: 2, production: false },
+    expect(groupDestinations([hml, prod, hml, prod, prod])).toEqual([
+      { connection: prod, count: 3 },
+      { connection: hml, count: 2 },
+    ]);
+  });
+
+  it("não junta contas de mesmo nome em ambientes diferentes", () => {
+    const groups = groupDestinations([hml, prod]);
+    expect(groups.map((g) => destinationLabel(g.connection))).toEqual([
+      "Produção · FIESC",
+      "Homolog · FIESC",
     ]);
   });
 
   it("não esconde item sem conta", () => {
-    expect(summarizeDestinations([null, hml])).toEqual([
-      { label: "Conta não escolhida", count: 1, production: false },
-      { label: "Homolog · FIESC", count: 1, production: false },
+    expect(groupDestinations([null, hml, undefined])).toEqual([
+      { connection: null, count: 2 },
+      { connection: hml, count: 1 },
     ]);
   });
 
+  it("agrupa pelo rótulo quando o recorte não traz id", () => {
+    const a = { environment: "hml", org_id: 1, org_name: "Acme" };
+    expect(groupDestinations([a, { ...a }])).toEqual([{ connection: a, count: 2 }]);
+  });
+
   it("lote vazio não tem grupos", () => {
-    expect(summarizeDestinations([])).toEqual([]);
+    expect(groupDestinations([])).toEqual([]);
   });
 });
 

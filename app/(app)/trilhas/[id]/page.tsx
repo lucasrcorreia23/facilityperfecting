@@ -2,16 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
-import {
-  Modal,
-  ModalBody,
-  ModalContent,
-  ModalFooter,
-  ModalHeader,
-  Select,
-  SelectItem,
-  addToast,
-} from "@heroui/react";
+import { Modal, ModalBody, ModalContent, ModalFooter, ModalHeader, addToast } from "@heroui/react";
 import {
   ArrowDownTrayIcon,
   PaperAirplaneIcon,
@@ -27,19 +18,22 @@ import { MarkdownView } from "@/app/components/ui/markdown-view";
 import { PlanStatusBanner } from "@/app/components/trilhas/plan-status-banner";
 import { RadarView } from "@/app/components/trilhas/radar-view";
 import { TrailEditor } from "@/app/components/trilhas/trail-editor";
-import { managerSelectClassNames, selectItemClassNames } from "@/app/lib/select-classnames";
+import { ConnectionPicker } from "@/app/components/ui/connection-picker";
+import { DestinationSummary } from "@/app/components/ui/destination-summary";
+import { useConnections } from "@/app/lib/use-connections";
+import { countLabel, isProduction } from "@/app/lib/connection-label";
 import { createClient } from "@/app/lib/supabase/client";
 import {
   generateTrailDrafts,
   getTrailPlan,
   invokeExport,
+  describeFunctionError,
   invokeGenerateTrailPlan,
   listCallContexts,
-  listConnections,
   pollTrailPlanGeneration,
   setDraftConnection,
 } from "@/app/lib/db";
-import type { CallContextType, Connection, TrailPlanDetail } from "@/app/lib/types";
+import type { CallContextType, TrailPlanDetail } from "@/app/lib/types";
 
 export default function PlanoTrilhasPage() {
   const params = useParams<{ id: string }>();
@@ -48,7 +42,8 @@ export default function PlanoTrilhasPage() {
   const [plan, setPlan] = useState<TrailPlanDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [callContexts, setCallContexts] = useState<CallContextType[]>([]);
-  const [connections, setConnections] = useState<Connection[]>([]);
+  const { connections, error: connectionsError, reload: reloadConnections } = useConnections();
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [retrying, setRetrying] = useState(false);
   const [generatingTrail, setGeneratingTrail] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<ConfirmConfig | null>(null);
@@ -64,19 +59,28 @@ export default function PlanoTrilhasPage() {
   const refresh = useCallback(async () => {
     try {
       setPlan(await getTrailPlan(planId));
+      setLoadError(null);
+    } catch (err) {
+      setLoadError(describeFunctionError(err));
     } finally {
       setLoading(false);
     }
   }, [planId]);
 
   useEffect(() => {
-    void refresh();
+    void (async () => {
+      await refresh();
+    })();
     void listCallContexts()
       .then(setCallContexts)
-      .catch(() => setCallContexts([]));
-    void listConnections()
-      .then(setConnections)
-      .catch(() => setConnections([]));
+      .catch((err) => {
+        setCallContexts([]);
+        addToast({
+          title: "Não foi possível carregar os tipos de chamada",
+          description: `O seletor de tipo de chamada das trilhas fica vazio. ${describeFunctionError(err)}`,
+          color: "warning",
+        });
+      });
 
     // realtime: status da geração (trail_plans) + status dos drafts gerados
     const supabase = createClient();
@@ -212,7 +216,30 @@ export default function PlanoTrilhasPage() {
       });
       return;
     }
+    setPickerConn("");
     setPickerOpen(true);
+  }
+
+  /** Conta escolhida → confirmação nomeando conta, ambiente e quantidade → envio. */
+  function confirmPickerAndSend() {
+    const connection = connections?.find((c) => c.id === pickerConn) ?? null;
+    if (!connection) return;
+    setPickerOpen(false);
+    setConfirm({
+      title: `Enviar ${countLabel(sendableDrafts.length, "roleplay", "roleplays")} para esta conta?`,
+      message: (
+        <span className="flex flex-col gap-3">
+          <DestinationSummary destinations={[{ connection }]} />
+          <span>
+            Serão criados <b>{countLabel(sendableDrafts.length, "roleplay", "roleplays")}</b> na
+            conta — um por rascunho pendente das trilhas. A oferta é criada uma vez e reusada em
+            todos.
+          </span>
+        </span>
+      ),
+      confirmLabel: isProduction(connection) ? "Enviar para produção" : "Enviar",
+      onConfirm: () => void runSend(),
+    });
   }
 
   async function runSend() {
@@ -230,7 +257,8 @@ export default function PlanoTrilhasPage() {
       await refresh();
     } catch (err) {
       setSendStatus("error");
-      setSendError(err instanceof Error ? err.message : String(err));
+      setSendError(describeFunctionError(err));
+      await refresh();
     }
   }
 
@@ -256,7 +284,11 @@ export default function PlanoTrilhasPage() {
   if (!plan) {
     return (
       <div className="flex flex-col gap-0">
-        <PageHeader backHref="/trilhas" title="Plano não encontrado" />
+        <PageHeader
+          backHref="/trilhas"
+          title={loadError ? "Não foi possível abrir o plano" : "Plano não encontrado"}
+          description={loadError ?? undefined}
+        />
       </div>
     );
   }
@@ -297,7 +329,7 @@ export default function PlanoTrilhasPage() {
               isDisabled={sendableDrafts.length === 0}
               startContent={<PaperAirplaneIcon className="w-4 h-4" />}
             >
-              Enviar para destino
+              Enviar para conta
             </Button>
           </div>
         }
@@ -366,41 +398,28 @@ export default function PlanoTrilhasPage() {
 
       <Modal isOpen={pickerOpen} onOpenChange={setPickerOpen} radius="sm">
         <ModalContent>
-          <ModalHeader>Enviar para conta destino</ModalHeader>
+          <ModalHeader>Conta de destino</ModalHeader>
           <ModalBody>
             <p className="text-sm text-slate-500">
-              {sendableDrafts.length} rascunho(s) serão enviados para a conta escolhida. A oferta é
-              criada uma vez e reusada em todos os roleplays.
+              {countLabel(sendableDrafts.length, "rascunho pendente", "rascunhos pendentes")} para
+              enviar. Antes de enviar, a próxima tela confirma conta e ambiente.
             </p>
-            <Select
-              label="Conta destino"
-              labelPlacement="outside"
-              placeholder="Escolha a org da Perfecting"
-              selectedKeys={pickerConn ? [pickerConn] : []}
-              onSelectionChange={(keys) => setPickerConn((Array.from(keys)[0] as string) ?? "")}
-              radius="sm"
-              variant="bordered"
-              classNames={managerSelectClassNames}
-            >
-              {connections.map((c) => (
-                <SelectItem key={c.id} classNames={selectItemClassNames}>
-                  {`${c.org_name ?? `Org ${c.org_id}`} (${c.environment})`}
-                </SelectItem>
-              ))}
-            </Select>
+            <ConnectionPicker
+              connections={connections}
+              value={pickerConn}
+              onChange={setPickerConn}
+              label="Conta"
+              loadError={connectionsError}
+              onRetry={reloadConnections}
+              isRequired
+            />
           </ModalBody>
           <ModalFooter>
             <Button variant="secondary" onPress={() => setPickerOpen(false)}>
               Cancelar
             </Button>
-            <Button
-              isDisabled={!pickerConn}
-              onPress={() => {
-                setPickerOpen(false);
-                void runSend();
-              }}
-            >
-              Enviar
+            <Button isDisabled={!pickerConn} onPress={confirmPickerAndSend}>
+              Continuar
             </Button>
           </ModalFooter>
         </ModalContent>

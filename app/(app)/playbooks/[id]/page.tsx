@@ -2,16 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import {
-  Modal,
-  ModalBody,
-  ModalContent,
-  ModalFooter,
-  ModalHeader,
-  Select,
-  SelectItem,
-  addToast,
-} from "@heroui/react";
+import { Modal, ModalBody, ModalContent, ModalFooter, ModalHeader, addToast } from "@heroui/react";
 import { PaperAirplaneIcon, XCircleIcon } from "@heroicons/react/24/outline";
 import { Button } from "@/app/components/ui/button";
 import { PageHeader } from "@/app/components/ui/page-header";
@@ -20,7 +11,10 @@ import { ConfirmDialog, type ConfirmConfig } from "@/app/components/ui/confirm-d
 import { SendStatusModal, type SendStatus } from "@/app/components/ui/send-status-modal";
 import { PlanStatusBanner } from "@/app/components/trilhas/plan-status-banner";
 import { PlaybookEditor } from "@/app/components/playbooks/playbook-editor";
-import { managerSelectClassNames } from "@/app/lib/select-classnames";
+import { ConnectionPicker } from "@/app/components/ui/connection-picker";
+import { DestinationSummary } from "@/app/components/ui/destination-summary";
+import { useConnections } from "@/app/lib/use-connections";
+import { countLabel, isProduction } from "@/app/lib/connection-label";
 import { createClient } from "@/app/lib/supabase/client";
 import { classifyPlaybookFailure } from "@/app/lib/playbook-draft";
 import { humanizeSendError, type HumanizedError } from "@/app/lib/send-error";
@@ -30,13 +24,11 @@ import {
   invokeGeneratePlaybook,
   invokeSendPlaybook,
   listCallContexts,
-  listConnections,
   listMethodologies,
   pollPlaybookGeneration,
 } from "@/app/lib/db";
 import type {
   CallContextType,
-  Connection,
   Methodology,
   PlaybookDraftDetail,
 } from "@/app/lib/types";
@@ -52,7 +44,7 @@ export default function PlaybookDetailPage() {
   const [playbook, setPlaybook] = useState<PlaybookDraftDetail | null>(null);
   const [callContexts, setCallContexts] = useState<CallContextType[]>([]);
   const [methodologies, setMethodologies] = useState<Methodology[]>([]);
-  const [connections, setConnections] = useState<Connection[]>([]);
+  const { connections, error: connectionsError, reload: reloadConnections } = useConnections();
   const [loading, setLoading] = useState(true);
   const [retrying, setRetrying] = useState(false);
   const [confirm, setConfirm] = useState<ConfirmConfig | null>(null);
@@ -74,7 +66,6 @@ export default function PlaybookDetailPage() {
     })();
     listCallContexts().then(setCallContexts).catch(() => {});
     listMethodologies().then(setMethodologies).catch(() => {});
-    listConnections().then(setConnections).catch(() => {});
 
     const supabase = createClient();
     const channel = supabase
@@ -183,27 +174,42 @@ export default function PlaybookDetailPage() {
     }
     setPickerOpen(false);
     const connectionId = pickerConn;
-    const connection = connections.find((c) => c.id === connectionId);
+    const connection = connections?.find((c) => c.id === connectionId) ?? null;
+    const callTypeCount = playbook?.playbook_call_types.length ?? 0;
+    const blockCount = (playbook?.playbook_call_types ?? []).reduce(
+      (sum, ct) => sum + ct.playbook_call_blocks.length,
+      0,
+    );
     const alreadySent =
       playbook?.export_run?.connection_id === connectionId &&
       playbook?.export_run?.perfecting_playbook_id != null;
 
     setConfirm({
       title: alreadySent ? "Continuar o envio para esta conta?" : "Criar o playbook nesta conta?",
-      message: alreadySent ? (
-        <>
-          Este playbook já foi enviado para <b>{connection?.org_name ?? "esta conta"}</b>. O envio
-          vai <b>completar o que faltou</b> (etapas e subetapas ainda não criadas), sem duplicar o
-          que já existe.
-        </>
-      ) : (
-        <>
-          Serão criados <b>{playbook?.playbook_call_types.length ?? 0} etapa(s)</b> e suas subetapas
-          na conta <b>{connection?.org_name ?? "selecionada"}</b> ({connection?.environment}). Depois
-          disso, a Criação consegue gerar os roleplays da jornada por cima dele.
-        </>
+      message: (
+        <span className="flex flex-col gap-3">
+          <DestinationSummary destinations={[{ connection }]} />
+          {alreadySent ? (
+            <span>
+              Este playbook já foi enviado para esta conta. O envio vai{" "}
+              <b>completar o que faltou</b> (etapas e subetapas ainda não criadas), sem duplicar o
+              que já existe.
+            </span>
+          ) : (
+            <span>
+              Será criado <b>1 playbook</b> com{" "}
+              <b>{countLabel(callTypeCount, "etapa", "etapas")}</b> e{" "}
+              <b>{countLabel(blockCount, "subetapa", "subetapas")}</b>. Depois disso, a Criação
+              consegue gerar os roleplays da jornada por cima dele.
+            </span>
+          )}
+        </span>
       ),
-      confirmLabel: alreadySent ? "Continuar envio" : "Criar playbook",
+      confirmLabel: alreadySent
+        ? "Continuar envio"
+        : isProduction(connection)
+          ? "Criar em produção"
+          : "Criar playbook",
       onConfirm: () => {
         void runSend(connectionId);
       },
@@ -349,33 +355,26 @@ export default function PlaybookDetailPage() {
           <ModalHeader>Conta de destino</ModalHeader>
           <ModalBody>
             <p className="text-sm text-slate-500">
-              Escolha a org da Perfecting onde o playbook será criado (HML ou produção). O envio cria{" "}
-              <b>conteúdo real na conta do cliente</b>.
+              Onde o playbook será criado. Antes de enviar, a próxima tela confirma conta e
+              ambiente.
             </p>
-            <Select
+            <ConnectionPicker
+              connections={connections}
+              value={pickerConn}
+              onChange={setPickerConn}
               label="Conta"
-              labelPlacement="outside"
-              selectedKeys={pickerConn ? [pickerConn] : []}
-              onSelectionChange={(k) => setPickerConn(String(Array.from(k)[0] ?? ""))}
-              radius="sm"
-              variant="bordered"
-              classNames={managerSelectClassNames}
-            >
-              {connections.map((c) => (
-                <SelectItem
-                  key={c.id}
-                  textValue={`${c.org_name ?? `Org ${c.org_id}`} (${c.environment})`}
-                >
-                  {c.org_name ?? `Org ${c.org_id}`} ({c.environment})
-                </SelectItem>
-              ))}
-            </Select>
+              loadError={connectionsError}
+              onRetry={reloadConnections}
+              isRequired
+            />
           </ModalBody>
           <ModalFooter>
             <Button variant="secondary" onPress={() => setPickerOpen(false)}>
               Cancelar
             </Button>
-            <Button onPress={confirmPickerAndSend}>Continuar</Button>
+            <Button onPress={confirmPickerAndSend} isDisabled={!pickerConn}>
+              Continuar
+            </Button>
           </ModalFooter>
         </ModalContent>
       </Modal>

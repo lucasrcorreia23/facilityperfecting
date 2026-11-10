@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { Checkbox, Input, Select, SelectItem, Textarea, addToast } from "@heroui/react";
 import { ArrowUpTrayIcon, SparklesIcon } from "@heroicons/react/24/outline";
@@ -12,16 +12,19 @@ import { SendStatusModal, type SendStatus } from "@/app/components/ui/send-statu
 import { SectionTitle, TopicList } from "@/app/components/creation/dossier-editor";
 import { ObjectionListEditor } from "@/app/components/content/objection-list-editor";
 import { GuardrailListEditor } from "@/app/components/content/guardrail-list-editor";
+import { ConnectionPicker } from "@/app/components/ui/connection-picker";
+import { DestinationSummary } from "@/app/components/ui/destination-summary";
 import { managerSelectClassNames } from "@/app/lib/select-classnames";
+import { useConnections } from "@/app/lib/use-connections";
+import { isProduction } from "@/app/lib/connection-label";
 import {
   createDraftFromText,
   invokeExport,
-  listConnections,
   listDestinationMethodologies,
   processDebateImport,
   uploadAndExtract,
 } from "@/app/lib/db";
-import type { Connection, GeneratorManifest, Methodology } from "@/app/lib/types";
+import type { GeneratorManifest, Methodology } from "@/app/lib/types";
 import { ROLE_PLAY_STATUSES } from "@/supabase/functions/_shared/roleplay-adjust-model";
 import {
   DEBATE_FEEDBACK_MODULES,
@@ -63,7 +66,7 @@ const lines = (v: string) => v.split("\n").map((s) => s.trim()).filter(Boolean);
  * Perfecting grava debate como venda — por isso este caminho existe.
  */
 export default function DebatePage() {
-  const [connections, setConnections] = useState<Connection[]>([]);
+  const { connections, error: connectionsError, reload: reloadConnections } = useConnections();
   const [connectionId, setConnectionId] = useState("");
   const [methodologies, setMethodologies] = useState<Methodology[]>([]);
   const [methodologyId, setMethodologyId] = useState("");
@@ -87,12 +90,6 @@ export default function DebatePage() {
   const fileInput = useRef<HTMLInputElement>(null);
   /** Rascunho já gravado para este conteúdo: "Tentar de novo" reenvia o mesmo, sem duplicar. */
   const sentDraftRef = useRef<{ sig: string; id: string } | null>(null);
-
-  useEffect(() => {
-    listConnections()
-      .then(setConnections)
-      .catch((e) => addToast({ title: "Falha ao listar as contas", description: String(e), color: "danger" }));
-  }, []);
 
   async function changeConnection(id: string) {
     setConnectionId(id);
@@ -176,7 +173,7 @@ export default function DebatePage() {
   const lintErrors = lint.filter((i) => i.nivel === "erro");
   const canSend = Boolean(draft) && issues.length === 0 && lintErrors.length === 0;
   const methodology = methodologies.find((m) => String(m.id) === methodologyId) ?? null;
-  const connection = connections.find((c) => c.id === connectionId) ?? null;
+  const connection = connections?.find((c) => c.id === connectionId) ?? null;
 
   async function runSend() {
     if (!draft || !methodology) return;
@@ -217,16 +214,18 @@ export default function DebatePage() {
 
   function askSend() {
     setConfirm({
-      title: "Enviar o debate para a Perfecting?",
+      title: "Criar 1 roleplay de debate nesta conta?",
       message: (
-        <>
-          Isso vai <b>criar o roleplay de debate na conta {connection?.org_name ?? connection?.org_id}</b> (
-          {connection?.environment === "prod" ? "produção" : "HML"}): oferta, contexto, persona, {draft?.etapas.length}{" "}
-          etapa(s), {(draft?.objecoes.length ?? 0) * 3} contra-argumento(s) nos três níveis e {draft?.guardrails.length}{" "}
-          regra(s).
-        </>
+        <span className="flex flex-col gap-3">
+          <DestinationSummary destinations={[{ connection }]} />
+          <span>
+            Será criado <b>1 roleplay de debate</b> ({draft?.titulo.trim() || draft?.tema}): oferta, contexto,
+            persona, {draft?.etapas.length} etapa(s), {(draft?.objecoes.length ?? 0) * 3} contra-argumento(s) nos
+            três níveis e {draft?.guardrails.length} regra(s).
+          </span>
+        </span>
       ),
-      confirmLabel: "Enviar",
+      confirmLabel: isProduction(connection) ? "Criar em produção" : "Criar debate",
       onConfirm: () => void runSend(),
     });
   }
@@ -241,22 +240,14 @@ export default function DebatePage() {
       <Card className="p-4 sm:p-6 flex flex-col gap-5">
         <SectionTitle title="Destino" hint="A metodologia é da conta: o conteúdo é gerado por etapa dela." />
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <Select
-            label="Conta de destino"
-            labelPlacement="outside-top"
-            placeholder="Escolha a conta"
-            selectedKeys={connectionId ? [connectionId] : []}
-            onSelectionChange={(k) => void changeConnection(String(Array.from(k)[0] ?? ""))}
-            radius="sm"
-            variant="bordered"
-            classNames={managerSelectClassNames}
-          >
-            {connections.map((c) => (
-              <SelectItem key={c.id} textValue={`${c.org_name ?? `Org ${c.org_id}`} (${c.environment})`}>
-                {c.org_name ?? `Org ${c.org_id}`} ({c.environment})
-              </SelectItem>
-            ))}
-          </Select>
+          <ConnectionPicker
+            connections={connections}
+            value={connectionId}
+            onChange={(id) => void changeConnection(id)}
+            loadError={connectionsError}
+            onRetry={reloadConnections}
+            isRequired
+          />
           <Select
             label="Metodologia"
             labelPlacement="outside-top"

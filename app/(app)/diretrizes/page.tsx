@@ -20,6 +20,7 @@ import { Button } from "@/app/components/ui/button";
 import { PageHeader } from "@/app/components/ui/page-header";
 import { LoadingView } from "@/app/components/ui/loading-view";
 import { managerSelectClassNames } from "@/app/lib/select-classnames";
+import { connectionLabel } from "@/app/lib/connection-label";
 import {
   addGuidelineVersion,
   createGuideline,
@@ -45,7 +46,6 @@ const MODES = [
   { key: "playbook", label: "Por playbook" },
 ];
 
-const connectionLabel = (c: Connection) => `${c.org_name ?? `Org ${c.org_id}`} (${c.environment})`;
 
 interface EditorState {
   /** null = diretriz nova. */
@@ -348,7 +348,7 @@ export default function DiretrizesPage() {
                   radius="sm"
                   variant="bordered"
                   classNames={managerSelectClassNames}
-                  description="Marque a conexão de HML e a de PROD do mesmo cliente para valer nos dois."
+                  description="Marque a conta de Homolog e a de Produção do mesmo cliente para valer nas duas."
                 >
                   {connections.map((c) => (
                     <SelectItem key={c.id} textValue={connectionLabel(c)}>

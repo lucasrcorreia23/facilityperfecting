@@ -31,6 +31,7 @@ import {
   MENU_ITEM_HOVER_DANGER,
   MENU_TRIGGER_HOVER,
 } from "@/app/lib/menu-hover-classes";
+import { ConnectionPicker } from "@/app/components/ui/connection-picker";
 import { managerSelectClassNames } from "@/app/lib/select-classnames";
 import { createScenarioFromOffer } from "@/app/lib/db";
 import type { Connection, DraftRow } from "@/app/lib/types";
@@ -170,21 +171,14 @@ export function DraftActions({
               Reusa a oferta existente. No export, se ela já foi criada na conta escolhida, as
               etapas de oferta/contexto são puladas.
             </p>
-            <Select
+            <ConnectionPicker
+              connections={connections}
+              value={connId}
+              onChange={setConnId}
               label="Conta de destino (opcional)"
-              labelPlacement="outside"
-              selectedKeys={connId ? [connId] : []}
-              onSelectionChange={(k) => setConnId(String(Array.from(k)[0] ?? ""))}
-              radius="sm"
-              variant="bordered"
-              classNames={managerSelectClassNames}
-            >
-              {connections.map((c) => (
-                <SelectItem key={c.id}>
-                  {c.org_name ?? `Org ${c.org_id}`} ({c.environment})
-                </SelectItem>
-              ))}
-            </Select>
+              placeholder="Definir no envio"
+              productionHint={null}
+            />
             <Select
               label="Dificuldade"
               labelPlacement="outside"

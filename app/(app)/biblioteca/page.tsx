@@ -24,10 +24,21 @@ import { EmptyState } from "@/app/components/ui/empty-state";
 import { LoadingView } from "@/app/components/ui/loading-view";
 import { DraftActions } from "@/app/components/library/draft-actions";
 import { ConfirmDialog, type ConfirmConfig } from "@/app/components/ui/confirm-dialog";
+import { ConnectionPicker } from "@/app/components/ui/connection-picker";
+import { DestinationSummary } from "@/app/components/ui/destination-summary";
+import { EnvironmentBadge } from "@/app/components/ui/environment-badge";
 import { managerSelectClassNames } from "@/app/lib/select-classnames";
+import {
+  connectionName,
+  countLabel,
+  groupDestinations,
+  isProduction,
+  type ConnectionLike,
+} from "@/app/lib/connection-label";
 import { createClient } from "@/app/lib/supabase/client";
 import {
   deleteDraft,
+  describeFunctionError,
   invokeAddPersonas,
   invokeCompleteRoleplay,
   invokeExport,
@@ -134,6 +145,8 @@ export default function BibliotecaPage() {
   const [pickerPlaybookId, setPickerPlaybookId] = useState("");
   const [pickerPersonaCount, setPickerPersonaCount] = useState("1");
   const [pickerLoadingPlaybooks, setPickerLoadingPlaybooks] = useState(false);
+  const [pickerPlaybooksError, setPickerPlaybooksError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   // modal de "ver texto"
   const [viewText, setViewText] = useState<string | null>(null);
@@ -156,10 +169,17 @@ export default function BibliotecaPage() {
   const [addingPersonas, setAddingPersonas] = useState(false);
 
   const refresh = useCallback(async () => {
-    const [d, c] = await Promise.all([listDrafts(), listConnections()]);
-    setDrafts(d);
-    setConnections(c);
-    setLoading(false);
+    try {
+      const [d, c] = await Promise.all([listDrafts(), listConnections()]);
+      setDrafts(d);
+      setConnections(c);
+      setLoadError(null);
+    } catch (err) {
+      // Sem isto a tela ficava no "Carregando…" para sempre.
+      setLoadError(describeFunctionError(err));
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => {
@@ -188,6 +208,7 @@ export default function BibliotecaPage() {
     setPickerPlaybookId("");
     setPickerPersonaCount("1");
     setPickerPlaybooks([]);
+    setPickerPlaybooksError(null);
     setPickerLoadingPlaybooks(Boolean(id));
   }
 
@@ -199,8 +220,11 @@ export default function BibliotecaPage() {
       .then((items) => {
         if (active) setPickerPlaybooks(items);
       })
-      .catch(() => {
-        if (active) setPickerPlaybooks([]);
+      .catch((err) => {
+        if (!active) return;
+        // Falha ≠ "conta sem playbook": sem distinguir, o envio seguia por metodologia calado.
+        setPickerPlaybooks([]);
+        setPickerPlaybooksError(describeFunctionError(err));
       })
       .finally(() => {
         if (active) setPickerLoadingPlaybooks(false);
@@ -259,24 +283,53 @@ export default function BibliotecaPage() {
       setPickerPlaybooks([]);
       setPickerOpen(true);
     } else {
-      const sendIds = ids;
-      setConfirm({
-        title: `Enviar ${sendIds.length} roleplay(s) para a Perfecting?`,
-        message: (
-          <>
-            Isso vai <b>criar o(s) roleplay(s) na conta de destino</b> (HML ou
-            produção, conforme a conexão escolhida). Confira a conta antes de continuar.
-          </>
-        ),
-        confirmLabel: "Enviar",
-        onConfirm: () => {
-          void runExport(sendIds);
-        },
-      });
+      askSendConfirmation(ids, (d) => d.connection, () => void runExport(ids));
     }
   }
 
-  async function confirmPickerAndSend() {
+  /**
+   * Confirmação de todo envio da Biblioteca: quantos rascunhos vão para qual
+   * conta e em que ambiente. O lote pode se dividir entre contas — cada uma
+   * aparece com a sua contagem, produção primeiro.
+   */
+  function askSendConfirmation(
+    ids: string[],
+    connectionOf: (d: DraftRow) => ConnectionLike | null | undefined,
+    onConfirm: () => void,
+  ) {
+    const rows = ids.map((id) => drafts.find((x) => x.id === id));
+    const destinations = groupDestinations(rows.map((d) => (d ? connectionOf(d) : null)));
+    const playbookCount = rows.filter((d) => d && isPlaybookDraft(d)).length;
+    const production = destinations.some((d) => isProduction(d.connection));
+    const what = countLabel(ids.length, "rascunho", "rascunhos");
+    setConfirm({
+      title:
+        destinations.length === 1
+          ? `Enviar ${what} para esta conta?`
+          : `Enviar ${what} para ${destinations.length} contas?`,
+      message: (
+        <span className="flex flex-col gap-3">
+          <DestinationSummary destinations={destinations} unit={["rascunho", "rascunhos"]} />
+          <span>
+            O envio <b>cria os roleplays na conta</b>: um por rascunho
+            {playbookCount > 0 ? (
+              <>
+                {" "}
+                — e, {playbookCount === 1 ? "no rascunho" : `nos ${playbookCount} rascunhos`} de
+                playbook, <b>um por etapa</b> do playbook
+              </>
+            ) : null}
+            . Não dá para desfazer daqui.
+          </span>
+        </span>
+      ),
+      confirmLabel: production ? "Enviar para produção" : "Enviar",
+      onConfirm,
+    });
+  }
+
+  /** Conta escolhida no modal → confirmação nomeando o destino → grava e envia. */
+  function confirmPickerAndSend() {
     if (!pickerConn) {
       addToast({ title: "Escolha uma conta de destino", color: "warning" });
       return;
@@ -285,24 +338,47 @@ export default function BibliotecaPage() {
       addToast({ title: "Escolha o playbook", color: "warning" });
       return;
     }
+    const picked = connections.find((c) => c.id === pickerConn) ?? null;
+    const ids = pendingIds;
     setPickerOpen(false);
+    // Só os rascunhos sem conta recebem a escolhida; os outros seguem para a deles.
+    askSendConfirmation(
+      ids,
+      (d) => (d.connection_id ? d.connection : picked),
+      () => void applyPickerAndSend(ids),
+    );
+  }
+
+  async function applyPickerAndSend(ids: string[]) {
     const selectedPlaybook = pickerPlaybooks.find((p) => String(p.id) === pickerPlaybookId);
     // Preenche a conta (e o modo) nos drafts sem destino. Só eles: um rascunho sem
     // conta não pode ter passado pela escolha de modo na Criação (playbook exige
     // conta selecionada antes), então sobrescrever aqui é seguro.
-    for (const id of pendingIds) {
-      const d = drafts.find((x) => x.id === id);
-      if (!d?.connection_id) {
-        await setDraftConnection(id, pickerConn);
-        await updateDraftScenario(id, {
-          generation_mode: pickerMode,
-          playbook_id: pickerMode === "playbook" ? Number(pickerPlaybookId) : null,
-          playbook_name: pickerMode === "playbook" ? (selectedPlaybook?.name ?? null) : null,
-          persona_count: pickerMode === "playbook" ? Number(pickerPersonaCount) : null,
-        });
+    setSending(true);
+    try {
+      for (const id of ids) {
+        const d = drafts.find((x) => x.id === id);
+        if (!d?.connection_id) {
+          await setDraftConnection(id, pickerConn);
+          await updateDraftScenario(id, {
+            generation_mode: pickerMode,
+            playbook_id: pickerMode === "playbook" ? Number(pickerPlaybookId) : null,
+            playbook_name: pickerMode === "playbook" ? (selectedPlaybook?.name ?? null) : null,
+            persona_count: pickerMode === "playbook" ? Number(pickerPersonaCount) : null,
+          });
+        }
       }
+    } catch (err) {
+      setSending(false);
+      addToast({
+        title: "Não foi possível gravar a conta nos rascunhos",
+        description: `Nada foi enviado. ${describeFunctionError(err)}`,
+        color: "danger",
+      });
+      await refresh();
+      return;
     }
-    await runExport(pendingIds);
+    await runExport(ids);
   }
 
   async function runExport(ids: string[]) {
@@ -338,7 +414,16 @@ export default function BibliotecaPage() {
   }
 
   async function handleDelete(id: string) {
-    await deleteDraft(id);
+    try {
+      await deleteDraft(id);
+      addToast({ title: "Rascunho excluído", color: "success" });
+    } catch (err) {
+      addToast({
+        title: "Não foi possível excluir o rascunho",
+        description: describeFunctionError(err),
+        color: "danger",
+      });
+    }
     await refresh();
   }
 
@@ -463,6 +548,19 @@ export default function BibliotecaPage() {
   }
 
   if (loading) return <LoadingView label="Carregando biblioteca…" />;
+  if (loadError && drafts.length === 0) {
+    return (
+      <EmptyState
+        title="Não foi possível carregar a Biblioteca"
+        description={loadError}
+        action={
+          <Button variant="secondary" onPress={() => void refresh()}>
+            Tentar de novo
+          </Button>
+        }
+      />
+    );
+  }
 
   return (
     <div className="flex flex-col gap-0">
@@ -493,15 +591,15 @@ export default function BibliotecaPage() {
           }
         />
       ) : (
-        <Card className="overflow-hidden">
+        <Card className="overflow-x-auto">
           <table className="w-full">
             <thead className="bg-slate-50 border-b border-slate-200">
-              <tr className="text-xs font-semibold uppercase tracking-wider text-slate-600">
+              <tr className="text-xs font-semibold text-slate-600">
                 <th className="w-10 px-4 py-2.5">
                   <Checkbox isSelected={allSelected} onValueChange={toggleAll} size="sm" />
                 </th>
                 <th className="px-4 py-2.5 text-left">Oferta</th>
-                <th className="hidden px-4 py-2.5 text-left sm:table-cell">Conta destino</th>
+                <th className="hidden px-4 py-2.5 text-left sm:table-cell">Conta</th>
                 <th className="px-4 py-2.5 text-left">Status</th>
                 <th className="hidden px-4 py-2.5 text-left md:table-cell">Criado</th>
                 <th className="px-4 py-2.5 text-right">Ações</th>
@@ -517,9 +615,25 @@ export default function BibliotecaPage() {
                       size="sm"
                     />
                   </td>
-                  <td className="px-4 py-4">{d.offer?.offer_name ?? d.title ?? "—"}</td>
+                  <td className="px-4 py-4">
+                    {d.offer?.offer_name ?? d.title ?? "—"}
+                    {/* No celular a coluna "Conta" some: o destino desce para cá. */}
+                    {d.connection && (
+                      <span className="mt-1 flex flex-wrap items-center gap-2 text-xs font-normal text-slate-500 sm:hidden">
+                        <EnvironmentBadge environment={d.connection.environment} />
+                        {connectionName(d.connection)}
+                      </span>
+                    )}
+                  </td>
                   <td className="hidden px-4 py-4 text-slate-600 sm:table-cell">
-                    {d.connection?.org_name ?? "—"}
+                    {d.connection ? (
+                      <span className="flex flex-wrap items-center gap-2">
+                        <EnvironmentBadge environment={d.connection.environment} />
+                        {connectionName(d.connection)}
+                      </span>
+                    ) : (
+                      "—"
+                    )}
                   </td>
                   <td className="px-4 py-4">
                     <div className="flex items-center gap-1.5">
@@ -780,30 +894,30 @@ export default function BibliotecaPage() {
           <ModalHeader>Conta de destino</ModalHeader>
           <ModalBody>
             <p className="text-sm text-slate-500">
-              Escolha a org da Perfecting onde os roleplays serão criados (HML ou
-              produção). O envio cria <b>conteúdo real na conta do cliente</b>.
+              {countLabel(pendingIds.length, "rascunho", "rascunhos")} para enviar. Os que ainda não
+              têm conta vão para a que você escolher aqui; antes de enviar, a próxima tela confirma
+              conta e ambiente.
             </p>
-            <Select
+            <ConnectionPicker
+              connections={connections}
+              value={pickerConn}
+              onChange={handlePickerConnChange}
               label="Conta"
-              labelPlacement="outside"
-              selectedKeys={pickerConn ? [pickerConn] : []}
-              onSelectionChange={(k) => handlePickerConnChange(String(Array.from(k)[0] ?? ""))}
-              radius="sm"
-              variant="bordered"
-              classNames={managerSelectClassNames}
+              isRequired
               description={pickerLoadingPlaybooks ? "Verificando se esta conta tem playbook…" : undefined}
-            >
-              {connections.map((c) => (
-                <SelectItem
-                  key={c.id}
-                  textValue={`${c.org_name ?? `Org ${c.org_id}`} (${c.environment})`}
-                >
-                  {c.org_name ?? `Org ${c.org_id}`} ({c.environment})
-                </SelectItem>
-              ))}
-            </Select>
+            />
 
-            {pickerConn && !pickerLoadingPlaybooks && pickerPlaybooks.length === 0 && (
+            {pickerPlaybooksError && (
+              <p className="rounded-sm bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                Não foi possível verificar os playbooks desta conta: {pickerPlaybooksError} O envio
+                por metodologia segue disponível.
+              </p>
+            )}
+
+            {pickerConn &&
+              !pickerLoadingPlaybooks &&
+              !pickerPlaybooksError &&
+              pickerPlaybooks.length === 0 && (
               <p className="text-xs text-slate-500">
                 Esta conta não tem playbook — o envio segue por metodologia.
               </p>
@@ -871,8 +985,8 @@ export default function BibliotecaPage() {
             <Button variant="secondary" onPress={() => setPickerOpen(false)}>
               Cancelar
             </Button>
-            <Button onPress={confirmPickerAndSend} isLoading={sending}>
-              Enviar
+            <Button onPress={confirmPickerAndSend} isDisabled={!pickerConn || sending}>
+              Continuar
             </Button>
           </ModalFooter>
         </ModalContent>

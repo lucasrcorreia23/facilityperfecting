@@ -30,7 +30,11 @@ import { Button } from "@/app/components/ui/button";
 import { PageHeader } from "@/app/components/ui/page-header";
 import { ConfirmDialog, type ConfirmConfig } from "@/app/components/ui/confirm-dialog";
 import { SendStatusModal, type SendStatus } from "@/app/components/ui/send-status-modal";
+import { ConnectionPicker } from "@/app/components/ui/connection-picker";
+import { DestinationSummary } from "@/app/components/ui/destination-summary";
 import { managerSelectClassNames } from "@/app/lib/select-classnames";
+import { useConnections } from "@/app/lib/use-connections";
+import { isProduction } from "@/app/lib/connection-label";
 import { DossierEditor } from "@/app/components/creation/dossier-editor";
 import {
   coherenceSummary,
@@ -47,7 +51,6 @@ import {
   getDefaultMethodologySlug,
   invokeExportPlaybook,
   listCallContexts,
-  listConnections,
   listMethodologies,
   listPlaybookCallTypes,
   listPlaybooks,
@@ -56,7 +59,6 @@ import {
 } from "@/app/lib/db";
 import type {
   CallContextType,
-  Connection,
   GenerationMode,
   GeneratorManifest,
   GuardrailSeed,
@@ -171,7 +173,8 @@ export default function CriacaoPage() {
   /** Descrição da oferta gerada pela IA — sem ela, o envio cai no material cru. */
   const [offerDescription, setOfferDescription] = useState("");
   const [connectionId, setConnectionId] = useState<string>("");
-  const [connections, setConnections] = useState<Connection[]>([]);
+  const { connections, error: connectionsError, reload: reloadConnections } = useConnections();
+  const destinationRef = useRef<HTMLDivElement>(null);
   const [callContexts, setCallContexts] = useState<CallContextType[]>([]);
   const [callContextSlug, setCallContextSlug] = useState<string>("");
   // "" = a metodologia padrão de Configurações.
@@ -238,6 +241,7 @@ export default function CriacaoPage() {
   /** O processamento usou as diretrizes de outra conta (ou de nenhuma). */
   const guidelinesStale = Boolean(generator) && (generator?.connection_id ?? "") !== connectionId;
   const selectedPlaybook = playbooks.find((p) => String(p.id) === playbookId) ?? null;
+  const connection = connections?.find((c) => c.id === connectionId) ?? null;
 
   /** Trocar de conta invalida os playbooks carregados (são por organização). */
   function handleConnectionChange(id: string) {
@@ -264,7 +268,6 @@ export default function CriacaoPage() {
   }
 
   useEffect(() => {
-    listConnections().then(setConnections).catch(() => {});
     listMethodologies().then(setMethodologies).catch(() => {});
     getDefaultMethodologySlug().then(setDefaultMethodologySlug).catch(() => {});
     listCallContexts()
@@ -692,9 +695,13 @@ export default function CriacaoPage() {
     setConfirm({
       title: total
         ? `Criar ${total} roleplay(s)${personas > 1 ? ` e ${personas} personas` : ""} nesta conta?`
-        : "Iniciar a implementação?",
+        : "Iniciar a implementação nesta conta?",
       message: (
         <>
+          <span className="mb-3 block">
+            <DestinationSummary destinations={[{ connection }]} />
+          </span>
+          {staleGuidelinesNote && <span className="mb-3 flex flex-col">{staleGuidelinesNote}</span>}
           A Perfecting vai criar <b>um roleplay por etapa</b> do playbook{" "}
           <b>{selectedPlaybook?.name ?? ""}</b>
           {total ? ` (${total} no total)` : ""}, usando a oferta e o contexto extraídos do
@@ -758,7 +765,7 @@ export default function CriacaoPage() {
           </span>
         </>
       ),
-      confirmLabel: "Criar roleplays",
+      confirmLabel: isProduction(connection) ? "Criar em produção" : "Criar roleplays",
       onConfirm: async () => {
         setSendModalOpen(true);
         await runSend();
@@ -812,18 +819,53 @@ export default function CriacaoPage() {
     setCoherence(null);
   }
 
+  /** Linha da confirmação: o processamento não usou as diretrizes da conta escolhida. */
+  const staleGuidelinesNote = guidelinesStale ? (
+    <span className="rounded-sm bg-amber-50 px-3 py-2 text-amber-800">
+      O material foi processado <b>sem as diretrizes desta conta</b> (ela foi escolhida ou trocada
+      depois). Para aplicá-las, cancele e use “Reprocessar com IA”.
+    </span>
+  ) : null;
+
+  /** Envio por metodologia: 1 roleplay na conta — confirma nomeando conta e ambiente. */
+  function openRoleplayConfirm() {
+    setConfirm({
+      title: "Criar 1 roleplay nesta conta?",
+      message: (
+        <span className="flex flex-col gap-3">
+          <DestinationSummary destinations={[{ connection }]} />
+          <span>
+            Será criado <b>1 roleplay</b> (<b>{offerName.trim()}</b>) com a oferta, o contexto e a
+            persona extraídos do material. O rascunho também fica salvo na Biblioteca.
+          </span>
+          {staleGuidelinesNote}
+        </span>
+      ),
+      confirmLabel: isProduction(connection) ? "Criar em produção" : "Criar roleplay",
+      onConfirm: async () => {
+        setSendModalOpen(true);
+        await runSend();
+      },
+    });
+  }
+
   async function handleSendToDestination() {
-    if (!validateInputs()) return;
+    // Sem conta não há para onde enviar: leva a pessoa ao seletor em vez de um botão morto.
     if (!connectionId) {
-      addToast({ title: "Selecione uma conta de destino", color: "warning" });
+      destinationRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+      addToast({
+        title: "Escolha a conta de destino",
+        description: "É o primeiro passo da tela (1. Destino).",
+        color: "warning",
+      });
       return;
     }
+    if (!validateInputs()) return;
     if (isPlaybookMode) {
       await runCoherenceCheck();
       return;
     }
-    setSendModalOpen(true);
-    await runSend();
+    openRoleplayConfirm();
   }
 
   const manualEdits = currentManualEdits();
@@ -842,29 +884,30 @@ export default function CriacaoPage() {
           hint="Para qual conta o roleplay vai e como ele é gerado. Vem primeiro porque muda o que a IA faz com o material."
         >
           {/* Antes do modo: playbook é por organização, então depende do destino. */}
-          <Select
-            label={isPlaybookMode ? "Conta de destino" : "Conta de destino (opcional)"}
-            labelPlacement="outside-top"
-            placeholder="Definir depois, no envio"
-            selectedKeys={connectionId ? [connectionId] : []}
-            onSelectionChange={(keys) => handleConnectionChange(String(Array.from(keys)[0] ?? ""))}
-            radius="sm"
-            variant="bordered"
-            classNames={managerSelectClassNames}
-            description={
-              loadingPlaybooks
-                ? "Verificando se esta conta tem playbook…"
-                : connectionId && playbooks.length === 0
-                  ? "Esta conta não tem playbook — a criação segue por metodologia."
-                  : undefined
-            }
-          >
-            {connections.map((c) => (
-              <SelectItem key={c.id} textValue={`${c.org_name ?? `Org ${c.org_id}`} (${c.environment})`}>
-                {c.org_name ?? `Org ${c.org_id}`} ({c.environment})
-              </SelectItem>
-            ))}
-          </Select>
+          <div ref={destinationRef} className="scroll-mt-20">
+            <ConnectionPicker
+              connections={connections}
+              value={connectionId}
+              onChange={handleConnectionChange}
+              loadError={connectionsError}
+              onRetry={reloadConnections}
+              isRequired={isPlaybookMode}
+              description={
+                <span className="flex flex-col gap-1">
+                  {loadingPlaybooks ? (
+                    <span>Verificando se esta conta tem playbook…</span>
+                  ) : connectionId && playbooks.length === 0 ? (
+                    <span>Esta conta não tem playbook — a criação segue por metodologia.</span>
+                  ) : null}
+                  <span>
+                    Escolha a conta <b>antes de processar com IA</b>: as diretrizes dela só entram
+                    no processamento se ela já estiver escolhida aqui. Sem conta dá para processar
+                    e salvar na Biblioteca; para enviar, a conta é obrigatória.
+                  </span>
+                </span>
+              }
+            />
+          </div>
 
           {playbooks.length > 0 && (
             <div className="flex flex-col gap-3">
@@ -1145,9 +1188,9 @@ export default function CriacaoPage() {
             </p>
           ) : (
             !connectionId && (
-              <p className="text-xs text-slate-500">
-                Sem conta de destino escolhida, o processamento usa só as diretrizes globais e do
-                modo. Escolha a conta antes para aplicar as dela.
+              <p className="rounded-sm bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                Nenhuma conta escolhida em “1. Destino”: o processamento usa só as diretrizes
+                globais e do modo. Escolha a conta antes de processar para aplicar as dela.
               </p>
             )
           )}
@@ -1458,7 +1501,7 @@ export default function CriacaoPage() {
           </p>
         )}
 
-        <div className="flex justify-end gap-2">
+        <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
           <Button
             variant="link"
             onPress={() =>
@@ -1501,7 +1544,6 @@ export default function CriacaoPage() {
           <Button
             onPress={handleSendToDestination}
             isDisabled={
-              !connectionId ||
               extracting ||
               saving ||
               processing ||
@@ -1509,7 +1551,7 @@ export default function CriacaoPage() {
               (sendModalOpen && sendStatus === "sending")
             }
           >
-            Enviar para destino
+            {connection ? "Enviar para a conta" : "Escolher conta e enviar"}
           </Button>
         </div>
       </div>

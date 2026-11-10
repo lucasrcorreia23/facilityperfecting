@@ -38,9 +38,7 @@ export function ConfirmDialog({
           <>
             <ModalHeader>{config.title}</ModalHeader>
             <ModalBody>
-              <div className="flex flex-col gap-3 text-sm leading-relaxed text-slate-600">
-                {config.message}
-              </div>
+              <div className="text-sm leading-relaxed text-slate-600">{config.message}</div>
             </ModalBody>
             <ModalFooter>
               <Button variant="secondary" onPress={onClose}>

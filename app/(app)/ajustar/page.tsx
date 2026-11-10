@@ -3,14 +3,14 @@
 import { Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Input, Select, SelectItem } from "@heroui/react";
+import { Input } from "@heroui/react";
 import { MagnifyingGlassIcon } from "@heroicons/react/24/outline";
 import { PageHeader } from "@/app/components/ui/page-header";
 import { Card } from "@/app/components/ui/card";
 import { Button } from "@/app/components/ui/button";
 import { LoadingView } from "@/app/components/ui/loading-view";
 import { EmptyState } from "@/app/components/ui/empty-state";
-import { managerSelectClassNames, selectItemClassNames } from "@/app/lib/select-classnames";
+import { ConnectionPicker } from "@/app/components/ui/connection-picker";
 import { invokeAdjust, listConnections } from "@/app/lib/db";
 import type { Connection } from "@/app/lib/types";
 
@@ -23,10 +23,7 @@ interface RoleplayListItem {
   updated_at: string | null;
 }
 
-const connectionLabel = (c: Connection) =>
-  `${c.org_name?.trim() || "Sem nome"} (org ${c.org_id}) · ${c.environment === "prod" ? "Produção" : "HML"}`;
-
-/** Escolha do roleplay a ajustar: conexão → roleplay da org (lista ou id). */
+/** Escolha do roleplay a calibrar: conta → roleplay da org (lista ou id). */
 function AjustarIndex() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -75,8 +72,6 @@ function AjustarIndex() {
     return roleplays.filter((r) => r.training_name.toLowerCase().includes(q) || String(r.id) === q);
   }, [roleplays, query]);
 
-  const selected = connections?.find((c) => c.id === connectionId);
-
   function openDirect() {
     const id = Number(directId.trim());
     if (!connectionId || !Number.isInteger(id) || id <= 0) return;
@@ -92,25 +87,17 @@ function AjustarIndex() {
 
       <Card className="mb-6 flex flex-col gap-4 p-4 sm:p-6">
         <div className="grid gap-4 sm:grid-cols-2">
-          <Select
-            label="Conta (conexão)"
-            labelPlacement="outside-top"
-            placeholder={connections ? "Escolha a conta" : "Carregando…"}
-            selectedKeys={connectionId ? [connectionId] : []}
-            onSelectionChange={(keys) => {
-              const k = String(Array.from(keys)[0] ?? "");
+          <ConnectionPicker
+            connections={connections}
+            value={connectionId}
+            onChange={(k) => {
               setConnectionId(k);
               router.replace(k ? `/ajustar?connection=${k}` : "/ajustar");
             }}
-            radius="sm"
-            classNames={managerSelectClassNames}
-          >
-            {(connections ?? []).map((c) => (
-              <SelectItem key={c.id} textValue={connectionLabel(c)} classNames={selectItemClassNames}>
-                {connectionLabel(c)}
-              </SelectItem>
-            ))}
-          </Select>
+            label="Conta"
+            loadError={connectionsError}
+            productionHint="Conta de produção: os ajustes chegam aos vendedores na próxima chamada."
+          />
           <div className="flex items-end gap-2">
             <Input
               label="Abrir pelo id do roleplay"
@@ -130,15 +117,10 @@ function AjustarIndex() {
             </Button>
           </div>
         </div>
-        {selected?.environment === "prod" && (
-          <p className="rounded-sm border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700">
-            Conta de produção: os ajustes chegam aos vendedores na próxima chamada.
-          </p>
-        )}
       </Card>
 
       {!connectionId ? (
-        <EmptyState title="Escolha uma conta" description="A lista mostra todos os roleplays da organização dessa conexão." />
+        <EmptyState title="Escolha uma conta" description="A lista mostra todos os roleplays da organização dessa conta." />
       ) : loadingList ? (
         <LoadingView label="Listando os roleplays da conta…" />
       ) : listError ? (

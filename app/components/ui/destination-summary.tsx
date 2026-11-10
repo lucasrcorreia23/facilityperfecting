@@ -13,8 +13,11 @@ import { cn } from "@/app/lib/cn";
  */
 export function DestinationSummary({
   destinations,
+  unit = ["item", "itens"],
 }: {
   destinations: Array<{ connection: ConnectionLike | null | undefined; count?: number }>;
+  /** Como chamar o que é contado em cada conta: ["rascunho", "rascunhos"]. */
+  unit?: [singular: string, plural: string];
 }) {
   const anyProduction = destinations.some((d) => isProduction(d.connection));
   return (
@@ -34,7 +37,7 @@ export function DestinationSummary({
           </span>
           {d.count != null && (
             <span className="text-sm text-slate-600">
-              · {d.count} {d.count === 1 ? "item" : "itens"}
+              · {d.count} {d.count === 1 ? unit[0] : unit[1]}
             </span>
           )}
         </span>
