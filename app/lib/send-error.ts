@@ -39,7 +39,15 @@ export function formatHumanizedError(info: HumanizedError): string {
   return info.issues.length > 0 ? `${info.message}: ${info.issues.join("; ")}` : info.message;
 }
 
+/**
+ * Função encerrada pelo Supabase (546 / 504) sem responder. Neutra de propósito:
+ * num ENVIO, parte do trabalho pode já ter sido criada na conta.
+ */
 export const FUNCTION_TIMEOUT_MESSAGE =
+  "A função passou do tempo limite do servidor (~150s) e foi encerrada antes de responder. Parte do trabalho pode ter sido feita: recarregue a tela e confira o estado antes de repetir.";
+
+/** Mesma situação em funções que só processam (process-import): nada é gravado. */
+export const PROCESSING_TIMEOUT_MESSAGE =
   "A função passou do tempo limite do servidor (~150s) e foi encerrada. Nada foi salvo; tente de novo — se repetir, o material é grande demais para uma vez.";
 
 const GENERIC_500 = /^\s*internal server error\.?\s*$/i;
@@ -235,6 +243,8 @@ export function humanizeSendError(error: unknown): HumanizedError {
 export async function describeInvokeError(
   error: unknown,
   fallback: string,
+  /** Texto para 546/504/408 — o padrão é o neutro; quem só processa passa o seu. */
+  timeoutMessage: string = FUNCTION_TIMEOUT_MESSAGE,
 ): Promise<HumanizedError> {
   const ctx = (error as { context?: unknown } | null)?.context as
     | { status?: unknown; text?: () => Promise<string> }
@@ -258,7 +268,7 @@ export async function describeInvokeError(
     if (status === 546 || status === 504 || status === 408) {
       return {
         title: "Tempo limite excedido",
-        message: FUNCTION_TIMEOUT_MESSAGE,
+        message: timeoutMessage,
         issues: [],
         retryable: true,
         technical,

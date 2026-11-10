@@ -42,6 +42,7 @@ import {
   describeInvokeError,
   formatHumanizedError,
   humanizeSendError,
+  PROCESSING_TIMEOUT_MESSAGE,
   SendError,
 } from "@/app/lib/send-error";
 import type { DebateAnchors, MethodologyStepRef } from "@/supabase/functions/_shared/debate";
@@ -680,8 +681,12 @@ export function describeFunctionError(e: unknown): string {
  * Mensagem real de uma FunctionsHttpError (em vez do genérico "non-2xx"), inclusive
  * quando a função foi encerrada pelo Supabase e o corpo não é o nosso JSON.
  */
-async function functionErrorMessage(error: unknown, fallback: string): Promise<string> {
-  return formatHumanizedError(await describeInvokeError(error, fallback));
+async function functionErrorMessage(
+  error: unknown,
+  fallback: string,
+  timeoutMessage?: string,
+): Promise<string> {
+  return formatHumanizedError(await describeInvokeError(error, fallback, timeoutMessage));
 }
 
 /**
@@ -699,7 +704,7 @@ export async function processImport(
   const body: Record<string, unknown> = { text, mode };
   if (connectionId) body.connection_id = connectionId;
   const { data, error } = await supabase.functions.invoke("process-import", { body });
-  if (error) throw new Error(await functionErrorMessage(error, "Falha ao processar"));
+  if (error) throw new Error(await functionErrorMessage(error, "Falha ao processar", PROCESSING_TIMEOUT_MESSAGE));
   if (!data?.ok) throw new Error(describeFunctionError(data?.error ?? data));
   return {
     result: data.result as ProcessImportResult,
@@ -1404,7 +1409,7 @@ export async function processDebateImport(params: {
       connection_id: params.connectionId,
     },
   });
-  if (error) throw new Error(await functionErrorMessage(error, "Falha ao processar o debate"));
+  if (error) throw new Error(await functionErrorMessage(error, "Falha ao processar o debate", PROCESSING_TIMEOUT_MESSAGE));
   if (!data?.ok) throw new Error(describeFunctionError(data?.error ?? data));
   return {
     result: (data.result ?? {}) as Record<string, unknown>,

@@ -4,6 +4,7 @@ import {
   formatHumanizedError,
   FUNCTION_TIMEOUT_MESSAGE,
   humanizeSendError,
+  PROCESSING_TIMEOUT_MESSAGE,
   SendError,
 } from "./send-error";
 
@@ -138,8 +139,10 @@ describe("describeInvokeError", () => {
     const out = await describeInvokeError(
       httpError('{"code":"WORKER_LIMIT","message":"Function failed due to not having enough compute resources"}', 546),
       "Falha ao processar",
+      PROCESSING_TIMEOUT_MESSAGE,
     );
-    expect(out.message).toBe(FUNCTION_TIMEOUT_MESSAGE);
+    expect(out.message).toBe(PROCESSING_TIMEOUT_MESSAGE);
+    expect(out.message).toContain("Nada foi salvo");
     expect(out.retryable).toBe(true);
     expect(out.technical).toContain("HTTP 546");
     expect(out.technical).toContain("WORKER_LIMIT");
@@ -150,6 +153,13 @@ describe("describeInvokeError", () => {
     expect(out.message).toBe(FUNCTION_TIMEOUT_MESSAGE);
     expect(out.retryable).toBe(true);
     expect(out.message).not.toContain("non-2xx");
+  });
+
+  it("num envio, o texto de tempo limite não promete que nada foi salvo", async () => {
+    const out = await describeInvokeError(httpError(null, 546), "Falha ao enviar o playbook");
+    expect(out.message).toBe(FUNCTION_TIMEOUT_MESSAGE);
+    expect(out.message).not.toContain("Nada foi salvo");
+    expect(out.message).toContain("confira o estado antes de repetir");
   });
 
   it("504 do gateway com HTML", async () => {
