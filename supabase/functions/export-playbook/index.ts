@@ -12,6 +12,7 @@ import {
   PerfectingError,
   resolveCallContextTypeId,
 } from "../_shared/perfecting.ts";
+import { exportIssuesMessage, validatePlaybookForExport } from "../_shared/perfecting-limits.ts";
 
 /**
  * Envia a DEFINIÇÃO do playbook (etapas + subetapas) para a conta de destino.
@@ -123,6 +124,26 @@ async function exportPlaybook(
   if (ctErr) throw new PerfectingError(500, ctErr.message);
   if (!callTypes || callTypes.length === 0) {
     throw new PerfectingError(422, "playbook sem etapas — gere a estrutura antes de enviar");
+  }
+
+  // Pré-validação contra os limites do backend, ANTES de qualquer POST e de marcar
+  // "exporting": lá o estouro vira um 500 genérico no meio do envio, sem dizer o campo.
+  const issues = validatePlaybookForExport({
+    name: playbook.name ?? "",
+    callTypes: (callTypes as CallTypeRow[]).map((ct) => ({
+      name: ct.name,
+      description: ct.description,
+      blocks: [...(ct.playbook_call_blocks ?? [])]
+        .sort((a, b) => a.position - b.position)
+        .map((b) => ({ name: b.name, description: b.description })),
+    })),
+  });
+  if (issues.length > 0) {
+    throw new PerfectingError(422, {
+      message: exportIssuesMessage(issues),
+      issues: issues.map((i) => i.message),
+      fields: issues,
+    });
   }
 
   // Retoma um envio anterior para esta MESMA conexão; para outra conta, começa do zero.
@@ -329,6 +350,7 @@ Deno.serve(async (req) => {
         ? { status: e.status, detail: e.detail }
         : { message: String(e instanceof Error ? e.message : e) };
     if (playbookId) await recordSendFailure(playbookId, detail);
-    return json({ ok: false, error: detail }, 500);
+    // Validação devolve 422 de verdade; o resto segue 500 (o detalhe vai no corpo).
+    return json({ ok: false, error: detail }, e instanceof PerfectingError && e.status === 422 ? 422 : 500);
   }
 });

@@ -24,6 +24,7 @@ import { managerSelectClassNames } from "@/app/lib/select-classnames";
 import { createClient } from "@/app/lib/supabase/client";
 import { classifyPlaybookFailure } from "@/app/lib/playbook-draft";
 import { humanizeSendError, type HumanizedError } from "@/app/lib/send-error";
+import { validatePlaybookForExport } from "@/supabase/functions/_shared/perfecting-limits";
 import {
   getPlaybookDraft,
   invokeGeneratePlaybook,
@@ -219,6 +220,15 @@ export default function PlaybookDetailPage() {
   // Playbook antigo que ficou em "error" por causa de um envio: a estrutura está pronta.
   const bannerStatus = sendFailure && playbook.status === "error" ? "ready" : playbook.status;
   const busy = playbook.status === "generating" || playbook.status === "exporting";
+  // Mesma checagem que o envio faz no servidor — aqui só para avisar antes do clique.
+  const exportIssues = validatePlaybookForExport({
+    name: playbook.name,
+    callTypes: callTypes.map((ct) => ({
+      name: ct.name,
+      description: ct.description,
+      blocks: ct.playbook_call_blocks.map((b) => ({ name: b.name, description: b.description })),
+    })),
+  });
   const canSend = callTypes.length > 0 && playbook.status !== "generating";
 
   return (
@@ -285,6 +295,25 @@ export default function PlaybookDetailPage() {
             <Button variant="secondary" onPress={openPicker} className="shrink-0">
               Reenviar
             </Button>
+          </div>
+        )}
+
+        {exportIssues.length > 0 && !busy && (
+          <div className="flex flex-col gap-1 rounded-sm border border-amber-200 bg-amber-50 px-4 py-3">
+            <p className="text-sm font-medium text-amber-900">
+              {exportIssues.length === 1
+                ? "1 pendência antes de enviar"
+                : `${exportIssues.length} pendências antes de enviar`}{" "}
+              — a Perfecting recusaria este conteúdo.
+            </p>
+            <ul className="flex list-disc flex-col gap-0.5 pl-5 text-sm leading-relaxed text-amber-800">
+              {exportIssues.slice(0, 6).map((issue, i) => (
+                <li key={i} className="break-words">
+                  {issue.message}
+                </li>
+              ))}
+              {exportIssues.length > 6 && <li>e mais {exportIssues.length - 6}…</li>}
+            </ul>
           </div>
         )}
 

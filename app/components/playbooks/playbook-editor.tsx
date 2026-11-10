@@ -12,7 +12,16 @@ import {
 } from "@heroicons/react/24/outline";
 import { Card } from "@/app/components/ui/card";
 import { ConfirmDialog, type ConfirmConfig } from "@/app/components/ui/confirm-dialog";
-import { blockHasContent } from "@/app/lib/playbook-draft";
+import { blockHasContent, nextDefaultName } from "@/app/lib/playbook-draft";
+import {
+  CALL_BLOCK_DESCRIPTION_MAX,
+  CALL_BLOCK_NAME_MAX,
+  CALL_TYPE_DESCRIPTION_MAX,
+  CALL_TYPE_NAME_MAX,
+  duplicatedCallTypeNames,
+  MAX_CALL_BLOCKS_PER_CALL_TYPE,
+  normalizeName,
+} from "@/supabase/functions/_shared/perfecting-limits";
 import { managerSelectClassNames, selectItemClassNames } from "@/app/lib/select-classnames";
 import {
   createPlaybookCallBlock,
@@ -37,6 +46,21 @@ function toastError(title: string, err: unknown) {
     description: err instanceof Error ? err.message : String(err),
     color: "danger",
   });
+}
+
+/**
+ * Contador "n/255" dos campos que a Perfecting limita. O `maxLength` do campo
+ * impede digitar além do teto; texto que JÁ chegou maior (gerado pela IA) fica
+ * visível e em vermelho até a pessoa cortar — nada é truncado em silêncio.
+ */
+function CharCount({ value, max }: { value: string; max: number }) {
+  const over = value.length > max;
+  return (
+    <span className={`tabular-nums ${over ? "font-medium text-red-600" : "text-slate-400"}`}>
+      {value.length}/{max}
+      {over ? ` — corte ${value.length - max} para poder enviar` : ""}
+    </span>
+  );
 }
 
 /** Listas são editadas como texto, um item por linha. */
@@ -109,6 +133,9 @@ function CallBlockEditor({
           size="sm"
           classNames={{ input: "text-sm font-medium" }}
           aria-label="Nome da subetapa"
+          maxLength={CALL_BLOCK_NAME_MAX}
+          isInvalid={name.length > CALL_BLOCK_NAME_MAX}
+          errorMessage={<CharCount value={name} max={CALL_BLOCK_NAME_MAX} />}
         />
         <div className="flex shrink-0 items-center gap-1">
           <button
@@ -155,6 +182,10 @@ function CallBlockEditor({
             radius="sm"
             variant="bordered"
             minRows={2}
+            maxLength={CALL_BLOCK_DESCRIPTION_MAX}
+            isInvalid={description.length > CALL_BLOCK_DESCRIPTION_MAX}
+            description={<CharCount value={description} max={CALL_BLOCK_DESCRIPTION_MAX} />}
+            errorMessage={<CharCount value={description} max={CALL_BLOCK_DESCRIPTION_MAX} />}
           />
           <Textarea
             label="Objetivo"
@@ -231,6 +262,7 @@ function CallTypeEditor({
   total,
   callContexts,
   methodologies,
+  nameDuplicated,
   onMove,
   onDelete,
   onConfirm,
@@ -241,6 +273,8 @@ function CallTypeEditor({
   total: number;
   callContexts: CallContextType[];
   methodologies: Methodology[];
+  /** Outra etapa do playbook tem este mesmo nome (a Perfecting recusa). */
+  nameDuplicated: boolean;
   onMove: (index: number, dir: -1 | 1) => void;
   onDelete: (callType: PlaybookDraftCallTypeWithBlocks) => void;
   onConfirm: (config: ConfirmConfig) => void;
@@ -249,6 +283,7 @@ function CallTypeEditor({
   const [name, setName] = useState(callType.name);
   const [description, setDescription] = useState(callType.description ?? "");
   const blocks = callType.playbook_call_blocks;
+  const blocksAtLimit = blocks.length >= MAX_CALL_BLOCKS_PER_CALL_TYPE;
 
   async function persist(patch: Parameters<typeof updatePlaybookCallType>[1]) {
     try {
@@ -332,6 +367,15 @@ function CallTypeEditor({
             variant="bordered"
             classNames={{ input: "text-base font-semibold" }}
             aria-label="Nome da etapa"
+            maxLength={CALL_TYPE_NAME_MAX}
+            isInvalid={nameDuplicated || name.length > CALL_TYPE_NAME_MAX}
+            errorMessage={
+              name.length > CALL_TYPE_NAME_MAX ? (
+                <CharCount value={name} max={CALL_TYPE_NAME_MAX} />
+              ) : (
+                "Já existe outra etapa com este nome. A Perfecting recusa nomes repetidos no mesmo playbook — renomeie uma delas antes de enviar."
+              )
+            }
           />
           <Textarea
             value={description}
@@ -346,6 +390,10 @@ function CallTypeEditor({
             minRows={2}
             placeholder="O que acontece nesta etapa e quando ela ocorre."
             aria-label="Descrição da etapa"
+            maxLength={CALL_TYPE_DESCRIPTION_MAX}
+            isInvalid={description.length > CALL_TYPE_DESCRIPTION_MAX}
+            description={<CharCount value={description} max={CALL_TYPE_DESCRIPTION_MAX} />}
+            errorMessage={<CharCount value={description} max={CALL_TYPE_DESCRIPTION_MAX} />}
           />
           <div className="grid gap-3 sm:grid-cols-2">
             <Select
@@ -424,8 +472,8 @@ function CallTypeEditor({
       </div>
 
       <div className="flex flex-col gap-2 pl-8">
-        <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-          Subetapas ({blocks.length})
+        <p className="text-xs font-semibold text-slate-500">
+          Subetapas ({blocks.length}/{MAX_CALL_BLOCKS_PER_CALL_TYPE})
         </p>
         {blocks.map((block, i) => (
           <CallBlockEditor
@@ -438,13 +486,26 @@ function CallTypeEditor({
             onChanged={onChanged}
           />
         ))}
-        <button
-          type="button"
-          onClick={() => void addBlock()}
-          className="inline-flex items-center gap-1.5 self-start rounded-sm px-2 py-1.5 text-sm font-medium text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700"
-        >
-          <PlusIcon className="w-4 h-4" /> Adicionar subetapa
-        </button>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <button
+            type="button"
+            onClick={() => void addBlock()}
+            disabled={blocksAtLimit}
+            className="inline-flex items-center gap-1.5 self-start rounded-sm px-2 py-1.5 text-sm font-medium text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-slate-500"
+          >
+            <PlusIcon className="w-4 h-4" /> Adicionar subetapa
+          </button>
+          {blocks.length > MAX_CALL_BLOCKS_PER_CALL_TYPE ? (
+            <p className="text-xs font-medium text-red-600">
+              A Perfecting aceita até {MAX_CALL_BLOCKS_PER_CALL_TYPE} subetapas por etapa — junte ou
+              exclua {blocks.length - MAX_CALL_BLOCKS_PER_CALL_TYPE} para poder enviar.
+            </p>
+          ) : blocksAtLimit ? (
+            <p className="text-xs text-slate-500">
+              Limite de {MAX_CALL_BLOCKS_PER_CALL_TYPE} subetapas por etapa na Perfecting.
+            </p>
+          ) : null}
+        </div>
       </div>
     </Card>
   );
@@ -516,13 +577,19 @@ export function PlaybookEditor({
       await createPlaybookCallType({
         playbookId,
         position: callTypes.length,
-        name: "Nova etapa",
+        // Nome único: duas "Nova etapa" derrubam o envio (unicidade por playbook).
+        name: nextDefaultName(
+          "Nova etapa",
+          callTypes.map((ct) => ct.name),
+        ),
       });
       onChanged();
     } catch (err) {
       toastError("Falha ao adicionar etapa", err);
     }
   }
+
+  const duplicated = duplicatedCallTypeNames(callTypes.map((ct) => ct.name));
 
   return (
     <div className="flex flex-col gap-4">
@@ -534,6 +601,7 @@ export function PlaybookEditor({
           total={callTypes.length}
           callContexts={callContexts}
           methodologies={methodologies}
+          nameDuplicated={duplicated.has(normalizeName(callType.name))}
           onMove={moveCallType}
           onDelete={requestRemoveCallType}
           onConfirm={setConfirm}

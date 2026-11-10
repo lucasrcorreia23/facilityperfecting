@@ -8,6 +8,7 @@ import {
   loginSuperadmin,
   PerfectingError,
 } from "../_shared/perfecting.ts";
+import { PLAYBOOK_GENERATION_LIMITS_PROMPT } from "../_shared/perfecting-limits.ts";
 
 /**
  * Estrutura o playbook do cliente a partir do material bruto: etapas
@@ -72,7 +73,12 @@ function buildSystem(
   const methList = methodologies
     .map((m) => `- ${m.slug} → ${m.name}${m.application_case ? ` (${m.application_case})` : ""}`)
     .join("\n");
+  // Os limites vão fora da base: `prompt_override` substitui a base inteira. Não há
+  // maxLength no schema (suporte não confirmado) nem truncamento na gravação — se a IA
+  // passar do limite, o editor mostra o contador em vermelho e o envio recusa com a lista.
   return `${base}
+
+${PLAYBOOK_GENERATION_LIMITS_PROMPT}
 
 CALL CONTEXTS DISPONÍVEIS (use exatamente um destes slugs em call_context_slug):
 ${ctxList}
