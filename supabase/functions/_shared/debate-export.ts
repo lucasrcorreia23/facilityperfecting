@@ -21,6 +21,7 @@
  * roleplay já existirem.
  */
 import { findReservedTerms, describeBuyerTextIssue } from "./buyer-text-lint.ts";
+import { caseSetupCreateIssues } from "./case-setup-contract.ts";
 import {
   type DebateDraft,
   debateAvatarCandidates,
@@ -171,6 +172,26 @@ export async function exportDebateDraft(
     throw new PerfectingError(502, "nenhum tipo de objeção na conta de destino");
   }
 
+  // Contrato do `case_setup/create` conferido ANTES da primeira escrita: o FastAPI
+  // recusa o corpo com 422 só no fim, quando oferta, contexto e persona já existem.
+  // O payload é o do envio; só o `context_id` é fictício (o contexto ainda não existe).
+  const voiceV1 = pickVoiceV1(await listVoicesV1(env, token), debate.oponente_genero);
+  const caseSetupArgs = {
+    callContextTypeId,
+    difficulty,
+    difficultyLevelId,
+    methodologyId,
+    voiceV1,
+    userGroupId: draft.connections?.default_user_group_id ?? null,
+  };
+  const contractIssues = caseSetupCreateIssues(debateCaseSetupPayload(debate, { ...caseSetupArgs, contextId: 0 }));
+  if (contractIssues.length > 0) {
+    throw new PerfectingError(422, {
+      message: "O roleplay de debate não seria aceito pela Perfecting: nada foi criado na conta",
+      issues: contractIssues,
+    });
+  }
+
   // Oferta e contexto próprios por debate: as regras moram no contexto, e a persona
   // de um debate não pode entrar no sorteio de outro.
   await setStep("offer");
@@ -190,19 +211,10 @@ export async function exportDebateDraft(
   await noteCreated({ persona_id: personaId, voice });
 
   await setStep("case_setup");
-  const voiceV1 = pickVoiceV1(await listVoicesV1(env, token), debate.oponente_genero);
   const caseSetupId = await createCaseSetupRaw(
     env,
     token,
-    debateCaseSetupPayload(debate, {
-      contextId,
-      callContextTypeId,
-      difficulty,
-      difficultyLevelId,
-      methodologyId,
-      voiceV1,
-      userGroupId: draft.connections?.default_user_group_id ?? null,
-    }),
+    debateCaseSetupPayload(debate, { ...caseSetupArgs, contextId }),
     false,
   );
   await noteCreated({ case_setup_id: caseSetupId });

@@ -351,11 +351,72 @@ export function debateAvatarCandidates(
   );
 }
 
+/** Estilo "Assertivo e Direto" (`GET /data_objects/communication_styles`, HML e PROD). */
+const DEBATE_COMMUNICATION_STYLE_ID = 2;
+const NOT_APPLICABLE = "Não se aplica: debate oral, um contra um.";
+
+/**
+ * `company_profile` do create (`EmployerCompanyOutputSchema`: os 12 campos são
+ * obrigatórios e o FastAPI recusa o corpo inteiro com 422 se faltar um). Debate não tem
+ * empresa: o perfil descreve a obra e o tema, com texto curto e verdadeiro. O motor de
+ * debate não lê este perfil (lê a persona do contexto); `industry_slug` é texto livre
+ * na API (não há catálogo de slugs) e os números vão zerados.
+ */
+export function debateCompanyProfile(d: DebateDraft): Record<string, string | number> {
+  const obra = text(d.obra);
+  const tema = text(d.tema);
+  return {
+    name: obra,
+    industry_slug: "educacao",
+    specialization: `Debate oral sobre o tema "${tema}"`,
+    location: "Brasil",
+    number_of_employees: 0,
+    annual_revenue: 0,
+    annual_revenue_unit: "reais",
+    strategic_focus_areas: `Moção em debate: ${text(d.mocao)}`,
+    technology_portfolio: NOT_APPLICABLE,
+    financial_model: NOT_APPLICABLE,
+    cultural_profile: "Debate respeitoso, com argumentos apoiados em exemplos da obra.",
+    description: `Debate sobre ${obra}, tema "${tema}".`,
+  };
+}
+
+/**
+ * `persona_profile` do create (`PersonasOutputSchema`: os 17 campos são obrigatórios).
+ * A oponente de verdade é a persona do contexto (`debatePersonaPayload`); este perfil
+ * legado só existe porque o create o exige, e repete o que o rascunho já diz dela.
+ */
+export function debatePersonaProfile(d: DebateDraft): Record<string, string | number> {
+  const debater = d.oponente_genero === "feminino" ? "Debatedora" : "Debatedor";
+  const role = text(d.oponente_papel) || `${debater} que ${opponentSideLabel(d)}`;
+  const titles = d.objecoes.map((o) => text(o.titulo)).filter(Boolean);
+  return {
+    name: text(d.oponente_nome),
+    age: d.oponente_idade,
+    gender_id: genderIdFor(d.oponente_genero),
+    job_title: role,
+    department: "Debate",
+    career_path: NOT_APPLICABLE,
+    years_in_current_position: 0,
+    previous_professional_experience: NOT_APPLICABLE,
+    communication_style_id: DEBATE_COMMUNICATION_STYLE_ID,
+    hobbies_and_interests: `Leitura e debate sobre ${text(d.obra)}.`,
+    description: text(d.oponente_descricao),
+    point_of_view: `${text(d.oponente_nome)} ${opponentSideLabel(d)}: ${text(d.mocao)}`,
+    decision_making_role_description: role,
+    main_current_problems_frustrations_and_evidence: NOT_APPLICABLE,
+    main_desires: `Defender o seu lado no tema "${text(d.tema)}" com exemplos da obra.`,
+    main_objections: titles.length > 0 ? titles.join("; ") : "Contra-argumentos sobre o tema do debate.",
+    main_concerns: NOT_APPLICABLE,
+  };
+}
+
 /**
  * Payload do `case_setup/create`. Vai com `?generate_case_prompt=false`: o prompt de
  * debate só existe depois do motor 3, da persona e do conteúdo por etapa, e quem o
  * monta é o `unitary_cycle/update_case_prompt` no fim do envio. Os campos de venda
- * vão vazios porque o create os exige e o motor de debate não os lê.
+ * vão vazios porque o create os exige e o motor de debate não os lê; os dois perfis
+ * vão completos porque o create recusa (422) perfil com campo faltando.
  */
 export function debateCaseSetupPayload(
   d: DebateDraft,
@@ -393,18 +454,10 @@ export function debateCaseSetupPayload(
     salesperson_undesired_behaviors: [],
     salesperson_success_criteria: cleanList(d.criterios_sucesso),
     salesperson_evaluation_rubric_criteria: [],
-    company_profile: { name: text(d.obra), description: `Debate sobre ${text(d.obra)}, tema "${text(d.tema)}".` },
-    persona_profile: {
-      name: text(d.oponente_nome),
-      age: d.oponente_idade,
-      gender_id: genderIdFor(d.oponente_genero),
-      job_title: text(d.oponente_papel),
-      description: text(d.oponente_descricao),
-    },
+    company_profile: debateCompanyProfile(d),
+    persona_profile: debatePersonaProfile(d),
     persona_voice_id: args.voiceV1?.id ?? 1,
     persona_voice_model_id: args.voiceV1?.voice_model_id ?? null,
-    successful_sale_dialogues_examples: [],
-    unsuccessful_sale_dialogues_examples: [],
     ...(args.userGroupId != null ? { user_group_id: args.userGroupId } : {}),
   };
 }
@@ -583,6 +636,11 @@ export function debateBuyerTexts(d: DebateDraft): Array<{ onde: string; text: st
     { onde: "personalidade da oponente", text: d.oponente_personalidade },
     { onde: "descrição da oponente", text: d.oponente_descricao },
     { onde: "o que a oponente já sabe", text: d.conhecimento_previo },
+    // Entram nos perfis do `case_setup/create` (`debateCompanyProfile`/`debatePersonaProfile`).
+    { onde: "obra", text: d.obra },
+    { onde: "tema", text: d.tema },
+    { onde: "moção", text: d.mocao },
+    { onde: "papel da oponente", text: d.oponente_papel },
   ];
   for (const e of d.etapas) {
     for (const r of e.regras) out.push({ onde: `etapa ${e.ordem}: ${r.titulo}`, text: r.texto });

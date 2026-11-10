@@ -19,6 +19,7 @@ import {
   sortSteps,
 } from "./debate.ts";
 import { findReservedTerms } from "./buyer-text-lint.ts";
+import { caseSetupCreateIssues } from "./case-setup-contract.ts";
 
 const STEPS = [
   { id: 1304, name: "Oposição", order: 3 },
@@ -136,6 +137,53 @@ describe("payloads da Perfecting", () => {
       buyer_agent_first_messages: ["Oi, etapa 1. Posso começar?"],
     });
     expect(p).not.toHaveProperty("user_group_id");
+    // Fora do Input do create em PROD.
+    expect(p).not.toHaveProperty("successful_sale_dialogues_examples");
+    expect(p).not.toHaveProperty("unsuccessful_sale_dialogues_examples");
+  });
+
+  const CREATE_ARGS = {
+    contextId: 198, callContextTypeId: 11, difficulty: "medium" as const, difficultyLevelId: 2,
+    methodologyId: 5159, voiceV1: { id: 1, gender_id: 2, voice_model_id: "abc" }, userGroupId: null,
+  };
+
+  it("case_setup passa no contrato do create de PROD (perfis completos)", () => {
+    const p = debateCaseSetupPayload(fullDraft(), CREATE_ARGS);
+    expect(caseSetupCreateIssues(p)).toEqual([]);
+    expect(Object.keys(p.company_profile as object)).toHaveLength(12);
+    expect(Object.keys(p.persona_profile as object)).toHaveLength(17);
+    expect(p.persona_profile).toMatchObject({
+      name: "Manuela Rocha", age: 14, gender_id: 2, communication_style_id: 2,
+      job_title: "Debatedora que sustenta a moção",
+      point_of_view: `Manuela Rocha sustenta a moção: ${ANCHORS.mocao}`,
+      main_objections: "Sem exemplo",
+    });
+    expect(p.company_profile).toMatchObject({ name: ANCHORS.obra, number_of_employees: 0, annual_revenue: 0 });
+  });
+
+  it("case_setup passa no contrato com rascunho mínimo, sem voz e sem contra-argumento", () => {
+    const d = { ...fullDraft(), oponente_papel: "", objecoes: [], oponente_genero: "masculino" as const };
+    const p = debateCaseSetupPayload(d, { ...CREATE_ARGS, voiceV1: null, userGroupId: 7 });
+    expect(caseSetupCreateIssues(p)).toEqual([]);
+    expect(p.persona_profile).toMatchObject({ job_title: "Debatedor que sustenta a moção", gender_id: 1 });
+    expect(p).toMatchObject({ persona_voice_model_id: null, user_group_id: 7 });
+  });
+
+  it("texto fixo dos perfis não tem termo que o lint do comprador barra", () => {
+    const p = debateCaseSetupPayload(fullDraft(), CREATE_ARGS);
+    const texts = [p.company_profile, p.persona_profile].flatMap((profile) =>
+      Object.entries(profile as Record<string, unknown>)
+        .filter(([, v]) => typeof v === "string")
+        .map(([k, v]) => ({ onde: k, text: v as string })),
+    );
+    expect(texts.length).toBeGreaterThan(20);
+    expect(findReservedTerms(texts)).toEqual([]);
+  });
+
+  it("o que o rascunho põe nos perfis passa pelo lint (obra, tema, moção, papel)", () => {
+    const d = { ...fullDraft(), oponente_papel: "Debatedora do roleplay", tema: "A rubrica da culpa" };
+    const erros = findReservedTerms(debateBuyerTexts(d)).filter((i) => i.nivel === "erro").map((i) => i.onde);
+    expect(erros).toEqual(expect.arrayContaining(["tema", "papel da oponente"]));
   });
 
   it("conteúdo por etapa liga pela ORDEM ao id do destino", () => {
