@@ -440,6 +440,46 @@ export default function BibliotecaPage() {
     }
   }
 
+  /** Adicionar personas também escreve na conta: confirma nomeando conta e quantidade. */
+  function askAddPersonas() {
+    const d = drafts.find((x) => x.id === personaDraftId);
+    if (!d) return;
+    const what = countLabel(Number(addQuantity), "persona", "personas");
+    setConfirm({
+      title: `Criar ${what} nesta conta?`,
+      message: (
+        <span className="flex flex-col gap-3">
+          <DestinationSummary destinations={[{ connection: d.connection }]} />
+          <span>
+            Serão criadas <b>{what}</b> no contexto de <b>{d.offer?.offer_name ?? d.title ?? "este envio"}</b>,
+            com conteúdo nos roleplays que já existem. Leva alguns minutos.
+          </span>
+        </span>
+      ),
+      confirmLabel: isProduction(d.connection) ? "Criar em produção" : "Criar personas",
+      onConfirm: () => void handleAddPersonas(),
+    });
+  }
+
+  /** Completar retoma a geração de um roleplay que já está na conta — confirma o destino. */
+  function askCompleteDraft(d: DraftRow) {
+    setConfirm({
+      title: "Completar o roleplay nesta conta?",
+      message: (
+        <span className="flex flex-col gap-3">
+          <DestinationSummary destinations={[{ connection: d.connection }]} />
+          <span>
+            O roleplay <b>{d.offer?.offer_name ?? d.title ?? "sem nome"}</b> já existe na conta. Completar
+            gera o que faltou ({(d.completion_run?.missing ?? []).join(", ") || "etapas pendentes"}) e
+            atualiza o roleplay que está lá.
+          </span>
+        </span>
+      ),
+      confirmLabel: isProduction(d.connection) ? "Completar em produção" : "Completar",
+      onConfirm: () => void completeDraft(d.id),
+    });
+  }
+
   async function handleAddPersonas() {
     if (!personaDraftId) return;
     setAddingPersonas(true);
@@ -681,7 +721,7 @@ export default function BibliotecaPage() {
                         </span>
                         <button
                           type="button"
-                          onClick={() => void completeDraft(d.id)}
+                          onClick={() => askCompleteDraft(d)}
                           disabled={completing.has(d.id)}
                           className="underline text-slate-500 hover:text-slate-700 disabled:opacity-50"
                         >
@@ -881,7 +921,7 @@ export default function BibliotecaPage() {
             <Button variant="secondary" onPress={() => setPersonaDraftId(null)}>
               Fechar
             </Button>
-            <Button onPress={handleAddPersonas} isLoading={addingPersonas}>
+            <Button onPress={askAddPersonas} isLoading={addingPersonas}>
               Adicionar {addQuantity} persona{Number(addQuantity) > 1 ? "s" : ""}
             </Button>
           </ModalFooter>

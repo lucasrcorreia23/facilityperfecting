@@ -291,6 +291,7 @@ export default function PlaybookDetailPage() {
   const callTypes = playbook.playbook_call_types;
   // Erro de envio ≠ erro de geração: só o segundo oferece "Retomar geração".
   const failure = classifyPlaybookFailure(playbook);
+  const emptyState = playbookEmptyState(playbook, callTypes.length);
   const sendFailure = failure?.kind === "send" ? humanizeSendError(failure.error) : null;
   const errorMessage = failure?.kind === "generation" ? failure.message : null;
   // Playbook antigo que ficou em "error" por causa de um envio: a estrutura está pronta.
@@ -306,7 +307,6 @@ export default function PlaybookDetailPage() {
     })),
   });
   const canSend = callTypes.length > 0 && playbook.status !== "generating";
-  const emptyState = playbookEmptyState(playbook, callTypes.length);
 
   return (
     <div className="flex flex-col gap-0">

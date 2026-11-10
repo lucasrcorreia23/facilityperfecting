@@ -34,7 +34,7 @@ export function SaveIndicator({ tracker }: { tracker: SaveTracker }) {
           <button
             type="button"
             onClick={() => void tracker.retryFailed()}
-            className="underline underline-offset-2 hover:text-red-900"
+            className="inline-flex min-h-[44px] items-center underline underline-offset-2 hover:text-red-900 sm:min-h-0"
           >
             Tentar salvar de novo
           </button>
