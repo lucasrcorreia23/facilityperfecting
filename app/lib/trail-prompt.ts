@@ -46,7 +46,29 @@ REGRAS:
 - Use os cenários priorizados pelo gestor de enablement (formulário de calibração) como filtro adicional quando presentes na análise.
 - Linguagem comercial B2B. Responda SEMPRE no formato estruturado pedido (JSON).`;
 
-/** Override salvo no navegador: JSON { analysis?: string; plan?: string }. */
+/** Avisa a própria aba: o evento "storage" do navegador só dispara nas OUTRAS abas. */
+const TRAIL_PROMPT_EVENT = "trail-prompt-change";
+
+/** Para `useSyncExternalStore`: a tela mostra quando há prompt personalizado ativo. */
+export function subscribeTrailPromptOverride(onChange: () => void) {
+  window.addEventListener("storage", onChange);
+  window.addEventListener(TRAIL_PROMPT_EVENT, onChange);
+  return () => {
+    window.removeEventListener("storage", onChange);
+    window.removeEventListener(TRAIL_PROMPT_EVENT, onChange);
+  };
+}
+
+export function hasTrailPromptOverride(): boolean {
+  const override = loadTrailPromptOverride();
+  return Boolean(override.analysis || override.plan);
+}
+
+/**
+ * Override salvo SÓ neste navegador: JSON { analysis?: string; plan?: string }.
+ * Não vai para o banco nem para outros computadores — a tela diz isso. O que
+ * fica gravado é a cópia usada em cada plano (`trail_plans.prompt_override`).
+ */
 export interface TrailPromptOverride {
   analysis?: string;
   plan?: string;
@@ -75,13 +97,14 @@ export function saveTrailPromptOverride(override: TrailPromptOverride) {
   const isDefaultPlan = !plan || plan === DEFAULT_TRAIL_PLAN_PROMPT;
   if (isDefaultAnalysis && isDefaultPlan) {
     window.localStorage.removeItem(TRAIL_PROMPT_STORAGE_KEY);
-    return;
+  } else {
+    window.localStorage.setItem(
+      TRAIL_PROMPT_STORAGE_KEY,
+      JSON.stringify({
+        ...(isDefaultAnalysis ? {} : { analysis }),
+        ...(isDefaultPlan ? {} : { plan }),
+      }),
+    );
   }
-  window.localStorage.setItem(
-    TRAIL_PROMPT_STORAGE_KEY,
-    JSON.stringify({
-      ...(isDefaultAnalysis ? {} : { analysis }),
-      ...(isDefaultPlan ? {} : { plan }),
-    }),
-  );
+  window.dispatchEvent(new Event(TRAIL_PROMPT_EVENT));
 }

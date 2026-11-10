@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useRef, useState, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
 import {
   Input,
@@ -31,8 +31,10 @@ import {
 import {
   DEFAULT_TRAIL_ANALYSIS_PROMPT,
   DEFAULT_TRAIL_PLAN_PROMPT,
+  hasTrailPromptOverride,
   loadTrailPromptOverride,
   saveTrailPromptOverride,
+  subscribeTrailPromptOverride,
 } from "@/app/lib/trail-prompt";
 import type { TrailInputFile } from "@/app/lib/types";
 
@@ -58,6 +60,12 @@ export default function NovoPlanoPage() {
   const [progress, setProgress] = useState<string | null>(null);
 
   const [promptModalOpen, setPromptModalOpen] = useState(false);
+  /** Há prompt personalizado neste navegador — ele entra em todo plano criado daqui. */
+  const customPrompt = useSyncExternalStore(
+    subscribeTrailPromptOverride,
+    hasTrailPromptOverride,
+    () => false,
+  );
   const [analysisDraft, setAnalysisDraft] = useState(DEFAULT_TRAIL_ANALYSIS_PROMPT);
   const [planDraft, setPlanDraft] = useState(DEFAULT_TRAIL_PLAN_PROMPT);
 
@@ -114,7 +122,19 @@ export default function NovoPlanoPage() {
   function savePrompt() {
     saveTrailPromptOverride({ analysis: analysisDraft, plan: planDraft });
     setPromptModalOpen(false);
-    addToast({ title: "Prompt salvo neste navegador", color: "success" });
+    const custom = hasTrailPromptOverride();
+    addToast({
+      title: custom ? "Prompt personalizado salvo só neste navegador" : "Prompts de volta ao padrão",
+      description: custom
+        ? "Vale para os planos criados daqui. Em outro computador ou navegador, o padrão continua valendo."
+        : undefined,
+      color: "success",
+    });
+  }
+
+  function restoreDefaultPrompts() {
+    setAnalysisDraft(DEFAULT_TRAIL_ANALYSIS_PROMPT);
+    setPlanDraft(DEFAULT_TRAIL_PLAN_PROMPT);
   }
 
   async function submit() {
@@ -260,9 +280,10 @@ export default function NovoPlanoPage() {
               type="button"
               onClick={openPromptEditor}
               title="Editar prompts de geração"
-              className="inline-flex items-center gap-1.5 rounded-sm px-2 py-1 text-xs font-medium text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700"
+              className="inline-flex min-h-[44px] items-center gap-1.5 rounded-sm px-2 py-1 text-xs font-medium text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700 sm:min-h-0"
             >
-              <PencilSquareIcon className="w-3.5 h-3.5" /> Editar prompts
+              <PencilSquareIcon className="w-3.5 h-3.5" />{" "}
+              {customPrompt ? "Prompt personalizado (só neste navegador)" : "Editar prompts"}
             </button>
           </div>
           <p className="text-sm text-slate-500">
@@ -352,6 +373,11 @@ export default function NovoPlanoPage() {
         <ModalContent>
           <ModalHeader>Editar prompts de geração</ModalHeader>
           <ModalBody>
+            <p className="rounded-sm bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              O prompt personalizado fica guardado <b>só neste navegador</b>: não aparece em outro
+              computador nem para outras pessoas da equipe, e some se os dados do navegador forem
+              limpos. Cada plano criado guarda a cópia do prompt que usou.
+            </p>
             <p className="text-sm text-slate-500">
               O app adiciona automaticamente a base de metodologia, os dados do cliente, a lista de
               tipos de chamada e o formato de saída — você não precisa incluí-los aqui. As variáveis{" "}
@@ -385,10 +411,7 @@ export default function NovoPlanoPage() {
           <ModalFooter className="justify-between">
             <button
               type="button"
-              onClick={() => {
-                setAnalysisDraft(DEFAULT_TRAIL_ANALYSIS_PROMPT);
-                setPlanDraft(DEFAULT_TRAIL_PLAN_PROMPT);
-              }}
+              onClick={restoreDefaultPrompts}
               className="inline-flex items-center gap-1.5 rounded-sm px-3 py-2 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-100"
             >
               <ArrowPathIcon className="w-4 h-4" /> Restaurar padrão
@@ -397,7 +420,7 @@ export default function NovoPlanoPage() {
               <Button variant="secondary" onPress={() => setPromptModalOpen(false)}>
                 Cancelar
               </Button>
-              <Button onPress={savePrompt}>Salvar prompts</Button>
+              <Button onPress={savePrompt}>Salvar neste navegador</Button>
             </div>
           </ModalFooter>
         </ModalContent>
