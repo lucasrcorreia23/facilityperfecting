@@ -11,17 +11,59 @@ import { PageHeader } from "@/app/components/ui/page-header";
 import { EmptyState } from "@/app/components/ui/empty-state";
 import { LoadingView } from "@/app/components/ui/loading-view";
 import { ConfirmDialog, type ConfirmConfig } from "@/app/components/ui/confirm-dialog";
-import { deletePlaybookDraft, listPlaybookDrafts } from "@/app/lib/db";
-import type { PlaybookDraft, PlaybookDraftStatus } from "@/app/lib/types";
+import { EnvironmentBadge } from "@/app/components/ui/environment-badge";
+import { deletePlaybookDraft, describeFunctionError, listPlaybookDrafts } from "@/app/lib/db";
+import { connectionName } from "@/app/lib/connection-label";
+import { playbookListStatus, type PlaybookListTone } from "@/app/lib/playbook-draft";
+import { useConnections } from "@/app/lib/use-connections";
+import type { Connection, PlaybookDraft } from "@/app/lib/types";
 
-const STATUS_CHIP: Record<PlaybookDraftStatus, { label: string; cls: string }> = {
-  draft: { label: "Rascunho", cls: "bg-slate-100 text-slate-600" },
-  generating: { label: "Estruturando…", cls: "bg-blue-50 text-blue-700" },
-  ready: { label: "Pronto", cls: "bg-green-50 text-green-700" },
-  exporting: { label: "Enviando…", cls: "bg-blue-50 text-blue-700" },
-  exported: { label: "Enviado", cls: "bg-green-50 text-green-700" },
-  error: { label: "Erro", cls: "bg-red-50 text-red-700" },
+const TONE_CLS: Record<PlaybookListTone, string> = {
+  neutral: "bg-slate-100 text-slate-600",
+  running: "bg-blue-50 text-blue-700",
+  ok: "bg-green-50 text-green-700",
+  error: "bg-red-50 text-red-700",
 };
+
+function StatusChip({ playbook }: { playbook: PlaybookDraft }) {
+  const { label, tone } = playbookListStatus(playbook);
+  return (
+    <span className={`inline-flex rounded-sm px-2 py-0.5 text-xs font-medium ${TONE_CLS[tone]}`}>
+      {label}
+    </span>
+  );
+}
+
+/** Para qual conta o playbook foi (ou tentou ser) enviado. */
+function Destination({
+  playbook,
+  connections,
+}: {
+  playbook: PlaybookDraft;
+  connections: Connection[] | null;
+}) {
+  const connectionId = playbook.export_run?.connection_id;
+  if (!connectionId) return <span className="text-slate-400">Ainda não enviado</span>;
+  const connection = connections?.find((c) => c.id === connectionId) ?? null;
+  const remoteId = playbook.export_run?.perfecting_playbook_id;
+  return (
+    <span className="flex flex-col gap-1">
+      <span className="flex flex-wrap items-center gap-2">
+        {connection && <EnvironmentBadge environment={connection.environment} />}
+        <span className="text-slate-700">
+          {connection
+            ? connectionName(connection)
+            : connections === null
+              ? "Carregando conta…"
+              : "Conta removida"}
+        </span>
+      </span>
+      <span className="text-xs font-normal text-slate-500">
+        {remoteId != null ? `Playbook ${remoteId} na conta` : "Envio não concluído"}
+      </span>
+    </span>
+  );
+}
 
 export default function PlaybooksPage() {
   const router = useRouter();
@@ -29,9 +71,19 @@ export default function PlaybooksPage() {
   const [loading, setLoading] = useState(true);
   const [confirm, setConfirm] = useState<ConfirmConfig | null>(null);
 
+  const [loadError, setLoadError] = useState<string | null>(null);
+  // Só para dizer a conta de cada playbook enviado — falhar aqui não derruba a lista.
+  const { connections } = useConnections();
+
   const refresh = useCallback(async () => {
-    setPlaybooks(await listPlaybookDrafts());
-    setLoading(false);
+    try {
+      setPlaybooks(await listPlaybookDrafts());
+      setLoadError(null);
+    } catch (err) {
+      setLoadError(describeFunctionError(err));
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => {
@@ -50,6 +102,7 @@ export default function PlaybooksPage() {
         </>
       ),
       confirmLabel: "Excluir",
+      tone: "danger",
       onConfirm: () => {
         void (async () => {
           try {
@@ -85,6 +138,16 @@ export default function PlaybooksPage() {
 
       {loading ? (
         <LoadingView label="Carregando playbooks…" />
+      ) : loadError && playbooks.length === 0 ? (
+        <EmptyState
+          title="Não foi possível carregar os playbooks"
+          description={loadError}
+          action={
+            <Button variant="secondary" onPress={() => void refresh()}>
+              Tentar de novo
+            </Button>
+          }
+        />
       ) : playbooks.length === 0 ? (
         <EmptyState
           title="Nenhum playbook ainda"
@@ -99,20 +162,63 @@ export default function PlaybooksPage() {
           }
         />
       ) : (
-        <Card className="overflow-hidden">
-          <table className="w-full">
-            <thead className="bg-slate-50 border-b border-slate-200">
-              <tr className="text-xs font-semibold uppercase tracking-wider text-slate-600">
-                <th className="px-4 py-2.5 text-left">Playbook</th>
-                <th className="px-4 py-2.5 text-left">Status</th>
-                <th className="hidden px-4 py-2.5 text-left sm:table-cell">Criado em</th>
-                <th className="px-4 py-2.5 text-right">Ações</th>
-              </tr>
-            </thead>
-            <tbody>
-              {playbooks.map((playbook) => {
-                const chip = STATUS_CHIP[playbook.status] ?? STATUS_CHIP.draft;
-                return (
+        <>
+          {/* Abaixo de lg, um cartão por playbook: a tabela não cabe com a coluna da conta. */}
+          <ul className="flex flex-col gap-3 lg:hidden">
+            {playbooks.map((playbook) => (
+              <li key={playbook.id}>
+                <Card className="flex flex-col gap-3 p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <Link
+                      href={`/playbooks/${playbook.id}`}
+                      className="min-w-0 break-words text-sm font-medium text-slate-800 hover:text-[var(--primary)] hover:underline"
+                    >
+                      {playbook.name}
+                    </Link>
+                    <StatusChip playbook={playbook} />
+                  </div>
+                  <div className="text-sm">
+                    <Destination playbook={playbook} connections={connections} />
+                  </div>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs text-slate-500">
+                      Criado em {new Date(playbook.created_at).toLocaleDateString("pt-BR")}
+                    </span>
+                    <div className="flex items-center gap-1">
+                      <Link
+                        href={`/playbooks/${playbook.id}`}
+                        className="inline-flex min-h-[44px] items-center rounded-sm px-3 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-100"
+                      >
+                        Abrir
+                      </Link>
+                      <button
+                        type="button"
+                        onClick={() => askDelete(playbook)}
+                        aria-label={`Excluir o playbook ${playbook.name}`}
+                        className="inline-flex h-11 w-11 items-center justify-center rounded-sm text-slate-400 transition-colors hover:bg-red-50 hover:text-red-600"
+                      >
+                        <TrashIcon className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                </Card>
+              </li>
+            ))}
+          </ul>
+
+          <Card className="hidden overflow-x-auto lg:block">
+            <table className="w-full">
+              <thead className="bg-slate-50 border-b border-slate-200">
+                <tr className="text-xs font-semibold text-slate-600">
+                  <th className="px-4 py-2.5 text-left">Playbook</th>
+                  <th className="px-4 py-2.5 text-left">Status</th>
+                  <th className="px-4 py-2.5 text-left">Conta</th>
+                  <th className="px-4 py-2.5 text-left">Criado em</th>
+                  <th className="px-4 py-2.5 text-right">Ações</th>
+                </tr>
+              </thead>
+              <tbody>
+                {playbooks.map((playbook) => (
                   <tr
                     key={playbook.id}
                     className="border-b border-slate-100 text-sm font-medium text-slate-800 last:border-0"
@@ -126,13 +232,12 @@ export default function PlaybooksPage() {
                       </Link>
                     </td>
                     <td className="px-4 py-3">
-                      <span
-                        className={`inline-flex rounded-sm px-2 py-0.5 text-xs font-medium ${chip.cls}`}
-                      >
-                        {chip.label}
-                      </span>
+                      <StatusChip playbook={playbook} />
                     </td>
-                    <td className="hidden px-4 py-3 text-slate-600 sm:table-cell">
+                    <td className="px-4 py-3">
+                      <Destination playbook={playbook} connections={connections} />
+                    </td>
+                    <td className="px-4 py-3 text-slate-600">
                       {new Date(playbook.created_at).toLocaleDateString("pt-BR")}
                     </td>
                     <td className="px-4 py-3">
@@ -147,6 +252,7 @@ export default function PlaybooksPage() {
                           type="button"
                           onClick={() => askDelete(playbook)}
                           title="Excluir playbook"
+                          aria-label={`Excluir o playbook ${playbook.name}`}
                           className="rounded-sm p-1.5 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-600"
                         >
                           <TrashIcon className="w-4 h-4" />
@@ -154,11 +260,11 @@ export default function PlaybooksPage() {
                       </div>
                     </td>
                   </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </Card>
+                ))}
+              </tbody>
+            </table>
+          </Card>
+        </>
       )}
 
       <ConfirmDialog config={confirm} onClose={() => setConfirm(null)} />

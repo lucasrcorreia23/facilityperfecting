@@ -68,3 +68,54 @@ export function nextDefaultName(base: string, existing: string[]): string {
     if (!taken.has(normalize(candidate))) return candidate;
   }
 }
+
+/**
+ * Por que a tela do playbook não tem etapas — cada caso pede um texto e uma
+ * ação diferentes. Antes, os três diziam "a estruturação não chegou a rodar".
+ *
+ * - `never_ran`: rascunho que nunca foi estruturado.
+ * - `generation_failed`: a estruturação rodou e falhou (o erro está no aviso).
+ * - `no_steps`: estruturou (ou foi editado) e ficou sem etapas — dá para
+ *   adicionar à mão; regerar é opção, não a única saída.
+ */
+export type PlaybookEmptyState = "never_ran" | "generation_failed" | "no_steps";
+
+export function playbookEmptyState(
+  playbook: PlaybookErrorSource,
+  callTypeCount: number,
+): PlaybookEmptyState | null {
+  if (callTypeCount > 0) return null;
+  if (playbook.status === "generating" || playbook.status === "exporting") return null;
+  if (classifyPlaybookFailure(playbook)?.kind === "generation") return "generation_failed";
+  if (playbook.status === "draft") return "never_ran";
+  return "no_steps";
+}
+
+export type PlaybookListTone = "neutral" | "running" | "ok" | "error";
+
+const LIST_STATUS: Record<string, { label: string; tone: PlaybookListTone }> = {
+  draft: { label: "Rascunho", tone: "neutral" },
+  generating: { label: "Estruturando…", tone: "running" },
+  ready: { label: "Pronto para enviar", tone: "ok" },
+  exporting: { label: "Enviando…", tone: "running" },
+  exported: { label: "Enviado", tone: "ok" },
+  error: { label: "Erro", tone: "error" },
+};
+
+/**
+ * Status de uma linha da lista de playbooks. Um envio que falha devolve o
+ * playbook a "ready" — sem olhar `export_run.error`, a lista dizia "Pronto" e
+ * escondia a falha. Erro de geração e de envio têm rótulos diferentes porque a
+ * saída é diferente (regerar × corrigir e reenviar).
+ */
+export function playbookListStatus(playbook: PlaybookErrorSource): {
+  label: string;
+  tone: PlaybookListTone;
+} {
+  if (playbook.status !== "generating" && playbook.status !== "exporting") {
+    const failure = classifyPlaybookFailure(playbook);
+    if (failure?.kind === "send") return { label: "Erro no envio", tone: "error" };
+    if (failure?.kind === "generation") return { label: "Erro na geração", tone: "error" };
+  }
+  return LIST_STATUS[playbook.status] ?? LIST_STATUS.draft;
+}

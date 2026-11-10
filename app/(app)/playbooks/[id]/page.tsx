@@ -6,6 +6,7 @@ import { Modal, ModalBody, ModalContent, ModalFooter, ModalHeader, addToast } fr
 import { PaperAirplaneIcon, XCircleIcon } from "@heroicons/react/24/outline";
 import { Button } from "@/app/components/ui/button";
 import { PageHeader } from "@/app/components/ui/page-header";
+import { EmptyState } from "@/app/components/ui/empty-state";
 import { LoadingView } from "@/app/components/ui/loading-view";
 import { ConfirmDialog, type ConfirmConfig } from "@/app/components/ui/confirm-dialog";
 import { SendStatusModal, type SendStatus } from "@/app/components/ui/send-status-modal";
@@ -16,10 +17,11 @@ import { DestinationSummary } from "@/app/components/ui/destination-summary";
 import { useConnections } from "@/app/lib/use-connections";
 import { countLabel, isProduction } from "@/app/lib/connection-label";
 import { createClient } from "@/app/lib/supabase/client";
-import { classifyPlaybookFailure } from "@/app/lib/playbook-draft";
+import { classifyPlaybookFailure, playbookEmptyState } from "@/app/lib/playbook-draft";
 import { humanizeSendError, type HumanizedError } from "@/app/lib/send-error";
 import { validatePlaybookForExport } from "@/supabase/functions/_shared/perfecting-limits";
 import {
+  describeFunctionError,
   getPlaybookDraft,
   invokeGeneratePlaybook,
   invokeSendPlaybook,
@@ -55,17 +57,43 @@ export default function PlaybookDetailPage() {
   const [sendStatus, setSendStatus] = useState<SendStatus>("sending");
   const [sendError, setSendError] = useState<HumanizedError | null>(null);
 
+  const [loadError, setLoadError] = useState<string | null>(null);
+
   const refresh = useCallback(async () => {
-    setPlaybook(await getPlaybookDraft(id));
-    setLoading(false);
+    try {
+      setPlaybook(await getPlaybookDraft(id));
+      setLoadError(null);
+    } catch (err) {
+      // Sem isto a tela ficava em "Carregando playbook…" para sempre.
+      setLoadError(describeFunctionError(err));
+    } finally {
+      setLoading(false);
+    }
   }, [id]);
 
   useEffect(() => {
     void (async () => {
       await refresh();
     })();
-    listCallContexts().then(setCallContexts).catch(() => {});
-    listMethodologies().then(setMethodologies).catch(() => {});
+    // Sem estes catálogos os seletores de cada etapa ficam vazios — a tela diz por quê.
+    listCallContexts()
+      .then(setCallContexts)
+      .catch((err) =>
+        addToast({
+          title: "Não foi possível carregar os tipos de chamada",
+          description: `O seletor “Tipo de chamada” das etapas fica vazio. ${describeFunctionError(err)}`,
+          color: "warning",
+        }),
+      );
+    listMethodologies()
+      .then(setMethodologies)
+      .catch((err) =>
+        addToast({
+          title: "Não foi possível carregar as metodologias",
+          description: `O seletor “Metodologia” das etapas fica vazio. ${describeFunctionError(err)}`,
+          color: "warning",
+        }),
+      );
 
     const supabase = createClient();
     const channel = supabase
@@ -216,6 +244,22 @@ export default function PlaybookDetailPage() {
     });
   }
 
+  if (!playbook && loadError) {
+    return (
+      <div className="flex flex-col gap-0">
+        <PageHeader backHref="/playbooks" title="Não foi possível abrir o playbook" />
+        <EmptyState
+          title="A leitura do playbook falhou"
+          description={loadError}
+          action={
+            <Button variant="secondary" onPress={() => void refresh()}>
+              Tentar de novo
+            </Button>
+          }
+        />
+      </div>
+    );
+  }
   if (loading || !playbook) return <LoadingView label="Carregando playbook…" />;
 
   const callTypes = playbook.playbook_call_types;
@@ -236,6 +280,7 @@ export default function PlaybookDetailPage() {
     })),
   });
   const canSend = callTypes.length > 0 && playbook.status !== "generating";
+  const emptyState = playbookEmptyState(playbook, callTypes.length);
 
   return (
     <div className="flex flex-col gap-0">
@@ -331,13 +376,49 @@ export default function PlaybookDetailPage() {
         )}
 
         {callTypes.length === 0 && playbook.status !== "generating" ? (
-          <div className="flex flex-col items-center gap-4 rounded-sm border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center">
-            <p className="text-sm text-slate-600">
-              Nenhuma etapa ainda — a estruturação não chegou a rodar.
-            </p>
-            <Button variant="secondary" onPress={retryGeneration} isLoading={retrying}>
-              Retomar geração
-            </Button>
+          <div className="flex flex-col gap-4">
+            <div className="flex flex-col items-center gap-4 rounded-sm border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center">
+              {emptyState === "never_ran" ? (
+                <>
+                  <p className="max-w-md text-sm text-slate-600">
+                    Este playbook ainda não foi estruturado: a IA não leu o material para montar
+                    as etapas.
+                  </p>
+                  <Button onPress={retryGeneration} isLoading={retrying}>
+                    Estruturar playbook
+                  </Button>
+                </>
+              ) : emptyState === "generation_failed" ? (
+                <>
+                  <p className="max-w-md text-sm text-slate-600">
+                    A estruturação falhou antes de criar as etapas — o motivo está no aviso acima.
+                    O material enviado continua salvo.
+                  </p>
+                  <Button variant="secondary" onPress={retryGeneration} isLoading={retrying}>
+                    Tentar estruturar de novo
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <p className="max-w-md text-sm text-slate-600">
+                    Este playbook está sem etapas. Adicione à mão, logo abaixo, ou estruture de
+                    novo a partir do material.
+                  </p>
+                  <Button variant="secondary" onPress={retryGeneration} isLoading={retrying}>
+                    Estruturar de novo
+                  </Button>
+                </>
+              )}
+            </div>
+            {emptyState !== "never_ran" && emptyState !== "generation_failed" && (
+              <PlaybookEditor
+                playbookId={playbook.id}
+                callTypes={callTypes}
+                callContexts={callContexts}
+                methodologies={methodologies}
+                onChanged={refresh}
+              />
+            )}
           </div>
         ) : (
           <PlaybookEditor

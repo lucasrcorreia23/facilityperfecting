@@ -46,6 +46,7 @@ import { GuardrailListEditor } from "@/app/components/content/guardrail-list-edi
 import {
   checkPlaybookCoherence,
   createDraftFromText,
+  describeFunctionError,
   getGeneratorInfo,
   invokeExport,
   getDefaultMethodologySlug,
@@ -268,14 +269,25 @@ export default function CriacaoPage() {
   }
 
   useEffect(() => {
-    listMethodologies().then(setMethodologies).catch(() => {});
-    getDefaultMethodologySlug().then(setDefaultMethodologySlug).catch(() => {});
+    listMethodologies()
+      .then(setMethodologies)
+      .catch((err) =>
+        addToast({
+          title: "Não foi possível carregar as metodologias",
+          description: `O seletor “Metodologia” fica vazio. ${describeFunctionError(err)}`,
+          color: "warning",
+        }),
+      );
+    // Sem o padrão, a tela só deixa de sugerir: a metodologia continua exigida no envio.
+    getDefaultMethodologySlug()
+      .then(setDefaultMethodologySlug)
+      .catch((err) => console.warn("metodologia padrão não carregou:", err));
     listCallContexts()
       .then(setCallContexts)
-      .catch(() =>
+      .catch((err) =>
         addToast({
           title: "Não foi possível carregar os tipos de chamada",
-          description: "Verifique a conexão com a Perfecting (Conexões).",
+          description: `O seletor “Tipo de chamada” fica vazio. ${describeFunctionError(err)}`,
           color: "warning",
         }),
       );
@@ -1394,7 +1406,7 @@ export default function CriacaoPage() {
               <Select
                 label="Tipo de chamada (call context)"
                 labelPlacement="outside"
-                placeholder={callContexts.length ? "Escolha o tipo de chamada" : "Carregando…"}
+                placeholder={callContexts.length ? "Escolha o tipo de chamada" : "Nenhum tipo carregado"}
                 isDisabled={callContexts.length === 0}
                 selectedKeys={callContextSlug ? [callContextSlug] : []}
                 onSelectionChange={(keys) => setCallContextSlug(String(Array.from(keys)[0] ?? ""))}

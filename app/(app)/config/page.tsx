@@ -8,7 +8,7 @@ import { PageHeader } from "@/app/components/ui/page-header";
 import { LoadingView } from "@/app/components/ui/loading-view";
 import { managerSelectClassNames } from "@/app/lib/select-classnames";
 import { createClient } from "@/app/lib/supabase/client";
-import { getEvalWeights, listMethodologies, updateEvalWeights } from "@/app/lib/db";
+import { describeFunctionError, getEvalWeights, listMethodologies, updateEvalWeights } from "@/app/lib/db";
 import type { Methodology } from "@/app/lib/types";
 import { EVALUATION_CRITERIA, defaultEvalWeights } from "@/app/lib/evaluation-criteria";
 
@@ -43,7 +43,13 @@ export default function ConfigPage() {
       // Catálogo só para escolher: falhar aqui não impede salvar o resto.
       listMethodologies()
         .then(setMethodologies)
-        .catch(() => {});
+        .catch((err) =>
+          addToast({
+            title: "Não foi possível carregar as metodologias",
+            description: `O seletor de metodologia padrão fica vazio. ${describeFunctionError(err)}`,
+            color: "warning",
+          }),
+        );
       const base = defaultEvalWeights();
       setWeights(
         Object.fromEntries(

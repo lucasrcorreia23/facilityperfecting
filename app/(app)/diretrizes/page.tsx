@@ -22,6 +22,7 @@ import { LoadingView } from "@/app/components/ui/loading-view";
 import { managerSelectClassNames } from "@/app/lib/select-classnames";
 import { connectionLabel } from "@/app/lib/connection-label";
 import {
+  describeFunctionError,
   addGuidelineVersion,
   createGuideline,
   listConnections,
@@ -97,7 +98,13 @@ export default function DiretrizesPage() {
     })();
     listConnections()
       .then(setConnections)
-      .catch(() => {});
+      .catch((err) =>
+        addToast({
+          title: "Não foi possível carregar as contas",
+          description: `As diretrizes por conta aparecem sem o nome da conta. ${describeFunctionError(err)}`,
+          color: "warning",
+        }),
+      );
     listProfiles()
       .then((people) => setProfiles(new Map(people.map((p) => [p.id, p]))))
       .catch(() => {});
