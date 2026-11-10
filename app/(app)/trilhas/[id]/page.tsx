@@ -37,6 +37,9 @@ import {
 } from "@/app/lib/db";
 import type { CallContextType, TrailPlanDetail } from "@/app/lib/types";
 
+/** Marca de "gerando todas as trilhas" em `generatingTrail` (as outras são ids de trilha). */
+const ALL_TRAILS = "__all__";
+
 export default function PlanoTrilhasPage() {
   const params = useParams<{ id: string }>();
   const planId = params.id;
@@ -215,7 +218,10 @@ export default function PlanoTrilhasPage() {
         </>
       ),
       confirmLabel: "Gerar",
-      onConfirm: () => void generateDrafts(),
+      onConfirm: () => {
+        setGeneratingTrail(ALL_TRAILS);
+        void generateDrafts();
+      },
     });
   }
 
@@ -340,8 +346,11 @@ export default function PlanoTrilhasPage() {
             <Button
               variant="secondary"
               onPress={askGenerateAll}
-              isDisabled={plan.status !== "ready"}
-              startContent={<SparklesIcon className="w-4 h-4" />}
+              isDisabled={plan.status !== "ready" || generatingTrail !== null}
+              isLoading={generatingTrail === ALL_TRAILS}
+              startContent={
+                generatingTrail === ALL_TRAILS ? undefined : <SparklesIcon className="w-4 h-4" />
+              }
             >
               Gerar roleplays
             </Button>
@@ -408,6 +417,7 @@ export default function PlanoTrilhasPage() {
                   onChanged={() => void refresh()}
                   generating={generatingTrail === trail.id}
                   onGenerate={(trailId) => {
+                    if (generatingTrail !== null) return; // já há uma geração em curso
                     setGeneratingTrail(trailId);
                     void generateDrafts([trailId]);
                   }}
