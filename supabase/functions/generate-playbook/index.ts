@@ -9,6 +9,14 @@ import {
   PerfectingError,
 } from "../_shared/perfecting.ts";
 import { PLAYBOOK_GENERATION_LIMITS_PROMPT } from "../_shared/perfecting-limits.ts";
+import { markReviewedDraftsUsed, reviewedDraftRefs } from "../_shared/reviewed-draft-refs.ts";
+import {
+  appendReviewedMaterial,
+  buildReviewedMaterialBlock,
+  REVIEWED_MATERIAL_RULES,
+  type ReviewedDraftRow,
+  type ReviewedMaterialBlock,
+} from "../_shared/reviewed-material.ts";
 
 /**
  * Estrutura o playbook do cliente a partir do material bruto: etapas
@@ -66,6 +74,8 @@ function buildSystem(
   contexts: Array<{ slug: string; name: string; stage?: string }>,
   methodologies: Array<{ slug: string; name: string; application_case: string }>,
   base: string,
+  /** Há bloco de material revisado na mensagem: entra a regra de como usá-lo. */
+  withReviewed: boolean,
 ): string {
   const ctxList = contexts
     .map((c) => `- ${c.slug} → ${c.name}${c.stage ? ` (${c.stage})` : ""}`)
@@ -79,7 +89,7 @@ function buildSystem(
   return `${base}
 
 ${PLAYBOOK_GENERATION_LIMITS_PROMPT}
-
+${withReviewed ? `\n${REVIEWED_MATERIAL_RULES}\n` : ""}
 CALL CONTEXTS DISPONÍVEIS (use exatamente um destes slugs em call_context_slug):
 ${ctxList}
 
@@ -249,16 +259,80 @@ async function persist(
   }
 }
 
+/**
+ * Material revisado dos rascunhos apontados em `input_files`. Lido AQUI, a cada
+ * geração — e não mandado pela tela — para valer em qualquer caminho ("Tentar de
+ * novo", "Retomar") e refletir o rascunho como está agora.
+ *
+ * A service role ignora RLS: só entra rascunho do mesmo dono do playbook. Rascunho
+ * apagado ou de outro dono é pulado e fica marcado; falha de LEITURA derruba a
+ * geração (gerar calado sem o revisado é pior que pedir para tentar de novo).
+ */
+async function loadReviewedMaterial(
+  inputFiles: unknown,
+  ownerId: string | null,
+): Promise<ReviewedMaterialBlock & { missing: string[] }> {
+  const refs = reviewedDraftRefs(inputFiles);
+  if (refs.length === 0) return { text: "", truncated: [], used: [], missing: [] };
+  const { data, error } = await db
+    .from("roleplay_drafts")
+    .select("id, title, scenario, generation_output, created_by, offers(offer_name, general_description, source_id), contexts(target_notes)")
+    .in("id", refs.map((r) => r.draft_id));
+  if (error) throw new Error(`não foi possível ler o material revisado dos rascunhos: ${error.message}`);
+  type Row = ReviewedDraftRow & {
+    created_by: string | null;
+    offers: (ReviewedDraftRow["offers"] & { source_id?: string | null }) | null;
+  };
+  const byId = new Map(
+    ((data ?? []) as unknown as Row[])
+      .filter((d) => ownerId != null && d.created_by === ownerId)
+      .map((d) => [d.id, d]),
+  );
+  // Material cru de cada rascunho: é como se reconhece a "descrição" que não foi
+  // processada. Se a leitura falhar, vale só o sinal de generation_output.
+  const sourceIds = [...byId.values()].map((d) => d.offers?.source_id).filter((x): x is string => Boolean(x));
+  const rawBySource = new Map<string, string>();
+  if (sourceIds.length > 0) {
+    const { data: sources } = await db.from("sources").select("id, raw_text").in("id", sourceIds);
+    for (const s of (sources ?? []) as Array<{ id: string; raw_text: string | null }>) {
+      rawBySource.set(s.id, s.raw_text ?? "");
+    }
+  }
+  // Na ordem em que o operador escolheu.
+  const rows: ReviewedDraftRow[] = [];
+  const missing: string[] = [];
+  for (const ref of refs) {
+    const d = byId.get(ref.draft_id);
+    if (!d) {
+      missing.push(ref.name);
+      continue;
+    }
+    rows.push({ ...d, raw_text: d.offers?.source_id ? rawBySource.get(d.offers.source_id) ?? null : null });
+  }
+  return { ...buildReviewedMaterialBlock(rows), missing };
+}
+
 async function run(playbookId: string): Promise<void> {
   try {
     const { data: playbook, error } = await db
       .from("playbooks")
-      .select("id, name, input_text, prompt_override, created_by")
+      .select("id, name, input_text, input_files, prompt_override, created_by")
       .eq("id", playbookId)
       .single();
     if (error || !playbook) throw new Error("playbook não encontrado");
-    const text = (playbook.input_text ?? "").trim();
-    if (!text) throw new Error("material vazio");
+    const material = (playbook.input_text ?? "").trim();
+    if (!material) throw new Error("material vazio");
+    const reviewed = await loadReviewedMaterial(playbook.input_files, playbook.created_by ?? null);
+    // Somado ao material, depois dele: os documentos seguem inteiros e o revisado
+    // entra como a fonte que prevalece (regra em REVIEWED_MATERIAL_RULES).
+    const text = appendReviewedMaterial(material, reviewed);
+    if (reviewed.used.length > 0 || reviewed.missing.length > 0) {
+      console.log(
+        `generate-playbook: material revisado de ${reviewed.used.length} rascunho(s), ${
+          reviewed.text.length
+        } caracteres; ausentes: ${reviewed.missing.length}`,
+      );
+    }
 
     // Slugs reais para o modelo escolher (mesmo padrão de process-import).
     const saToken = await loginSuperadmin("hml");
@@ -296,7 +370,7 @@ async function run(playbookId: string): Promise<void> {
         system: [
           {
             type: "text",
-            text: buildSystem(contexts, methodologies, base),
+            text: buildSystem(contexts, methodologies, base, reviewed.text !== ""),
             cache_control: { type: "ephemeral" },
           },
         ],
@@ -330,10 +404,28 @@ async function run(playbookId: string): Promise<void> {
     }
 
     await persist(playbookId, playbook.created_by ?? null, result);
+    const refs = reviewedDraftRefs(playbook.input_files);
     await setPlaybook(playbookId, {
       status: "ready",
       error_detail: null,
-      usage: usage ?? null,
+      // `usage` guarda também o que entrou de material revisado NESTA geração: a tela
+      // mostra de quais rascunhos veio e o que ficou de fora.
+      usage: {
+        ...(usage ?? {}),
+        ...(refs.length > 0 && {
+          reviewed_material: {
+            drafts: reviewed.used.length,
+            chars: reviewed.text.length,
+            truncated: reviewed.truncated,
+            missing: reviewed.missing,
+          },
+        }),
+      },
+      // Rastreabilidade: carimba em input_files o que entrou (tamanho e hora) e marca
+      // o rascunho que não foi encontrado.
+      ...(refs.length > 0 && {
+        input_files: markReviewedDraftsUsed(playbook.input_files, reviewed.used, new Date().toISOString()),
+      }),
       // Só assume o nome sugerido se o usuário não escreveu um.
       ...(result.name && !playbook.name?.trim() ? { name: result.name } : {}),
     });
