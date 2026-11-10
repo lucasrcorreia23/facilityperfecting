@@ -46,6 +46,7 @@ import {
   SendError,
 } from "@/app/lib/send-error";
 import type { DebateAnchors, MethodologyStepRef } from "@/supabase/functions/_shared/debate";
+import type { GapAnswer } from "@/supabase/functions/_shared/gap-answers";
 import {
   COHERENCE_DRAFT_FIELDS,
   type CoherenceCheckResult,
@@ -749,17 +750,32 @@ export async function processImport(
   mode: GenerationMode,
   /** Conta de destino, quando já escolhida: aplica as diretrizes dela. */
   connectionId: string | null,
+  /** Respostas do operador às lacunas: fonte de verdade que prevalece sobre o material. */
+  gapAnswers: GapAnswer[] = [],
 ): Promise<{ result: ProcessImportResult; generator: GeneratorManifest | null; warnings: string[] }> {
   const supabase = createClient();
   const body: Record<string, unknown> = { text, mode };
   if (connectionId) body.connection_id = connectionId;
+  if (gapAnswers.length > 0) body.gap_answers = gapAnswers;
   const { data, error } = await supabase.functions.invoke("process-import", { body });
   if (error) throw new Error(await functionErrorMessage(error, "Falha ao processar", PROCESSING_TIMEOUT_MESSAGE));
   if (!data?.ok) throw new Error(describeFunctionError(data?.error ?? data));
+  const warnings = [...((data.warnings ?? []) as string[])];
+  if (gapAnswers.length > 0) {
+    const applied = data.gap_answers as { count?: number; truncated?: string[] } | undefined;
+    // Função publicada antes das respostas existirem: ela ignora o campo sem erro.
+    if (!applied) {
+      warnings.push(
+        "As respostas às lacunas NÃO entraram neste processamento: a função process-import publicada ainda não as trata (falta o deploy). Elas continuam salvas na tela.",
+      );
+    } else {
+      for (const cut of applied.truncated ?? []) warnings.push(`Encurtado para caber: ${cut}.`);
+    }
+  }
   return {
     result: data.result as ProcessImportResult,
     generator: (data.generator ?? null) as GeneratorManifest | null,
-    warnings: (data.warnings ?? []) as string[],
+    warnings,
   };
 }
 

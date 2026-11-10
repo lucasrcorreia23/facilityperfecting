@@ -1,4 +1,5 @@
 import type { DebateDraft } from "@/supabase/functions/_shared/debate";
+import type { GapAnswer } from "@/supabase/functions/_shared/gap-answers";
 /** Tipos do domínio do produto (espelham o schema Postgres em supabase/migrations). */
 
 /**
@@ -104,6 +105,12 @@ export interface ScenarioConfig {
    */
   objections?: ObjectionSeed[] | null;
   guardrails?: GuardrailSeed[] | null;
+  /**
+   * Respostas do operador às lacunas que a IA apontou (ver `_shared/gap-answers.ts`).
+   * Não vão para a conta: são a fonte revisada que acompanha o rascunho — entram no
+   * reprocessamento e no material revisado do playbook.
+   */
+  gap_answers?: GapAnswer[] | null;
   /**
    * Modo playbook: em quais etapas cada objeção entra, decidido pela IA no envio
    * (implement-playbook, estágio assign_objection_steps). Chave = playbook_call_type_id.
@@ -757,6 +764,8 @@ export interface GeneratorManifest {
   }>;
   connection_id: string | null;
   processed_at: string;
+  /** Quantas respostas do operador às lacunas entraram neste processamento. */
+  gap_answers?: number;
 }
 
 /** Linha de `generator_guidelines_current`: a diretriz com a versão vigente. */

@@ -42,6 +42,13 @@ import {
   type CoherenceModalState,
   PlaybookCoherenceModal,
 } from "@/app/components/creation/playbook-coherence-modal";
+import {
+  answersFromInputs,
+  GapAnswersPanel,
+  type GapInput,
+  type GapInputs,
+  MergeReportNotice,
+} from "@/app/components/creation/gap-answers-panel";
 import { ObjectionListEditor } from "@/app/components/content/objection-list-editor";
 import { GuardrailListEditor } from "@/app/components/content/guardrail-list-editor";
 import {
@@ -75,6 +82,14 @@ import type {
 import { ROLE_PLAY_STATUSES } from "@/supabase/functions/_shared/roleplay-adjust-model";
 import { generatorVersionLabel, guidelinesLabel } from "@/app/lib/generator-label";
 import { buildSentSnapshot, changedItems, diffGeneration } from "@/supabase/functions/_shared/generation-diff";
+import { type GapAnswer, gapKey, mergeGapAnswers, openGaps } from "@/supabase/functions/_shared/gap-answers";
+import {
+  describeMerge,
+  type MergeChange,
+  type MergeFieldKey,
+  type MergeForm,
+  mergeWithAnswers,
+} from "@/app/lib/reprocess-merge";
 import {
   type CoherenceCheckResult,
   coherenceSignature,
@@ -86,11 +101,15 @@ function isProspectingCall(slug: string): boolean {
   return /cold|frio|prospec|gatekeeper|triagem/.test(slug);
 }
 
-const GAP_STYLES: Record<ImportGap["severidade"], { label: string; cls: string }> = {
-  critico: { label: "Crítico", cls: "bg-red-50 text-red-700" },
-  importante: { label: "Importante", cls: "bg-amber-50 text-amber-700" },
-  opcional: { label: "Opcional", cls: "bg-slate-100 text-slate-600" },
-};
+/** O dossiê só vale quando o material descreve um comprador concreto. */
+function usableDossier(d: RoleplayDossier | null | undefined): RoleplayDossier | null {
+  return d && Boolean(d.persona?.prompt?.trim()) && (d.persona?.dores?.length ?? 0) > 0 ? d : null;
+}
+
+/** A saída da IA nas chaves que o formulário compara (ver reprocess-merge.ts). */
+function aiForm(r: ProcessImportResult): MergeForm {
+  return { ...r, dossie: usableDossier(r.dossie) } as MergeForm;
+}
 
 const DIFFICULTIES = [
   { key: "easy", label: "Fácil" },
@@ -201,7 +220,14 @@ export default function CriacaoPage() {
   const [extracting, setExtracting] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [processing, setProcessing] = useState(false);
+  /** Lacunas ainda abertas: as que a IA apontou e ninguém respondeu. */
   const [gaps, setGaps] = useState<ImportGap[]>([]);
+  /** Respostas já usadas num processamento — vão no rascunho (scenario.gap_answers). */
+  const [gapAnswers, setGapAnswers] = useState<GapAnswer[]>([]);
+  /** O que está digitado nas lacunas abertas, ainda não reprocessado. */
+  const [gapInputs, setGapInputs] = useState<GapInputs>({});
+  /** Resultado do último "Reprocessar com as respostas": o que mudou e o que ficou. */
+  const [mergeReport, setMergeReport] = useState<{ changes: MergeChange[]; suggestions: MergeForm } | null>(null);
   /** Objeções/guardrails extraídos do material — vão para o contexto na Perfecting. */
   const [objections, setObjections] = useState<ObjectionSeed[]>([]);
   const [guardrails, setGuardrails] = useState<GuardrailSeed[]>([]);
@@ -439,6 +465,9 @@ export default function CriacaoPage() {
     setObjetivo("");
     setHabilidades("");
     setGaps([]);
+    setGapAnswers([]);
+    setGapInputs({});
+    setMergeReport(null);
     setObjections([]);
     setGuardrails([]);
     setDossier(null);
@@ -448,61 +477,161 @@ export default function CriacaoPage() {
     clearFiles();
   }
 
+  /** Respostas de rodadas anteriores + o que está digitado agora nas lacunas abertas. */
+  function collectGapAnswers(): GapAnswer[] {
+    return mergeGapAnswers(gapAnswers, answersFromInputs(gaps, gapInputs));
+  }
+
+  /** O formulário nas chaves da saída da IA, para comparar com ela. */
+  function currentForm(): MergeForm {
+    return {
+      oferta_nome: offerName,
+      oferta_descricao: offerDescription,
+      perfil,
+      personas_variacao: personaInstructions,
+      objecoes: objections,
+      guardrails,
+      cenario_instrucoes: cenarioInstrucoes,
+      objetivo,
+      habilidades,
+      call_context_slug: callContextSlug,
+      dificuldade: difficulty,
+      dossie: dossier,
+    };
+  }
+
+  // O reprocessamento leva dezenas de segundos: a comparação usa o formulário como
+  // ele estiver quando a IA responder, não como estava no clique.
+  const formRef = useRef<MergeForm>({});
+  useEffect(() => {
+    formRef.current = currentForm();
+  });
+
+  /** Leva valores (nas chaves da saída da IA) para os campos da tela. */
+  function applyFormValues(v: MergeForm) {
+    const text = (key: MergeFieldKey, set: (value: string) => void) => {
+      if (key in v) set(String(v[key] ?? ""));
+    };
+    text("oferta_nome", setOfferName);
+    text("oferta_descricao", setOfferDescription);
+    text("perfil", setPerfil);
+    text("personas_variacao", setPersonaInstructions);
+    text("cenario_instrucoes", setCenarioInstrucoes);
+    text("objetivo", setObjetivo);
+    text("habilidades", setHabilidades);
+    text("call_context_slug", setCallContextSlug);
+    text("dificuldade", setDifficulty);
+    if ("objecoes" in v) setObjections((v.objecoes ?? []) as ObjectionSeed[]);
+    if ("guardrails" in v) setGuardrails((v.guardrails ?? []) as GuardrailSeed[]);
+    if ("dossie" in v) setDossier((v.dossie ?? null) as RoleplayDossier | null);
+  }
+
+  /** Troca a edição manual de um campo preservado pela versão nova da IA. */
+  function acceptAiVersion(key: MergeFieldKey) {
+    if (!mergeReport || !(key in mergeReport.suggestions)) return;
+    applyFormValues({ [key]: mergeReport.suggestions[key] });
+    const suggestions = { ...mergeReport.suggestions };
+    delete suggestions[key];
+    setMergeReport({
+      suggestions,
+      changes: mergeReport.changes.map((c) => (c.key === key ? { ...c, outcome: "updated" } : c)),
+    });
+  }
+
+  /** Tira uma resposta já usada e devolve a lacuna para a lista aberta, com o texto. */
+  function reopenGap(answer: GapAnswer) {
+    const key = gapKey(answer);
+    setGapAnswers((prev) => prev.filter((a) => gapKey(a) !== key));
+    setGaps((prev) =>
+      prev.some((g) => gapKey(g) === key)
+        ? prev
+        : [...prev, { item: answer.item, grupo: answer.grupo, severidade: answer.severidade }],
+    );
+    setGapInputs((prev) => ({ ...prev, [key]: { text: answer.resposta, na: answer.nao_se_aplica } }));
+  }
+
   /**
-   * mode "reset": sobrescreve todos os blocos com a saída da IA (reprocessa do zero).
-   * mode "merge": preenche apenas os campos que estão VAZIOS (preserva suas edições)
-   *               e sempre recalcula as lacunas.
+   * mode "reset":   sobrescreve todos os blocos com a saída da IA (reprocessa do zero).
+   * mode "merge":   preenche apenas os campos que estão VAZIOS (preserva suas edições).
+   * mode "answers": reprocessa com as respostas às lacunas — atualiza o que está vazio
+   *                 ou como a IA deixou e preserva o que foi editado à mão
+   *                 (regra em app/lib/reprocess-merge.ts).
+   * Em qualquer modo as respostas às lacunas vão junto e as lacunas são recalculadas.
    */
-  async function handleProcess(mode: "merge" | "reset" = "reset") {
+  async function handleProcess(mode: "merge" | "reset" | "answers" = "reset") {
     if (!text.trim()) {
       addToast({ title: "Cole ou extraia um texto primeiro", color: "warning" });
       return;
     }
     const keep = mode === "merge";
+    const answers = collectGapAnswers();
     setProcessing(true);
     try {
       const { result: r, generator: g, warnings } = await processImport(
         text.trim(),
         generationMode,
         connectionId || null,
+        answers,
       );
       setGenerator(g);
       setAiOutput(r);
-      for (const w of warnings) addToast({ title: "Diretrizes", description: w, color: "warning" });
-      const fill = (cur: string, next: string) => (keep && cur.trim() ? cur : next || cur);
-      // O material cru em "Dados para o Roleplay" fica salvo como fonte, mas não vai
-      // para a Perfecting: ele mistura o lado do vendedor (método, CRM, roteiro), e o
-      // que chega lá vira conhecimento do comprador. A IA preenche os blocos + lacunas.
-      setOfferDescription((c) => fill(c, r.oferta_descricao || ""));
-      setPerfil((c) => fill(c, r.perfil || ""));
-      // Sugestão de variação das personas — só tem efeito no modo playbook com 2+.
-      setPersonaInstructions((c) => fill(c, r.personas_variacao || ""));
-      setCenarioInstrucoes((c) => fill(c, r.cenario_instrucoes || ""));
-      setObjetivo((c) => fill(c, r.objetivo || ""));
-      setHabilidades((c) => fill(c, r.habilidades || ""));
-      setOfferName((c) => fill(c, r.oferta_nome || ""));
-      setCallContextSlug((c) => (keep && c ? c : r.call_context_slug || c));
-      if (!keep && r.dificuldade) setDifficulty(r.dificuldade);
-      setGaps(r.lacunas ?? []);
-      // Só substitui em "reset": em "merge" o que já foi revisado à mão permanece.
-      if (!keep || objections.length === 0) setObjections(r.objecoes ?? []);
-      if (!keep || guardrails.length === 0) setGuardrails(r.guardrails ?? []);
-      // O dossiê só vale quando o material descreve um comprador concreto.
-      const d = r.dossie;
-      const usable = Boolean(d?.persona?.prompt?.trim()) && (d?.persona?.dores?.length ?? 0) > 0;
-      if (!keep || !dossier) setDossier(usable ? d! : null);
+      for (const w of warnings) addToast({ title: "Aviso do processamento", description: w, color: "warning" });
+      let mergeSummary: string | null = null;
+      if (mode === "answers") {
+        // A comparação é com a saída ANTERIOR da IA: o que ainda é igual a ela não foi
+        // editado e pode ser atualizado; o resto fica, com a versão nova como sugestão.
+        const merged = mergeWithAnswers({
+          current: formRef.current,
+          previousAi: aiOutput ? aiForm(aiOutput) : null,
+          nextAi: aiForm(r),
+        });
+        applyFormValues(merged.values);
+        setMergeReport({ changes: merged.changes, suggestions: merged.suggestions });
+        mergeSummary = describeMerge(merged.changes);
+      } else {
+        setMergeReport(null);
+        const fill = (cur: string, next: string) => (keep && cur.trim() ? cur : next || cur);
+        // O material cru em "Dados para o Roleplay" fica salvo como fonte, mas não vai
+        // para a Perfecting: ele mistura o lado do vendedor (método, CRM, roteiro), e o
+        // que chega lá vira conhecimento do comprador. A IA preenche os blocos + lacunas.
+        setOfferDescription((c) => fill(c, r.oferta_descricao || ""));
+        setPerfil((c) => fill(c, r.perfil || ""));
+        // Sugestão de variação das personas — só tem efeito no modo playbook com 2+.
+        setPersonaInstructions((c) => fill(c, r.personas_variacao || ""));
+        setCenarioInstrucoes((c) => fill(c, r.cenario_instrucoes || ""));
+        setObjetivo((c) => fill(c, r.objetivo || ""));
+        setHabilidades((c) => fill(c, r.habilidades || ""));
+        setOfferName((c) => fill(c, r.oferta_nome || ""));
+        setCallContextSlug((c) => (keep && c ? c : r.call_context_slug || c));
+        if (!keep && r.dificuldade) setDifficulty(r.dificuldade);
+        // Só substitui em "reset": em "merge" o que já foi revisado à mão permanece.
+        if (!keep || objections.length === 0) setObjections(r.objecoes ?? []);
+        if (!keep || guardrails.length === 0) setGuardrails(r.guardrails ?? []);
+        if (!keep || !dossier) setDossier(usableDossier(r.dossie));
+      }
+      // As respostas usadas viram parte do rascunho; o que elas fecham sai da lista,
+      // mesmo que a IA insista em reabrir.
+      setGapAnswers(answers);
+      setGapInputs({});
+      const stillOpen = openGaps(r.lacunas ?? [], answers);
+      setGaps(stillOpen);
       const wasProcessed = aiProcessed;
       setAiProcessed(true);
-      const criticos = (r.lacunas ?? []).filter((g) => g.severidade === "critico").length;
+      const criticos = stillOpen.filter((g) => g.severidade === "critico").length;
       addToast({
         title: !wasProcessed
           ? "Processado pela IA"
           : mode === "reset"
             ? "Reprocessado do zero"
-            : "Reprocessado (campos vazios preenchidos)",
-        description: criticos
-          ? `${criticos} lacuna(s) crítica(s) — revise abaixo.`
-          : "Blocos preenchidos.",
+            : mode === "answers"
+              ? "Reprocessado com as respostas"
+              : "Reprocessado (campos vazios preenchidos)",
+        description: [
+          mergeSummary,
+          criticos ? `${criticos} lacuna(s) crítica(s) — revise abaixo.` : mergeSummary ? null : "Blocos preenchidos.",
+        ]
+          .filter(Boolean)
+          .join(" "),
         color: criticos ? "warning" : "success",
       });
     } catch (err) {
@@ -605,6 +734,14 @@ export default function CriacaoPage() {
 
   /** Monta o payload do rascunho a partir do formulário atual. */
   function buildDraftPayload() {
+    // Sem o carimbo de hora: ele mudaria a assinatura do rascunho a cada clique e o
+    // "Tentar novamente" do envio criaria um rascunho novo.
+    const gapAnswersForDraft = collectGapAnswers().map((a) => {
+      const known = gapAnswers.find((k) => gapKey(k) === gapKey(a));
+      return known && known.resposta === a.resposta && known.nao_se_aplica === a.nao_se_aplica
+        ? known
+        : { ...a, answered_at: undefined };
+    });
     return {
       text: text.trim(),
       offerName: offerName.trim(),
@@ -636,6 +773,8 @@ export default function CriacaoPage() {
         objections: objections.length > 0 ? objections : null,
         guardrails: guardrails.length > 0 ? guardrails : null,
         dossier: !isPlaybookMode ? dossier : null,
+        // Inclui o que está digitado e ainda não foi reprocessado: é fonte revisada.
+        gap_answers: gapAnswersForDraft.length > 0 ? gapAnswersForDraft : null,
         role_play_status_id: roleplayStatus === NO_STATUS ? null : Number(roleplayStatus),
       },
     };
@@ -1225,26 +1364,40 @@ export default function CriacaoPage() {
           title="Oferta e comprador"
           hint="O que a IA extraiu do material. Revise: é o conteúdo que vai para a conta."
         >
-          {gaps.length > 0 && (
-            <div className="flex flex-col gap-2 rounded-sm border border-slate-200 bg-slate-50 p-4">
-              <p className="text-sm font-medium text-slate-700">
-                Informações faltantes ({gaps.length})
-              </p>
-              <ul className="flex flex-col gap-1.5">
-                {gaps.map((g, i) => (
-                  <li key={i} className="flex items-start gap-2 text-sm text-slate-600">
-                    <span
-                      className={`mt-0.5 inline-flex shrink-0 rounded-sm px-1.5 py-0.5 text-xs font-medium ${GAP_STYLES[g.severidade].cls}`}
-                    >
-                      {GAP_STYLES[g.severidade].label}
-                    </span>
-                    <span>
-                      <span className="text-slate-400">{g.grupo}:</span> {g.item}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            </div>
+          <GapAnswersPanel
+            gaps={gaps}
+            answered={gapAnswers}
+            inputs={gapInputs}
+            onInputChange={(key: string, input: GapInput) =>
+              setGapInputs((prev) => ({ ...prev, [key]: input }))
+            }
+            onReopen={reopenGap}
+            onReprocess={() =>
+              setConfirm({
+                title: "Reprocessar com as respostas?",
+                message: (
+                  <>
+                    A IA vai reler o material <b>junto com as suas respostas</b>, que valem mais que
+                    os documentos quando conflitarem. Campos vazios ou que estão como a IA gerou
+                    são atualizados; <b>o que você editou à mão é preservado</b> (a versão nova fica
+                    disponível para você aceitar). As lacunas são recalculadas. Consome créditos da
+                    Anthropic.
+                  </>
+                ),
+                confirmLabel: "Reprocessar",
+                onConfirm: () => handleProcess("answers"),
+              })
+            }
+            processing={processing}
+            disabled={extracting || !text.trim()}
+          />
+
+          {mergeReport && (
+            <MergeReportNotice
+              changes={mergeReport.changes}
+              onUseAi={acceptAiVersion}
+              onDismiss={() => setMergeReport(null)}
+            />
           )}
 
           {(objections.length > 0 || guardrails.length > 0) && (
