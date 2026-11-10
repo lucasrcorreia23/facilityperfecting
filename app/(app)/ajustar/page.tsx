@@ -81,8 +81,8 @@ function AjustarIndex() {
   return (
     <div>
       <PageHeader
-        title="Calibrar roleplay"
-        description="Ajuste um roleplay que já está na Perfecting: objeções, conhecimento, persona, regras. Vale a partir da próxima chamada."
+        title="Calibração"
+        description="Calibre um roleplay que já está na Perfecting: objeções, conhecimento, persona, regras. Cada ajuste vale a partir da próxima chamada."
       />
 
       <Card className="mb-6 flex flex-col gap-4 p-4 sm:p-6">

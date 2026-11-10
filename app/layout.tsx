@@ -10,7 +10,7 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "Gerador de Roleplays — Perfecting",
+  title: "Perfecting Facility",
   description:
     "Importe textos do cliente e gere roleplays prontos na conta certa da Perfecting.",
 };

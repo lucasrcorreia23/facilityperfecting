@@ -81,8 +81,8 @@ export default function ConexoesPage() {
   return (
     <div className="flex flex-col gap-0">
       <PageHeader
-        title="Conexões"
-        description="Contas (orgs) da Perfecting em HML e produção que podem receber roleplays."
+        title="Contas"
+        description="Contas da Perfecting, em Homolog e em Produção, que podem receber roleplays, playbooks e debates."
         action={
           <Button
             onPress={sync}
@@ -95,7 +95,7 @@ export default function ConexoesPage() {
       />
 
       {loading ? (
-        <LoadingView label="Carregando conexões…" />
+        <LoadingView label="Carregando contas…" />
       ) : loadError && connections.length === 0 ? (
         <EmptyState
           title="Não foi possível carregar as contas"

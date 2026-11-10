@@ -217,7 +217,7 @@ export function humanizeSendError(error: unknown): HumanizedError {
   if (status === 401 || status === 403) {
     return done(
       "Sem permissão",
-      detailText ?? "A conta de destino recusou o acesso. Confira a conexão e as credenciais.",
+      detailText ?? "A conta de destino recusou o acesso. Confira a conta (em Contas) e as credenciais.",
       false,
     );
   }

@@ -224,7 +224,7 @@ export async function invokeExport(draftIds: string[]) {
   const { data, error } = await supabase.functions.invoke("export-roleplay", {
     body: { draftIds },
   });
-  if (error) throw new Error(await functionErrorMessage(error, "Falha ao exportar"));
+  if (error) throw new Error(await functionErrorMessage(error, "Falha ao enviar"));
   // Lote responde 207 com o erro por rascunho: o portão de texto do comprador (422)
   // traz a lista do que corrigir, e sem isto ela só aparecia como JSON no detalhe.
   const failures = ((data?.results ?? []) as Array<{ ok: boolean; error?: unknown }>)

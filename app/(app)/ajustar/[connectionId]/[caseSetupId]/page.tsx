@@ -436,7 +436,7 @@ export default function AjustarRoleplayPage() {
             cursor: "w-full",
             panel: "mt-4 rounded-sm border border-slate-200 bg-white px-4 pt-6 sm:px-6",
           }}
-          aria-label="Abas do ajuste"
+          aria-label="Abas da calibração"
         >
           <Tab key="general" title={tabTitle("general")}>
             <GeneralTab value={drafts.general} onChange={(v) => setSection("general", v)} />

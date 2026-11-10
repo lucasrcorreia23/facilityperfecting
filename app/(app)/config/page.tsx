@@ -123,7 +123,7 @@ export default function ConfigPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <PageHeader title="Configurações" description="Defaults aplicados a cada export." />
+      <PageHeader title="Configurações" description="Padrões aplicados a cada envio." />
 
       <Card className="flex flex-col gap-6 p-5">
         <Select

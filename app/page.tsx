@@ -33,9 +33,9 @@ export default function LoginPage() {
     <main className="min-h-[100dvh] flex items-center justify-center px-4">
       <div className="w-full max-w-sm flex flex-col gap-6">
         <div className="flex flex-col gap-1.5 text-center">
-          <h1 className="text-xl font-semibold text-slate-800">Gerador de Roleplays</h1>
+          <h1 className="text-xl font-semibold text-slate-800">Perfecting Facility</h1>
           <p className="text-sm text-slate-500">
-            Importe textos e gere roleplays prontos na Perfecting.
+            Crie roleplays, playbooks, trilhas e debates e envie para as contas da Perfecting.
           </p>
         </div>
 

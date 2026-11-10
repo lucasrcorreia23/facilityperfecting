@@ -45,7 +45,7 @@ export function AppHeader({
           <Bars3Icon className="w-5 h-5" />
         </button>
         <span className="text-sm font-semibold text-slate-800">
-          Gerador de Roleplays
+          Perfecting Facility
         </span>
       </div>
 
@@ -53,12 +53,13 @@ export function AppHeader({
         <DropdownTrigger>
           <button
             type="button"
+            aria-label={email ? `Menu da sua conta (${email})` : "Menu da sua conta"}
             className={`flex h-9 w-9 items-center justify-center rounded-full bg-slate-100 text-xs font-semibold text-slate-600 ${MENU_TRIGGER_HOVER}`}
           >
             {initials}
           </button>
         </DropdownTrigger>
-        <DropdownMenu aria-label="Conta" disabledKeys={["profile"]}>
+        <DropdownMenu aria-label="Sua conta" disabledKeys={["profile"]}>
           <DropdownItem
             key="profile"
             isReadOnly

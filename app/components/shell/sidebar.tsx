@@ -41,7 +41,7 @@ const GROUPS = [
   {
     label: "Sistema",
     items: [
-      { href: "/conexoes", label: "Conexões", icon: LinkIcon },
+      { href: "/conexoes", label: "Contas", icon: LinkIcon },
       { href: "/config", label: "Config", icon: Cog6ToothIcon },
       { href: "/diretrizes", label: "Diretrizes", icon: DocumentTextIcon },
     ],

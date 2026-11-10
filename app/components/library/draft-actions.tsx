@@ -112,7 +112,7 @@ export function DraftActions({
             isDisabled={busy}
             onPress={exported ? () => setResendOpen(true) : onSend}
           >
-            {exported ? "Reenviar para a conta destino" : "Enviar para a conta destino"}
+            {exported ? "Reenviar para a conta" : "Enviar para a conta"}
           </DropdownItem>
           <DropdownItem
             key="adjust"
@@ -149,11 +149,12 @@ export function DraftActions({
                 message: (
                   <>
                     O rascunho <b>{draft.offer?.offer_name ?? draft.title ?? "sem nome"}</b> será
-                    removido da Biblioteca. Se já foi exportado, o roleplay na Perfecting{" "}
+                    removido da Biblioteca. Se já foi enviado, o roleplay na Perfecting{" "}
                     <b>não</b> é apagado. Não dá para desfazer.
                   </>
                 ),
                 confirmLabel: "Excluir",
+                tone: "danger",
                 onConfirm: onDelete,
               })
             }
@@ -168,7 +169,7 @@ export function DraftActions({
           <ModalHeader>Novo cenário desta oferta</ModalHeader>
           <ModalBody>
             <p className="text-sm text-slate-500">
-              Reusa a oferta existente. No export, se ela já foi criada na conta escolhida, as
+              Reusa a oferta existente. No envio, se ela já foi criada na conta escolhida, as
               etapas de oferta/contexto são puladas.
             </p>
             <ConnectionPicker
@@ -206,7 +207,7 @@ export function DraftActions({
 
       <Modal isOpen={resendOpen} onOpenChange={setResendOpen} radius="sm">
         <ModalContent>
-          <ModalHeader>Reenviar rascunho já exportado?</ModalHeader>
+          <ModalHeader>Reenviar rascunho já enviado?</ModalHeader>
           <ModalBody>
             <p className="text-sm text-slate-500">
               Este rascunho já tem roleplay na Perfecting. Reenviar vai criar um{" "}

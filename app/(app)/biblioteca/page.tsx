@@ -262,7 +262,7 @@ export default function BibliotecaPage() {
       });
       if (blocked.length > 0) {
         addToast({
-          title: `${blocked.length} rascunho(s) já exportado(s) ou em envio — pulado(s)`,
+          title: `${blocked.length} rascunho(s) já enviado(s) ou em envio — pulado(s)`,
           description: "Para duplicar de propósito, use “Reenviar” no menu do item.",
           color: "warning",
         });
@@ -810,7 +810,7 @@ export default function BibliotecaPage() {
             ) : !personaCatalog.available ? (
               <p className="text-sm text-slate-500">
                 Esta conta não expõe o catálogo de personas — é o caso da API de produção, onde o
-                seletor de persona não existe. Em HML, o catálogo mostra quais personas cada
+                seletor de persona não existe. Em Homolog, o catálogo mostra quais personas cada
                 roleplay aceita.
               </p>
             ) : personaCatalog.items.length === 0 ? (

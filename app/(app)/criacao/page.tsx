@@ -702,7 +702,7 @@ export default function CriacaoPage() {
       const result = data?.results?.[0];
       if (!data?.ok || !result?.ok) {
         // `failures` já traz a mensagem do portão com a lista do que corrigir.
-        throw new Error(data?.failures?.[0] ?? formatExportError(result?.error) ?? "Falha ao enviar para o destino");
+        throw new Error(data?.failures?.[0] ?? formatExportError(result?.error) ?? "Falha ao enviar para a conta");
       }
       setSendStatus("success");
     } catch (err) {
