@@ -293,6 +293,8 @@ export async function findManagerUserId(
   env: PerfectingEnv,
   saToken: string,
   orgId: number,
+  /** Gestor-alvo já gravado na conexão: mantido enquanto for gestor/admin ativo. */
+  currentUserId: number | null = null,
 ): Promise<number | null> {
   const res = await fetchWithTimeout(
     `${apiBase(env)}/superadmin/users?organization_id=${orgId}`,
@@ -301,7 +303,7 @@ export async function findManagerUserId(
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new PerfectingError(res.status, data);
   const items = (data as { items?: ManagerCandidate[] }).items ?? [];
-  return pickManagerUser(items)?.id ?? null;
+  return pickManagerUser(items, currentUserId)?.id ?? null;
 }
 
 export interface ManagerCandidate {
@@ -317,11 +319,19 @@ const MANAGER_ROLES = new Set(["manager", "gestor", "gerente", "admin", "adminis
  * Quem a conexão impersona. O envio escreve com `manager_access`: o primeiro
  * usuário ativo da org pode ser um representante, e aí todo POST volta 403.
  * Prefere gestor/admin ativo; sem nenhum, cai no primeiro ativo (comportamento antigo).
+ *
+ * `currentUserId` = quem a conexão já impersona. Se ele é gestor/admin ativo, fica:
+ * trocar de usuário a cada sincronização esconderia do novo os roleplays "Em
+ * desenvolvimento" que o anterior criou (a Perfecting só os mostra ao criador).
  */
-export function pickManagerUser<T extends ManagerCandidate>(items: readonly T[]): T | undefined {
+export function pickManagerUser<T extends ManagerCandidate>(
+  items: readonly T[],
+  currentUserId: number | null = null,
+): T | undefined {
   const active = items.filter((u) => u.is_active !== false);
-  const manager = active.find((u) => MANAGER_ROLES.has(String(u.role_uuid ?? "").trim().toLowerCase()));
-  return manager ?? active[0] ?? items[0];
+  const managers = active.filter((u) => MANAGER_ROLES.has(String(u.role_uuid ?? "").trim().toLowerCase()));
+  const current = currentUserId != null ? managers.find((u) => u.id === currentUserId) : undefined;
+  return current ?? managers[0] ?? active[0] ?? items[0];
 }
 
 // ── call_context_type_slug → id ───────────────────────────────────────────

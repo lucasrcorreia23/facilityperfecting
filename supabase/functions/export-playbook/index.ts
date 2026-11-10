@@ -167,6 +167,14 @@ async function exportPlaybook(
     .single();
   if (error || !playbook) throw new PerfectingError(404, "playbook não encontrado");
 
+  // Envio vivo: outra invocação está criando etapas agora. Entrar junto duplicaria.
+  // Antes de qualquer outra recusa (404, 422): elas passam pelo `recordSendFailure`,
+  // que devolveria a "ready" um playbook que ainda está sendo enviado.
+  // Preso além do prazo é execução morta — segue, retomando pelo run.
+  if (playbook.status === "exporting" && !isStaleSend(playbook.updated_at, Date.now(), PLAYBOOK_SEND_STALE_MS)) {
+    throw new SendInProgressError();
+  }
+
   const { data: connection, error: connErr } = await db
     .from("connections")
     .select("id, environment, org_id, target_user_id, default_user_group_id")
@@ -202,12 +210,6 @@ async function exportPlaybook(
       issues: issues.map((i) => i.message),
       fields: issues,
     });
-  }
-
-  // Envio vivo: outra invocação está criando etapas agora. Entrar junto duplicaria.
-  // Preso além do prazo é execução morta — segue, retomando pelo run.
-  if (playbook.status === "exporting" && !isStaleSend(playbook.updated_at, Date.now(), PLAYBOOK_SEND_STALE_MS)) {
-    throw new SendInProgressError();
   }
 
   // Login, existência do playbook remoto e taxonomia ANTES de marcar "exporting" e de

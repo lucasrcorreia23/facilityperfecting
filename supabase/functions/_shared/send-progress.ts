@@ -57,7 +57,9 @@ export function startCreated(previous: SendCreated | null, mode: "sale" | "debat
   if (!previous) return {};
   if (mode === "sale") return { ...previous };
   const { previous_attempts, ...last } = previous;
-  return { previous_attempts: [...(previous_attempts ?? []), last] };
+  // Tentativa que não chegou a criar nada não é resto na conta.
+  const attempts = [...(previous_attempts ?? []), ...(Object.keys(last).length > 0 ? [last] : [])];
+  return attempts.length > 0 ? { previous_attempts: attempts } : {};
 }
 
 /** Junta o registro ao detalhe de erro/aviso que vai para o rascunho. */

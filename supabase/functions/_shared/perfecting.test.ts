@@ -193,6 +193,18 @@ describe("pickManagerUser", () => {
     expect(pickManagerUser(users)?.id).toBe(3);
   });
 
+  it("mantém o gestor que a conexão já usa, se ainda for gestor ativo", () => {
+    const users = [
+      { id: 1, role_uuid: "manager" },
+      { id: 2, role_uuid: "admin" },
+      { id: 3, role_uuid: "user" },
+    ];
+    expect(pickManagerUser(users, 2)?.id).toBe(2);
+    // representante ou inativo não é mantido: troca para um gestor
+    expect(pickManagerUser(users, 3)?.id).toBe(1);
+    expect(pickManagerUser([{ id: 1, role_uuid: "manager", is_active: false }, { id: 2, role_uuid: "manager" }], 1)?.id).toBe(2);
+  });
+
   it("aceita admin e os apelidos do backend", () => {
     expect(pickManagerUser([{ id: 1, role_uuid: "user" }, { id: 2, role_uuid: "admin" }])?.id).toBe(2);
     expect(pickManagerUser([{ id: 1, role_uuid: "user" }, { id: 2, role_uuid: "gestor" }])?.id).toBe(2);

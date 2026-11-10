@@ -175,10 +175,17 @@ export async function applyBlockObjections(
       const o = seeds[index];
       if (!o) continue;
       const title = o.titulo.trim();
-      const typeId = typeBySlug.get((o.tipo ?? "").trim().toLowerCase()) ?? fallbackTypeId;
+      const matchedTypeId = typeBySlug.get((o.tipo ?? "").trim().toLowerCase());
+      const typeId = matchedTypeId ?? fallbackTypeId;
       if (typeId == null) {
         out.warnings.push(`objeção "${title}": nenhum tipo de objeção disponível na API`);
         continue;
+      }
+      if (matchedTypeId == null) {
+        const warning =
+          `objeção "${title}": o tipo "${(o.tipo ?? "").trim() || "(vazio)"}" não existe na conta de destino — ` +
+          `foi criada como "${types[0]?.name ?? typeId}"`;
+        if (!out.warnings.includes(warning)) out.warnings.push(warning);
       }
       try {
         await createPlaybookCallBlockObjection(env, token, playbookId, callType.id, block.id, {

@@ -42,6 +42,12 @@ describe("startCreated", () => {
     expect(second).toEqual({ previous_attempts: [{ offer_id: 1, context_id: 2 }, { offer_id: 5 }] });
   });
 
+  it("debate: tentativa que não criou nada não entra no histórico", () => {
+    const history = { previous_attempts: [{ offer_id: 1 }] };
+    expect(startCreated(history, "debate")).toEqual(history);
+    expect(startCreated({ previous_attempts: [] }, "debate")).toEqual({});
+  });
+
   it("sem anterior começa vazio", () => {
     expect(startCreated(null, "sale")).toEqual({});
   });

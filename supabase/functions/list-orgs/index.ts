@@ -43,10 +43,21 @@ Deno.serve(async (req) => {
         const saToken = await loginSuperadmin(environment);
         const orgs = await listOrganizations(environment, saToken);
         total += orgs.length;
+        // Gestor-alvo já gravado: mantido enquanto for gestor/admin ativo (ver pickManagerUser).
+        const { data: existing } = await db
+          .from("connections")
+          .select("org_id, target_user_id")
+          .eq("environment", environment);
+        const currentByOrg = new Map<number, number | null>(
+          (existing ?? []).map((c: { org_id: number; target_user_id: number | null }) => [c.org_id, c.target_user_id]),
+        );
         for (const org of orgs) {
-          const targetUserId = await findManagerUserId(environment, saToken, org.id).catch(
-            () => null,
-          );
+          const targetUserId = await findManagerUserId(
+            environment,
+            saToken,
+            org.id,
+            currentByOrg.get(org.id) ?? null,
+          ).catch(() => null);
           const { error } = await db.from("connections").upsert(
             {
               environment,

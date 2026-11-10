@@ -35,7 +35,7 @@ import {
   isHmlCaseSetupComplete,
   listCallContexts,
   listCaseSetupIdsByContext,
-  listCaseSetupsByContextFull,
+  listOrganizationCaseSetups,
   overlayVerbatimOnGenerated,
   type PerfectingEnv,
   PerfectingError,
@@ -162,12 +162,23 @@ async function exportDraft(
   if (error || !draft) throw new PerfectingError(404, "rascunho não encontrado");
 
   const connection = draft.connections;
+  const isDebate = draft.scenario?.generation_mode === "debate";
+
+  // O que a tentativa anterior deixou na conta — lido logo, antes de qualquer recusa:
+  // o catch do lote regrava o error_detail, e um 422 do portão não pode apagar o
+  // registro (a pessoa corrige o texto, reenvia, e o envio criaria outro roleplay).
+  // Só vale para envio que não terminou (erro, ou "exporting" vencido).
+  const previous = previousCreated(
+    draft,
+    isStaleSend(draft.updated_at, Date.now(), ROLEPLAY_SEND_STALE_MS),
+  );
+  const created = progress.created;
+  Object.assign(created, startCreated(previous, isDebate ? "debate" : "sale"));
 
   // Antes de qualquer escrita: texto do comprador fora de forma barra o envio (422),
   // para o roleplay nascer pronto em vez de ser corrigido depois (FIESC, 04/11/2026).
   // O mesmo portão recusa o que estoura as colunas de 255 da Perfecting (lá vira um
   // 500 genérico no meio do envio). Debate tem o próprio (`assertDebateReady`).
-  const isDebate = draft.scenario?.generation_mode === "debate";
   const buyerTextWarnings = assertBuyerTextReady(
     hasDossier(draft.scenario?.dossier) ? (draft.scenario.dossier as RoleplayDossier) : null,
     (draft.scenario?.objections ?? []) as ObjectionSeed[],
@@ -188,14 +199,6 @@ async function exportDraft(
     .eq("created_by", draft.created_by)
     .maybeSingle();
 
-  // O que a tentativa anterior deixou na conta — lido ANTES de limpar o error_detail.
-  // Só vale para envio que não terminou (erro, ou "exporting" vencido).
-  const previous = previousCreated(
-    draft,
-    isStaleSend(draft.updated_at, Date.now(), ROLEPLAY_SEND_STALE_MS),
-  );
-  const created = progress.created;
-  Object.assign(created, startCreated(previous, isDebate ? "debate" : "sale"));
   /** Grava o registro no rascunho (e o que mais vier em `patch`). Nunca derruba o envio. */
   const saveProgress = async (patch: Record<string, unknown> = {}) => {
     const { error: saveErr } = await db
@@ -444,9 +447,14 @@ async function exportDraft(
   };
   // Roleplays que já existem no contexto: para retomar o da tentativa anterior e para
   // recusar nome repetido antes do POST (`_case_setup_uc` devolve 500 genérico).
-  const contextCaseSetups = toCaseSetupRefs(
-    await listCaseSetupsByContextFull(env, token, perfectingContextId),
-  );
+  // Pela listagem da ORGANIZAÇÃO sem filtro de visibilidade: a do contexto esconde do
+  // gestor os "Em desenvolvimento" criados por outro usuário, e um roleplay escondido
+  // não seria retomado (duplicaria) nem barraria o nome.
+  const listContextCaseSetups = async () =>
+    toCaseSetupRefs(
+      (await listOrganizationCaseSetups(env, token)).filter((c) => c.context_id === perfectingContextId),
+    );
+  const contextCaseSetups = await listContextCaseSetups();
   const adopted = adoptableCaseSetup(previous ? created : null, perfectingContextId, contextCaseSetups);
 
   let caseSetupId: number;
@@ -555,10 +563,7 @@ async function exportDraft(
       let half: { id: number } | undefined;
       let checked = false;
       try {
-        half = findCaseSetupByName(
-          toCaseSetupRefs(await listCaseSetupsByContextFull(env, token, perfectingContextId)),
-          trainingName,
-        );
+        half = findCaseSetupByName(await listContextCaseSetups(), trainingName);
         checked = true;
       } catch (lookupErr) {
         console.error("export-roleplay: não deu para conferir se o roleplay nasceu:", String(lookupErr));
@@ -567,10 +572,16 @@ async function exportDraft(
         created.case_setup_id = half.id;
         delete created.pending_case_setup;
         const status = e instanceof PerfectingError ? e.status : 500;
+        // Timeout, rede e gateway: a Perfecting pode ainda estar montando prompt e
+        // agente. Erro de aplicação (500 e afins): parou de vez, o roleplay fica sem
+        // agente e o reenvio o recusaria — melhor dizer já o que fazer.
+        const maybeFinishing = [0, 408, 502, 503, 504].includes(status);
         throw new PerfectingError(status, {
-          message:
-            `A Perfecting gravou o roleplay ${half.id} mas não terminou de montá-lo (prompt e agente de voz). ` +
-            "Aguarde um minuto e envie de novo: o envio continua nesse roleplay, sem criar outro",
+          message: maybeFinishing
+            ? `A Perfecting gravou o roleplay ${half.id} e a resposta não chegou (ela pode estar terminando de montar prompt e agente de voz). ` +
+              "Aguarde um minuto e envie de novo: o envio continua nesse roleplay, sem criar outro"
+            : `A Perfecting gravou o roleplay ${half.id} mas falhou ao montá-lo (prompt e agente de voz), e ele ficou pela metade. ` +
+              `Apague o roleplay ${half.id} na Perfecting e envie de novo — enquanto ele existir, o envio não cria outro`,
           cause: e instanceof PerfectingError ? e.detail : String(e),
         });
       }
