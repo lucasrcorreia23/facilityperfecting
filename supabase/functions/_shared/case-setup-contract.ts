@@ -114,16 +114,24 @@ const TYPE_LABEL: Record<FieldType, string> = {
   "string|null": "texto ou null",
 };
 
+/**
+ * Inteiro como o pydantic lê: número inteiro ou texto só de dígitos ("44" passa em
+ * PROD). Texto não numérico e número com casas decimais são recusados lá e aqui.
+ */
+const isIntegerLike = (v: unknown) =>
+  (typeof v === "number" && Number.isInteger(v)) || (typeof v === "string" && /^\s*[+-]?\d+\s*$/.test(v));
+
 function matches(value: unknown, type: FieldType): boolean {
   switch (type) {
     case "string":
+      // Número em campo de texto é recusado: o pydantic não converte para texto.
       return typeof value === "string";
     case "integer":
-      return typeof value === "number" && Number.isInteger(value);
+      return isIntegerLike(value);
     case "string[]":
       return Array.isArray(value) && value.every((v) => typeof v === "string");
     case "integer[]":
-      return Array.isArray(value) && value.every((v) => typeof v === "number" && Number.isInteger(v));
+      return Array.isArray(value) && value.every(isIntegerLike);
     case "string|null":
       return value === null || typeof value === "string";
   }

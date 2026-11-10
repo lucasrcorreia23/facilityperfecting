@@ -161,8 +161,8 @@ describe("caseSetupCreateIssues", () => {
     p.call_context_type_id = "nao-e-int";
     p.persona_voice_id = 1.5;
     p.buyer_agent_first_messages = ["oi", 3];
-    p.methodology_ids = ["5159"];
-    (p.persona_profile as Record<string, unknown>).age = "44";
+    p.methodology_ids = ["PROVAR"];
+    (p.persona_profile as Record<string, unknown>).age = "quarenta";
     expect(caseSetupCreateIssues(p)).toEqual([
       "call_context_type_id deve ser número inteiro (veio texto)",
       "training_name deve ser texto (veio número)",
@@ -171,6 +171,31 @@ describe("caseSetupCreateIssues", () => {
       "methodology_ids deve ser lista de números inteiros (veio lista)",
       "persona_profile.age deve ser número inteiro (veio texto)",
     ]);
+  });
+
+  it("inteiro em texto só de dígitos passa, como no pydantic de PROD", () => {
+    const p = prodPayload(seedVerbatim());
+    p.context_id = "196";
+    p.methodology_ids = ["5159"];
+    (p.persona_profile as Record<string, unknown>).age = "44";
+    (p.company_profile as Record<string, unknown>).annual_revenue = " 90 ";
+    expect(caseSetupCreateIssues(p)).toEqual([]);
+  });
+
+  it("chave fora do Input não é acusada (a API ignora)", () => {
+    const p = {
+      ...prodPayload(seedVerbatim()),
+      successful_sale_dialogues_examples: [],
+      campo_que_nao_existe: { a: 1 },
+    };
+    (p.company_profile as Record<string, unknown>).extra = "x";
+    expect(caseSetupCreateIssues(p)).toEqual([]);
+  });
+
+  it("o create de venda em PROD não manda os exemplos de diálogo (fora do Input)", () => {
+    const p = prodPayload(seedVerbatim());
+    expect(p).not.toHaveProperty("successful_sale_dialogues_examples");
+    expect(p).not.toHaveProperty("unsuccessful_sale_dialogues_examples");
   });
 
   it("dificuldade fora do enum", () => {
