@@ -233,6 +233,20 @@ export async function invokeExport(draftIds: string[]) {
   return { ...data, failures } as typeof data & { failures: string[] };
 }
 
+/**
+ * Consulta envios de roleplay em andamento. Só destrava o que venceu (função encerrada
+ * no meio): o rascunho vai para erro, com o que já foi criado registrado, e o reenvio
+ * continua de onde parou. Nunca dispara um envio.
+ */
+export async function pollExport(draftIds: string[]): Promise<{ released?: string[] }> {
+  const supabase = createClient();
+  const { data, error } = await supabase.functions.invoke("export-roleplay", {
+    body: { draftIds, stage: "poll" },
+  });
+  if (error) throw new Error(await functionErrorMessage(error, "Falha ao consultar o envio"));
+  return data ?? {};
+}
+
 /** Playbooks da org de destino (para o seletor de modo na Criação). */
 export async function listPlaybooks(connectionId: string): Promise<Playbook[]> {
   const supabase = createClient();
@@ -1057,6 +1071,21 @@ export async function invokeSendPlaybook(playbookId: string, connectionId: strin
   if (error) throw new SendError(await describeInvokeError(error, "Falha ao enviar o playbook"));
   if (!data?.ok) throw new SendError(humanizeSendError(data?.error ?? data));
   return data;
+}
+
+/**
+ * Consulta o envio em andamento. Só destrava o que venceu (função encerrada no meio):
+ * o playbook volta a "pronto" com o erro de envio. Nunca dispara um envio.
+ */
+export async function pollSendPlaybook(
+  playbookId: string,
+): Promise<{ done?: boolean; status?: string; released?: boolean }> {
+  const supabase = createClient();
+  const { data, error } = await supabase.functions.invoke("export-playbook", {
+    body: { playbookId, stage: "poll" },
+  });
+  if (error) throw new Error(await functionErrorMessage(error, "Falha ao consultar o envio"));
+  return data ?? {};
 }
 
 // ── Trilhas (planos de trilhas de roleplay) ────────────────────────────────

@@ -161,6 +161,12 @@ export function humanizeSendError(error: unknown): HumanizedError {
 
   if (status === 546) return done("Tempo limite excedido", FUNCTION_TIMEOUT_MESSAGE, true);
 
+  // 408 com texto próprio = envio destravado por tempo (send-staleness.ts): a mensagem
+  // já diz o que aconteceu e que reenviar continua de onde parou.
+  if (status === 408 && detailText && !/^\s*timeout\s*$/i.test(detailText)) {
+    return done("Envio interrompido", detailText, true);
+  }
+
   if (status === 408 || (status == null && detailText && TIMEOUT_TEXT.test(detailText))) {
     return done(
       "Tempo limite excedido",

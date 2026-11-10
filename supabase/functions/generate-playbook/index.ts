@@ -164,62 +164,88 @@ async function persist(
   createdBy: string | null,
   result: { name?: string; call_types?: GeneratedCallType[] },
 ): Promise<void> {
-  const { data: existing } = await db
+  // Sem transação no cliente: a troca é "grava o novo, depois apaga o antigo". Antes
+  // era o contrário, e uma falha no meio da gravação deixava o playbook sem etapa
+  // nenhuma (as antigas já tinham sido apagadas). Agora a falha desfaz só o que foi
+  // inserido nesta rodada e as etapas antigas continuam como estavam.
+  const { data: existing, error: existingErr } = await db
     .from("playbook_call_types")
     .select("id")
     .eq("playbook_id", playbookId);
-  if (existing?.length) {
-    // call_blocks caem por cascade
-    await db
-      .from("playbook_call_types")
-      .delete()
-      .in("id", existing.map((c: { id: string }) => c.id));
+  if (existingErr) throw new Error(`falha ao ler as etapas atuais: ${existingErr.message}`);
+  const oldIds = (existing ?? []).map((c: { id: string }) => c.id);
+
+  const newIds: string[] = [];
+  const callTypes = result.call_types ?? [];
+  try {
+    for (let i = 0; i < callTypes.length; i++) {
+      const ct = callTypes[i];
+      const { data: row, error } = await db
+        .from("playbook_call_types")
+        .insert({
+          playbook_id: playbookId,
+          position: i,
+          name: ct.name,
+          description: ct.description ?? null,
+          call_context_slug: ct.call_context_slug ?? null,
+          methodology_slug: ct.methodology_slug ?? null,
+          created_by: createdBy,
+        })
+        .select("id")
+        .single();
+      if (error || !row) throw new Error(`falha ao gravar a etapa "${ct.name}": ${error?.message}`);
+      newIds.push(row.id);
+
+      const blocks = ct.call_blocks ?? [];
+      if (blocks.length === 0) continue;
+      const { error: blocksErr } = await db.from("playbook_call_blocks").insert(
+        blocks.map((b, j) => ({
+          call_type_id: row.id,
+          position: j,
+          name: b.name,
+          description: b.description ?? null,
+          objective: b.objective ?? null,
+          sample_questions: b.sample_questions ?? [],
+          what_to_do: b.what_to_do ?? [],
+          what_to_avoid: b.what_to_avoid ?? [],
+          created_by: createdBy,
+        })),
+      );
+      if (blocksErr) throw new Error(`falha ao gravar as subetapas de "${ct.name}": ${blocksErr.message}`);
+    }
+
+    if (oldIds.length > 0) {
+      // call_blocks caem por cascade
+      const { error: delErr } = await db.from("playbook_call_types").delete().in("id", oldIds);
+      if (delErr) throw new Error(`falha ao substituir as etapas antigas: ${delErr.message}`);
+    }
+  } catch (e) {
+    // Desfaz a rodada: sem isto ficariam etapas novas e antigas misturadas.
+    if (newIds.length > 0) {
+      const { error: undoErr } = await db.from("playbook_call_types").delete().in("id", newIds);
+      if (undoErr) {
+        console.error("generate-playbook: falha ao desfazer etapas novas:", undoErr.message);
+        throw new Error(
+          `${e instanceof Error ? e.message : String(e)} — e as etapas novas não puderam ser desfeitas: confira o playbook antes de enviar`,
+        );
+      }
+    }
+    throw e;
   }
 
   // As etapas antigas morreram, e com elas as chaves de `export_run` (ids locais →
   // ids na conta). Mantê-lo faria o reenvio "retomar" um run que não bate com nada:
   // pularia a criação do playbook e recriaria TODAS as etapas dentro do playbook
-  // antigo, duplicando. Zera o run e a ponte junto da exclusão — aqui, e não no
-  // cliente, para valer em qualquer caminho de regeração e só quando a geração deu
-  // certo (se a IA falha, etapas e run antigos ficam intactos). O playbook que já
-  // existir na conta continua lá: a tela avisa antes de regerar.
-  await db.from("playbooks").update({ export_run: null }).eq("id", playbookId);
-  await db.from("playbook_perfecting_ids").delete().eq("playbook_id", playbookId);
-
-  const callTypes = result.call_types ?? [];
-  for (let i = 0; i < callTypes.length; i++) {
-    const ct = callTypes[i];
-    const { data: row, error } = await db
-      .from("playbook_call_types")
-      .insert({
-        playbook_id: playbookId,
-        position: i,
-        name: ct.name,
-        description: ct.description ?? null,
-        call_context_slug: ct.call_context_slug ?? null,
-        methodology_slug: ct.methodology_slug ?? null,
-        created_by: createdBy,
-      })
-      .select("id")
-      .single();
-    if (error || !row) throw new Error(`falha ao gravar a etapa "${ct.name}": ${error?.message}`);
-
-    const blocks = ct.call_blocks ?? [];
-    if (blocks.length === 0) continue;
-    const { error: blocksErr } = await db.from("playbook_call_blocks").insert(
-      blocks.map((b, j) => ({
-        call_type_id: row.id,
-        position: j,
-        name: b.name,
-        description: b.description ?? null,
-        objective: b.objective ?? null,
-        sample_questions: b.sample_questions ?? [],
-        what_to_do: b.what_to_do ?? [],
-        what_to_avoid: b.what_to_avoid ?? [],
-        created_by: createdBy,
-      })),
+  // antigo, duplicando. Zera o run e a ponte — aqui, e não no cliente, para valer em
+  // qualquer caminho de regeração, e só DEPOIS da troca (se a IA ou a gravação falha,
+  // etapas e run antigos ficam intactos). O playbook que já existir na conta continua
+  // lá: a tela avisa antes de regerar.
+  const { error: runErr } = await db.from("playbooks").update({ export_run: null }).eq("id", playbookId);
+  const { error: bridgeErr } = await db.from("playbook_perfecting_ids").delete().eq("playbook_id", playbookId);
+  if (runErr || bridgeErr) {
+    throw new Error(
+      `etapas regeradas, mas o registro do envio anterior não foi zerado (${(runErr ?? bridgeErr)?.message}): gere de novo antes de enviar, senão o envio duplica etapas`,
     );
-    if (blocksErr) throw new Error(`falha ao gravar as subetapas de "${ct.name}": ${blocksErr.message}`);
   }
 }
 

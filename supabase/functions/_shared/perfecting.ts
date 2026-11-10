@@ -293,6 +293,8 @@ export async function findManagerUserId(
   env: PerfectingEnv,
   saToken: string,
   orgId: number,
+  /** Gestor-alvo já gravado na conexão: mantido enquanto for gestor/admin ativo. */
+  currentUserId: number | null = null,
 ): Promise<number | null> {
   const res = await fetchWithTimeout(
     `${apiBase(env)}/superadmin/users?organization_id=${orgId}`,
@@ -300,10 +302,36 @@ export async function findManagerUserId(
   );
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new PerfectingError(res.status, data);
-  const items =
-    (data as { items?: Array<{ id: number; is_active?: boolean }> }).items ?? [];
-  const active = items.find((u) => u.is_active !== false) ?? items[0];
-  return active?.id ?? null;
+  const items = (data as { items?: ManagerCandidate[] }).items ?? [];
+  return pickManagerUser(items, currentUserId)?.id ?? null;
+}
+
+export interface ManagerCandidate {
+  id: number;
+  is_active?: boolean;
+  /** `user` | `manager` | `admin` (o backend aceita apelidos como "gestor"). */
+  role_uuid?: string | null;
+}
+
+const MANAGER_ROLES = new Set(["manager", "gestor", "gerente", "admin", "administrador"]);
+
+/**
+ * Quem a conexão impersona. O envio escreve com `manager_access`: o primeiro
+ * usuário ativo da org pode ser um representante, e aí todo POST volta 403.
+ * Prefere gestor/admin ativo; sem nenhum, cai no primeiro ativo (comportamento antigo).
+ *
+ * `currentUserId` = quem a conexão já impersona. Se ele é gestor/admin ativo, fica:
+ * trocar de usuário a cada sincronização esconderia do novo os roleplays "Em
+ * desenvolvimento" que o anterior criou (a Perfecting só os mostra ao criador).
+ */
+export function pickManagerUser<T extends ManagerCandidate>(
+  items: readonly T[],
+  currentUserId: number | null = null,
+): T | undefined {
+  const active = items.filter((u) => u.is_active !== false);
+  const managers = active.filter((u) => MANAGER_ROLES.has(String(u.role_uuid ?? "").trim().toLowerCase()));
+  const current = currentUserId != null ? managers.find((u) => u.id === currentUserId) : undefined;
+  return current ?? managers[0] ?? active[0] ?? items[0];
 }
 
 // ── call_context_type_slug → id ───────────────────────────────────────────
@@ -1394,6 +1422,33 @@ export function applyCaseSetupExtras(
   };
 }
 
+/**
+ * O payload exato que o `case_setup/create` recebe. Separado do POST para quem envia
+ * conferir ANTES (nome repetido no contexto, primeira fala ausente) e registrar o nome
+ * enviado — ver `createCaseSetup`.
+ */
+export function buildCaseSetupCreatePayload(
+  env: PerfectingEnv,
+  generated: Record<string, unknown>,
+  contextId: number,
+  callContextTypeId: number | undefined,
+  userGroupId: number | null,
+  options: CaseSetupCreateOptions = {},
+): Record<string, unknown> {
+  const base =
+    env === "hml"
+      ? buildHmlCaseSetupCreate(generated, contextId, callContextTypeId, userGroupId)
+      : buildProdCaseSetupCreate(generated, contextId, callContextTypeId, userGroupId);
+  return applyCaseSetupExtras(base, options);
+}
+
+/**
+ * SEM retry, de propósito. O backend (`s32_case_setup_crud.py`, Create) faz commit do
+ * roleplay e só depois gera o prompt (IA) e cria o agente de voz; a chamada leva
+ * minutos. Um 502/504 do gateway ou uma queda de conexão no meio chega aqui com a
+ * linha já gravada — repetir criava um segundo roleplay (ou batia em `_case_setup_uc`
+ * e devolvia 500). Quem chama trata a falha procurando o roleplay pelo nome.
+ */
 export async function createCaseSetup(
   env: PerfectingEnv,
   token: string,
@@ -1403,11 +1458,7 @@ export async function createCaseSetup(
   userGroupId: number | null,
   options: CaseSetupCreateOptions = {},
 ): Promise<{ id: number; elevenlabs_agent_id: string | null }> {
-  const base =
-    env === "hml"
-      ? buildHmlCaseSetupCreate(generated, contextId, callContextTypeId, userGroupId)
-      : buildProdCaseSetupCreate(generated, contextId, callContextTypeId, userGroupId);
-  const payload = applyCaseSetupExtras(base, options);
+  const payload = buildCaseSetupCreatePayload(env, generated, contextId, callContextTypeId, userGroupId, options);
   const { generateCasePrompt } = options;
   // undefined → omite o param (API usa default = true), igual aos exports normais.
   // true/false → envia explícito (usado p/ isolar o crash de geração de prompt).
@@ -1415,10 +1466,12 @@ export async function createCaseSetup(
     generateCasePrompt === undefined
       ? `${rp(env)}/case_setup/create`
       : `${rp(env)}/case_setup/create?generate_case_prompt=${generateCasePrompt}`;
-  const data = await postJson<{ id?: number; elevenlabs_agent_id?: string }>(
+  const data = await sendJson<{ id?: number; elevenlabs_agent_id?: string }>(
+    "POST",
     url,
     token,
     payload,
+    0,
   );
   if (typeof data.id !== "number") throw new PerfectingError(502, "case_setup/create sem id");
   return { id: data.id, elevenlabs_agent_id: data.elevenlabs_agent_id ?? null };
@@ -1430,6 +1483,14 @@ export interface Playbook {
   id: number;
   name: string;
   playbook_status_id: number | null;
+  /** `roleplay` | `ride_along`. Ausente (backend sem o campo) = roleplay. */
+  destination: string | null;
+}
+
+/** Playbook que gera roleplays. Os de Ride Along (Field) não têm o que implementar aqui. */
+export function isRoleplayPlaybook(p: { destination?: string | null }): boolean {
+  const d = typeof p.destination === "string" ? p.destination.trim().toLowerCase() : "";
+  return d === "" || d === "roleplay";
 }
 
 export interface PlaybookCallType {
@@ -1470,6 +1531,7 @@ export async function listPlaybooks(env: PerfectingEnv, token: string): Promise<
       name: typeof p.name === "string" ? p.name : `Playbook ${p.id}`,
       playbook_status_id:
         typeof p.playbook_status_id === "number" ? p.playbook_status_id : null,
+      destination: typeof p.destination === "string" ? p.destination : null,
     }));
 }
 
@@ -1798,6 +1860,25 @@ export async function createPlaybook(
   const data = await postJson<{ id?: number }>(`${rp(env)}/playbook/create`, token, { name });
   if (typeof data.id !== "number") throw new PerfectingError(502, "playbook/create sem id");
   return data.id;
+}
+
+/**
+ * Se o playbook ainda existe na conta. Os ids de `export_run` e da ponte
+ * `playbook_perfecting_ids` vencem quando alguém apaga o playbook na Perfecting:
+ * retomar em cima deles dá 404 em toda etapa, e a ponte recusa o reenvio para sempre.
+ */
+export async function perfectingPlaybookExists(
+  env: PerfectingEnv,
+  token: string,
+  playbookId: number,
+): Promise<boolean> {
+  try {
+    await getJson(`${rp(env)}/playbook_${playbookId}`, token);
+    return true;
+  } catch (e) {
+    if (e instanceof PerfectingError && e.status === 404) return false;
+    throw e;
+  }
 }
 
 export interface PlaybookCallTypeInput {
@@ -2155,6 +2236,18 @@ export async function createOfferPain(
   const data = await postJson<{ id?: number }>(`${rp(env)}/offer_${offerId}/pains`, token, input);
   if (typeof data.id !== "number") throw new PerfectingError(502, "offer pains sem id");
   return data.id;
+}
+
+/** Empresas (persona companies) de um contexto — para reusar em vez de recriar. */
+export async function listPersonaCompanies(
+  env: PerfectingEnv,
+  token: string,
+  contextId: number,
+): Promise<Array<{ id: number; slug: string; name: string }>> {
+  const data = await getJson<unknown>(`${rp(env)}/persona_company/list?context_id=${contextId}`, token);
+  return records(data)
+    .filter((r) => typeof r.id === "number")
+    .map((r) => ({ id: r.id as number, slug: String(r.slug ?? ""), name: String(r.name ?? "") }));
 }
 
 export async function createPersonaCompany(
@@ -2545,6 +2638,16 @@ export async function listOrganizationCaseSetups(
   return records(
     await getJson<unknown>(`${rp(env)}/case_setup/organization/list?apply_visibility_filter=false`, token),
   );
+}
+
+/** Ofertas da org do token (id + nome) — o nome é único por organização (`_offer_uc`). */
+export async function listOffers(
+  env: PerfectingEnv,
+  token: string,
+): Promise<Array<{ id: number; name: string }>> {
+  return records(await getJson<unknown>(`${rp(env)}/offer/list`, token))
+    .filter((r) => typeof r.id === "number")
+    .map((r) => ({ id: r.id as number, name: String(r.name ?? "") }));
 }
 
 // ── Debate (motor 3) ──────────────────────────────────────────────────────

@@ -60,9 +60,17 @@ describe("applyContextContent — objeções", () => {
     expect(levels).toEqual([1, 3]);
   });
 
-  it("usa o primeiro tipo quando o slug da IA não existe", async () => {
-    await applyContextContent("hml", "t", 35, [objection("Não é prioridade", "inexistente")], [], [2]);
+  it("usa o primeiro tipo quando o slug da IA não existe — e avisa uma vez, não por nível", async () => {
+    const out = await applyContextContent("hml", "t", 35, [objection("Não é prioridade", "inexistente")], [], [2, 3]);
     expect(api.createContextObjection.mock.calls[0][3].objection_type_id).toBe(1);
+    expect(out.warnings).toEqual([
+      'objeção "Não é prioridade": o tipo "inexistente" não existe na conta de destino — foi criada como "Preço"',
+    ]);
+  });
+
+  it("tipo que existe não gera aviso", async () => {
+    const out = await applyContextContent("hml", "t", 35, [objection("Agora não", "timing")], [], [2]);
+    expect(out.warnings).toEqual([]);
   });
 
   it("não derruba o envio quando a criação falha: vira aviso", async () => {
@@ -92,9 +100,37 @@ describe("applyContextContent — guardrails", () => {
     );
 
     expect(out).toMatchObject({ guardrails_created: 1, guardrails_skipped: 1 });
+    // Nome único entre todas as contas: vai com o sufixo do contexto.
     expect(api.createContextGuardrail).toHaveBeenCalledWith("hml", "t", 35, {
-      name: "Responder em português",
+      name: "Responder em português · ctx 35",
       prompt: "Fale sempre em português.",
     });
+  });
+
+  it("guardrail já criado com sufixo não é duplicado no reenvio", async () => {
+    api.listContextGuardrails.mockResolvedValue([{ id: 1, name: "Responder em português · ctx 35" }]);
+
+    const out = await applyContextContent(
+      "hml",
+      "t",
+      35,
+      [],
+      [{ nome: "Responder em português", instrucao: "Fale sempre em português." }],
+      [1],
+    );
+
+    expect(out).toMatchObject({ guardrails_created: 0, guardrails_skipped: 1 });
+    expect(api.createContextGuardrail).not.toHaveBeenCalled();
+  });
+
+  it("409 de nome repetido vira aviso visível, não derruba", async () => {
+    api.createContextGuardrail.mockRejectedValue(
+      Object.assign(new Error("x"), { detail: "Já existe um guardrail com o nome 'X'." }),
+    );
+
+    const out = await applyContextContent("hml", "t", 35, [], [{ nome: "X", instrucao: "Y" }], [1]);
+
+    expect(out.guardrails_created).toBe(0);
+    expect(out.warnings).toEqual(["regra \"X\" não criada: Já existe um guardrail com o nome 'X'."]);
   });
 });

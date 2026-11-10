@@ -215,3 +215,139 @@ export function exportIssuesMessage(issues: PlaybookExportIssue[]): string {
     ? "O playbook tem 1 pendência que a Perfecting recusaria. Corrija no editor e envie de novo"
     : `O playbook tem ${issues.length} pendências que a Perfecting recusaria. Corrija no editor e envie de novo`;
 }
+
+// ── Roleplay (venda e debate): colunas String(255) fora do playbook ────────
+//
+// Fonte (backend origin/master, conferido em 2026-11-10):
+//  - models/role_plays.py — offers.name/url, contexts.name, guardrails.name (único
+//    GLOBAL), personas_companies.slug (único GLOBAL)/name, personas.name/job_title/
+//    department, objections.title, background_knowledge.title: todos String(255).
+//  - models/offer_portfolio.py — offer_products.name e offer_pains.title: String(255).
+// `cases_setup.training_name` é String sem limite. Como no playbook, o backend não
+// valida tamanho: estoura no banco e devolve 500 genérico no meio do envio.
+
+/** Teto das colunas String(255). */
+export const ENTITY_TEXT_MAX = 255;
+
+/**
+ * Folga para o sufixo de unicidade que o envio acrescenta ao nome do guardrail
+ * (" · ctx <id do contexto>"): o nome é único entre TODAS as contas.
+ */
+export const GUARDRAIL_SUFFIX_RESERVE = 20;
+/** O que a pessoa pode escrever no nome de uma regra. */
+export const GUARDRAIL_NAME_MAX = ENTITY_TEXT_MAX - GUARDRAIL_SUFFIX_RESERVE;
+
+export interface LengthCheck {
+  /** Onde está, como a pessoa reconhece: `objeção "Preço alto": título`. */
+  label: string;
+  value: string | null | undefined;
+  limit: number;
+}
+
+/** Só o que estoura. Mede o texto sem espaços nas pontas (é o que o envio manda). */
+export function lengthIssues(checks: readonly LengthCheck[]): string[] {
+  const issues: string[] = [];
+  for (const c of checks) {
+    const length = (c.value ?? "").trim().length;
+    if (length > c.limit) {
+      issues.push(`${c.label} com ${length} caracteres — o limite é ${c.limit} (corte ${length - c.limit})`);
+    }
+  }
+  return issues;
+}
+
+function quoted(value: string | null | undefined): string {
+  const clean = (value ?? "").trim() || "(sem nome)";
+  return `"${clean.length > 40 ? `${clean.slice(0, 37)}…` : clean}"`;
+}
+
+export interface SaleLengthInput {
+  offerName?: string | null;
+  offerUrl?: string | null;
+  objections?: ReadonlyArray<{ titulo?: string | null }>;
+  guardrails?: ReadonlyArray<{ nome?: string | null }>;
+  dossier?: {
+    produtos?: ReadonlyArray<{ nome?: string | null }>;
+    dores?: ReadonlyArray<{ titulo?: string | null }>;
+    persona?: {
+      nome?: string | null;
+      cargo?: string | null;
+      area?: string | null;
+      empresa_nome?: string | null;
+    } | null;
+  } | null;
+}
+
+/** O que o envio de VENDA grava em coluna de 255 a partir do rascunho. */
+export function saleLengthChecks(input: SaleLengthInput): LengthCheck[] {
+  const checks: LengthCheck[] = [
+    { label: "nome da oferta", value: input.offerName, limit: ENTITY_TEXT_MAX },
+    { label: "URL da oferta", value: input.offerUrl, limit: ENTITY_TEXT_MAX },
+  ];
+  for (const o of input.objections ?? []) {
+    checks.push({ label: `objeção ${quoted(o.titulo)}: título`, value: o.titulo, limit: ENTITY_TEXT_MAX });
+  }
+  for (const g of input.guardrails ?? []) {
+    checks.push({ label: `regra ${quoted(g.nome)}: nome`, value: g.nome, limit: GUARDRAIL_NAME_MAX });
+  }
+  const d = input.dossier;
+  if (d) {
+    for (const p of d.produtos ?? []) {
+      checks.push({ label: `produto ${quoted(p.nome)}: nome`, value: p.nome, limit: ENTITY_TEXT_MAX });
+    }
+    for (const p of d.dores ?? []) {
+      checks.push({ label: `dor ${quoted(p.titulo)}: título`, value: p.titulo, limit: ENTITY_TEXT_MAX });
+    }
+    checks.push(
+      { label: "nome do comprador", value: d.persona?.nome, limit: ENTITY_TEXT_MAX },
+      { label: "cargo do comprador", value: d.persona?.cargo, limit: ENTITY_TEXT_MAX },
+      { label: "área do comprador", value: d.persona?.area, limit: ENTITY_TEXT_MAX },
+      { label: "nome da empresa do comprador", value: d.persona?.empresa_nome, limit: ENTITY_TEXT_MAX },
+    );
+  }
+  return checks;
+}
+
+export interface DebateLengthInput {
+  oponente_nome?: string | null;
+  oponente_papel?: string | null;
+  objecoes?: ReadonlyArray<{ titulo?: string | null }>;
+  guardrails?: ReadonlyArray<{ nome?: string | null }>;
+}
+
+/**
+ * O que o envio de DEBATE grava em coluna de 255. Nome da oferta e do contexto não
+ * entram: são montados pelo envio e cortados lá (sufixo gerado por nós). Com as etapas
+ * do destino, confere também o título do conteúdo por etapa ("<etapa> — <oponente>").
+ */
+export function debateLengthChecks(
+  d: DebateLengthInput,
+  stepNames?: readonly string[],
+): LengthCheck[] {
+  const nome = (d.oponente_nome ?? "").trim();
+  const checks: LengthCheck[] = [
+    { label: "nome da oponente", value: d.oponente_nome, limit: ENTITY_TEXT_MAX },
+    { label: "papel da oponente", value: d.oponente_papel, limit: ENTITY_TEXT_MAX },
+  ];
+  for (const o of d.objecoes ?? []) {
+    checks.push({ label: `contra-argumento ${quoted(o.titulo)}: título`, value: o.titulo, limit: ENTITY_TEXT_MAX });
+  }
+  for (const g of d.guardrails ?? []) {
+    checks.push({ label: `regra ${quoted(g.nome)}: nome`, value: g.nome, limit: GUARDRAIL_NAME_MAX });
+  }
+  for (const step of stepNames ?? []) {
+    checks.push({
+      label: `título do conteúdo da etapa ${quoted(step)} (etapa + nome da oponente)`,
+      value: `${step} — ${nome}`,
+      limit: ENTITY_TEXT_MAX,
+    });
+  }
+  return checks;
+}
+
+/** Resumo para o 422 do envio de roleplay. */
+export function lengthIssuesMessage(issues: readonly string[]): string {
+  return issues.length === 1
+    ? "O rascunho tem 1 texto acima do limite da Perfecting: encurte no rascunho antes de enviar"
+    : `O rascunho tem ${issues.length} textos acima do limite da Perfecting: encurte no rascunho antes de enviar`;
+}

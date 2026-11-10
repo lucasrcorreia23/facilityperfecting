@@ -1070,7 +1070,12 @@ Deno.serve(async (req) => {
     // reservado não chega ao playbook (o apply_block_objections abaixo escreve no
     // catálogo compartilhado em paralelo ao run()).
     try {
-      assertBuyerTextReady(null, (draft.scenario?.objections ?? []) as ObjectionSeed[]);
+      // Com os limites de 255 da Perfecting (oferta, regras, títulos de objeção).
+      assertBuyerTextReady(null, (draft.scenario?.objections ?? []) as ObjectionSeed[], {
+        offerName: draft.offers?.offer_name,
+        offerUrl: draft.offers?.url,
+        guardrails: (draft.scenario?.guardrails ?? []) as GuardrailSeed[],
+      });
     } catch (e) {
       if (e instanceof PerfectingError) return json({ ok: false, error: { status: e.status, detail: e.detail } }, 422);
       throw e;

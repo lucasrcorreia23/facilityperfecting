@@ -187,8 +187,13 @@ export function debateDraftIssues(d: DebateDraft, steps?: readonly MethodologySt
       issues.push(`contra-argumento ${i + 1}: precisa de título, fala e quando ceder`);
     }
   });
+  const ruleNames = new Set<string>();
   d.guardrails.forEach((g, i) => {
     if (!text(g.nome) || !text(g.instrucao)) issues.push(`regra ${i + 1}: precisa de nome e instrução`);
+    // Nome de regra é único na Perfecting: a segunda com o mesmo nome é recusada lá.
+    const key = text(g.nome).toLowerCase();
+    if (key && ruleNames.has(key)) issues.push(`regra ${i + 1}: nome repetido ("${text(g.nome)}")`);
+    ruleNames.add(key);
   });
   return issues;
 }

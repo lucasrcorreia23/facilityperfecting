@@ -77,10 +77,11 @@ REGRAS:
 - Use os cenários priorizados pelo gestor de enablement (formulário de calibração) como filtro adicional quando presentes na análise.
 - Linguagem comercial B2B. Responda SEMPRE no formato estruturado pedido (JSON).`;
 
-// Fallback quando a API Perfecting está indisponível — o export-roleplay resolve
-// slug inválido para o 1º call_context disponível, então isso não trava o fluxo.
+// Fallback quando a API Perfecting está indisponível. O slug tem de ser o que o
+// envio deriva do nome (`slugify` de perfecting.ts: "Cold Call" → "cold_call"):
+// o export-roleplay recusa (422) slug que não existe na conta, não escolhe outro.
 const FALLBACK_CALL_CONTEXTS = [
-  { slug: "cold-call", name: "Cold Call" },
+  { slug: "cold_call", name: "Cold Call" },
   { slug: "discovery", name: "Discovery" },
   { slug: "demo", name: "Demonstração" },
   { slug: "negociacao", name: "Negociação" },

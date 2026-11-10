@@ -48,6 +48,7 @@ import {
   listPersonaCatalog,
   listPlaybooks,
   pollCompletion,
+  pollExport,
   pollPlaybookRun,
   setDraftConnection,
   updateDraftScenario,
@@ -542,6 +543,32 @@ export default function BibliotecaPage() {
     }, 20_000);
     return () => clearInterval(timer);
   }, [runningPlaybookIds, refresh]);
+
+  const sendingRoleplayIds = useMemo(
+    () =>
+      drafts
+        .filter((d) => d.status === "exporting" && !isPlaybookDraft(d))
+        .map((d) => d.id)
+        .sort()
+        .join(","),
+    [drafts],
+  );
+
+  /**
+   * Destrava envio de roleplay preso em "Enviando…" (função encerrada no meio): o
+   * poll leva o rascunho para erro, reenviável, sem perder o que já foi criado.
+   */
+  useEffect(() => {
+    if (!sendingRoleplayIds) return;
+    const ids = sendingRoleplayIds.split(",");
+    const timer = setInterval(() => {
+      void (async () => {
+        await pollExport(ids).catch(() => {});
+        await refresh();
+      })();
+    }, 30_000);
+    return () => clearInterval(timer);
+  }, [sendingRoleplayIds, refresh]);
 
   const runningCompletionIds = useMemo(
     () =>
@@ -1183,7 +1210,14 @@ export default function BibliotecaPage() {
 
                 {detailDraft.error_detail != null && (
                   <div className="flex flex-col gap-1">
-                    <p className="text-sm font-medium text-red-700">Erro</p>
+                    <p className="text-sm font-medium text-red-700">
+                      {detailDraft.status === "error" ? "Erro" : "Detalhe do envio"}
+                    </p>
+                    {detailDraft.status === "error" && (
+                      <p className="text-sm leading-relaxed text-red-700 break-words">
+                        {describeFunctionError(detailDraft.error_detail)}
+                      </p>
+                    )}
                     <Textarea
                       value={JSON.stringify(detailDraft.error_detail, null, 2)}
                       minRows={4}

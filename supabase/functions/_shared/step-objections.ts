@@ -179,10 +179,18 @@ export async function applyStepObjections(
       for (const title of titles) {
         const o = seedByTitle.get(norm(title));
         if (!o) continue; // objeção removida do rascunho depois do encaixe
-        const typeId = typeBySlug.get(norm(o.tipo ?? "")) ?? fallbackTypeId;
+        const matchedTypeId = typeBySlug.get(norm(o.tipo ?? ""));
+        const typeId = matchedTypeId ?? fallbackTypeId;
         if (typeId == null) {
           out.warnings.push(`objeção "${title}": nenhum tipo de objeção disponível na API`);
           continue;
+        }
+        if (matchedTypeId == null) {
+          // Uma vez por objeção (ela se repete por etapa e por nível).
+          const warning =
+            `objeção "${title}": o tipo "${(o.tipo ?? "").trim() || "(vazio)"}" não existe na conta de destino — ` +
+            `foi criada como "${types[0]?.name ?? typeId}"`;
+          if (!out.warnings.includes(warning)) out.warnings.push(warning);
         }
         for (const levelId of difficultyLevelIds) {
           if (seen.has(key(title, levelId))) {
