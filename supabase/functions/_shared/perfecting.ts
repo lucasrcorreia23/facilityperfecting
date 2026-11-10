@@ -300,10 +300,28 @@ export async function findManagerUserId(
   );
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new PerfectingError(res.status, data);
-  const items =
-    (data as { items?: Array<{ id: number; is_active?: boolean }> }).items ?? [];
-  const active = items.find((u) => u.is_active !== false) ?? items[0];
-  return active?.id ?? null;
+  const items = (data as { items?: ManagerCandidate[] }).items ?? [];
+  return pickManagerUser(items)?.id ?? null;
+}
+
+export interface ManagerCandidate {
+  id: number;
+  is_active?: boolean;
+  /** `user` | `manager` | `admin` (o backend aceita apelidos como "gestor"). */
+  role_uuid?: string | null;
+}
+
+const MANAGER_ROLES = new Set(["manager", "gestor", "gerente", "admin", "administrador"]);
+
+/**
+ * Quem a conexão impersona. O envio escreve com `manager_access`: o primeiro
+ * usuário ativo da org pode ser um representante, e aí todo POST volta 403.
+ * Prefere gestor/admin ativo; sem nenhum, cai no primeiro ativo (comportamento antigo).
+ */
+export function pickManagerUser<T extends ManagerCandidate>(items: readonly T[]): T | undefined {
+  const active = items.filter((u) => u.is_active !== false);
+  const manager = active.find((u) => MANAGER_ROLES.has(String(u.role_uuid ?? "").trim().toLowerCase()));
+  return manager ?? active[0] ?? items[0];
 }
 
 // ── call_context_type_slug → id ───────────────────────────────────────────
@@ -1430,6 +1448,14 @@ export interface Playbook {
   id: number;
   name: string;
   playbook_status_id: number | null;
+  /** `roleplay` | `ride_along`. Ausente (backend sem o campo) = roleplay. */
+  destination: string | null;
+}
+
+/** Playbook que gera roleplays. Os de Ride Along (Field) não têm o que implementar aqui. */
+export function isRoleplayPlaybook(p: { destination?: string | null }): boolean {
+  const d = typeof p.destination === "string" ? p.destination.trim().toLowerCase() : "";
+  return d === "" || d === "roleplay";
 }
 
 export interface PlaybookCallType {
@@ -1470,6 +1496,7 @@ export async function listPlaybooks(env: PerfectingEnv, token: string): Promise<
       name: typeof p.name === "string" ? p.name : `Playbook ${p.id}`,
       playbook_status_id:
         typeof p.playbook_status_id === "number" ? p.playbook_status_id : null,
+      destination: typeof p.destination === "string" ? p.destination : null,
     }));
 }
 

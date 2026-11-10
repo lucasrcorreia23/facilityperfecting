@@ -3,6 +3,7 @@ import { corsHeaders, json } from "../_shared/cors.ts";
 import { requireUser } from "../_shared/auth.ts";
 import { authenticateConnection } from "../_shared/destination.ts";
 import {
+  isRoleplayPlaybook,
   listPlaybookCallTypes,
   listPlaybooks,
   PerfectingError,
@@ -40,7 +41,8 @@ Deno.serve(async (req) => {
     if (error || !connection) return json({ ok: false, error: "conexão não encontrada" }, 404);
 
     const { env, token } = await authenticateConnection(connection);
-    const playbooks = await listPlaybooks(env, token);
+    // Só os de roleplay: playbook de Ride Along (Field) não gera roleplay nenhum.
+    const playbooks = (await listPlaybooks(env, token)).filter(isRoleplayPlaybook);
     const callTypes =
       playbookId != null ? await listPlaybookCallTypes(env, token, playbookId) : null;
 

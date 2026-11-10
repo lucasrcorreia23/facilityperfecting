@@ -3,10 +3,12 @@ import {
   applyCaseSetupExtras,
   buildPersonaFromCaseSetup,
   difficultyLevelIdFor,
+  isRoleplayPlaybook,
   matchMethodologySlug,
   MAX_API_TEXT_CHARS,
   type Methodology,
   personaPromptFromCasePrompt,
+  pickManagerUser,
   profilePersonaInstructions,
   roleplayStatusIdFrom,
   truncateForApi,
@@ -177,5 +179,40 @@ describe("profilePersonaInstructions", () => {
     const out = profilePersonaInstructions("c".repeat(30_000));
     expect(out).toContain("o original tem");
     expect(out!.length).toBeLessThan(MAX_API_TEXT_CHARS + 100);
+  });
+});
+
+describe("pickManagerUser", () => {
+  it("prefere gestor ou admin ativo ao primeiro usuário da org", () => {
+    const users = [
+      { id: 1, is_active: true, role_uuid: "user" },
+      { id: 2, is_active: false, role_uuid: "manager" },
+      { id: 3, is_active: true, role_uuid: "Manager" },
+      { id: 4, is_active: true, role_uuid: "admin" },
+    ];
+    expect(pickManagerUser(users)?.id).toBe(3);
+  });
+
+  it("aceita admin e os apelidos do backend", () => {
+    expect(pickManagerUser([{ id: 1, role_uuid: "user" }, { id: 2, role_uuid: "admin" }])?.id).toBe(2);
+    expect(pickManagerUser([{ id: 1, role_uuid: "user" }, { id: 2, role_uuid: "gestor" }])?.id).toBe(2);
+  });
+
+  it("sem gestor, cai no primeiro ativo; sem ativo, no primeiro", () => {
+    expect(pickManagerUser([{ id: 1, is_active: false }, { id: 2, role_uuid: "user" }])?.id).toBe(2);
+    expect(pickManagerUser([{ id: 7, is_active: false, role_uuid: null }])?.id).toBe(7);
+    expect(pickManagerUser([])).toBeUndefined();
+  });
+});
+
+describe("isRoleplayPlaybook", () => {
+  it("campo ausente ou vazio conta como roleplay (backend sem destination)", () => {
+    expect(isRoleplayPlaybook({})).toBe(true);
+    expect(isRoleplayPlaybook({ destination: null })).toBe(true);
+    expect(isRoleplayPlaybook({ destination: "roleplay" })).toBe(true);
+  });
+
+  it("esconde o de Ride Along", () => {
+    expect(isRoleplayPlaybook({ destination: "ride_along" })).toBe(false);
   });
 });
