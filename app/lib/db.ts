@@ -38,6 +38,12 @@ import type {
   TrailPlanDetail,
 } from "@/app/lib/types";
 import { defaultEvalWeights } from "@/app/lib/evaluation-criteria";
+import {
+  describeInvokeError,
+  formatHumanizedError,
+  humanizeSendError,
+  SendError,
+} from "@/app/lib/send-error";
 import type { DebateAnchors, MethodologyStepRef } from "@/supabase/functions/_shared/debate";
 
 const DEFAULT_WEIGHTS: CriteriaWeights = {
@@ -228,7 +234,7 @@ export async function listPlaybooks(connectionId: string): Promise<Playbook[]> {
     body: { connectionId },
   });
   if (error) throw new Error(await functionErrorMessage(error, "Falha ao listar os playbooks"));
-  if (!data?.ok) throw new Error(JSON.stringify(data?.error ?? data));
+  if (!data?.ok) throw new Error(describeFunctionError(data?.error ?? data));
   return (data.playbooks ?? []) as Playbook[];
 }
 
@@ -242,7 +248,7 @@ export async function listPlaybookCallTypes(
     body: { connectionId, playbookId },
   });
   if (error) throw new Error(await functionErrorMessage(error, "Falha ao listar as etapas"));
-  if (!data?.ok) throw new Error(JSON.stringify(data?.error ?? data));
+  if (!data?.ok) throw new Error(describeFunctionError(data?.error ?? data));
   return (data.callTypes ?? []) as PlaybookCallType[];
 }
 
@@ -256,7 +262,7 @@ export async function invokeExportPlaybook(draftId: string) {
     body: { draftId },
   });
   if (error) throw new Error(await functionErrorMessage(error, "Falha ao iniciar a implementação"));
-  if (!data?.ok) throw new Error(JSON.stringify(data?.error ?? data));
+  if (!data?.ok) throw new Error(describeFunctionError(data?.error ?? data));
   return data;
 }
 
@@ -272,7 +278,7 @@ export async function invokeCompleteRoleplay(draftId: string, opts: { force?: bo
     body: { draftId, ...(opts.force ? { force: true } : {}) },
   });
   if (error) throw new Error(await functionErrorMessage(error, "Falha ao completar o roleplay"));
-  if (!data?.ok) throw new Error(JSON.stringify(data?.error ?? data));
+  if (!data?.ok) throw new Error(describeFunctionError(data?.error ?? data));
   return data;
 }
 
@@ -312,7 +318,7 @@ export async function invokeAddPersonas(draftId: string, quantity: number) {
     body: { draftId, stage: "add_personas", quantity },
   });
   if (error) throw new Error(await functionErrorMessage(error, "Falha ao iniciar o lote de personas"));
-  if (!data?.ok) throw new Error(JSON.stringify(data?.error ?? data));
+  if (!data?.ok) throw new Error(describeFunctionError(data?.error ?? data));
   return data;
 }
 
@@ -326,7 +332,7 @@ export async function listPersonaCatalog(draftId: string): Promise<{
     body: { draftId },
   });
   if (error) throw new Error(await functionErrorMessage(error, "Falha ao ler o catálogo de personas"));
-  if (!data?.ok) throw new Error(JSON.stringify(data?.error ?? data));
+  if (!data?.ok) throw new Error(describeFunctionError(data?.error ?? data));
   return { available: Boolean(data.available), items: data.items ?? [] };
 }
 
@@ -658,33 +664,24 @@ export async function listCallContexts(): Promise<CallContextType[]> {
   const { data, error } = await supabase.functions.invoke("list-call-contexts", { body: {} });
   if (error)
     throw new Error(await functionErrorMessage(error, "Falha ao listar os tipos de call"));
-  if (!data?.ok) throw new Error(JSON.stringify(data?.error ?? data));
+  if (!data?.ok) throw new Error(describeFunctionError(data?.error ?? data));
   return (data.items ?? []) as CallContextType[];
 }
 
-/** Extrai a mensagem real do corpo de uma FunctionsHttpError (em vez do genérico "non-2xx"). */
-/** Mensagem legível de um erro de Edge Function, com a lista de `issues` do portão. */
+/**
+ * Mensagem legível de um erro de Edge Function, com a lista de `issues` do portão.
+ * Nunca devolve JSON cru: a tradução mora em `humanizeSendError` (send-error.ts).
+ */
 export function describeFunctionError(e: unknown): string {
-  if (typeof e === "string") return e;
-  const err = e as { message?: string; detail?: { message?: string; issues?: unknown } } | null;
-  const issues = Array.isArray(err?.detail?.issues) ? (err!.detail!.issues as unknown[]).map(String) : [];
-  const message = err?.detail?.message ?? err?.message;
-  if (message) return issues.length > 0 ? `${message}: ${issues.join("; ")}` : message;
-  return JSON.stringify(e);
+  return formatHumanizedError(humanizeSendError(e));
 }
 
+/**
+ * Mensagem real de uma FunctionsHttpError (em vez do genérico "non-2xx"), inclusive
+ * quando a função foi encerrada pelo Supabase e o corpo não é o nosso JSON.
+ */
 async function functionErrorMessage(error: unknown, fallback: string): Promise<string> {
-  try {
-    const ctx = (error as { context?: Response }).context;
-    if (ctx && typeof ctx.json === "function") {
-      const body = await ctx.json();
-      const e = body?.error;
-      if (e) return describeFunctionError(e);
-    }
-  } catch {
-    // sem corpo legível — usa o fallback
-  }
-  return error instanceof Error ? error.message : fallback;
+  return formatHumanizedError(await describeInvokeError(error, fallback));
 }
 
 /**
@@ -703,7 +700,7 @@ export async function processImport(
   if (connectionId) body.connection_id = connectionId;
   const { data, error } = await supabase.functions.invoke("process-import", { body });
   if (error) throw new Error(await functionErrorMessage(error, "Falha ao processar"));
-  if (!data?.ok) throw new Error(JSON.stringify(data?.error ?? data));
+  if (!data?.ok) throw new Error(describeFunctionError(data?.error ?? data));
   return {
     result: data.result as ProcessImportResult,
     generator: (data.generator ?? null) as GeneratorManifest | null,
@@ -721,7 +718,7 @@ export async function getGeneratorInfo(): Promise<{
   const supabase = createClient();
   const { data, error } = await supabase.functions.invoke("process-import", { body: { op: "info" } });
   if (error) throw new Error(await functionErrorMessage(error, "Falha ao ler o prompt base"));
-  if (!data?.ok) throw new Error(JSON.stringify(data?.error ?? data));
+  if (!data?.ok) throw new Error(describeFunctionError(data?.error ?? data));
   return data;
 }
 
@@ -827,7 +824,7 @@ export async function listMethodologies(): Promise<Methodology[]> {
   const supabase = createClient();
   const { data, error } = await supabase.functions.invoke("list-methodologies", { body: {} });
   if (error) throw new Error(await functionErrorMessage(error, "Falha ao listar as metodologias"));
-  if (!data?.ok) throw new Error(JSON.stringify(data?.error ?? data));
+  if (!data?.ok) throw new Error(describeFunctionError(data?.error ?? data));
   return (data.items ?? []) as Methodology[];
 }
 
@@ -994,7 +991,7 @@ export async function invokeGeneratePlaybook(playbookId: string) {
     body: { playbookId },
   });
   if (error) throw new Error(await functionErrorMessage(error, "Falha ao iniciar a geração"));
-  if (!data?.ok) throw new Error(JSON.stringify(data?.error ?? data));
+  if (!data?.ok) throw new Error(describeFunctionError(data?.error ?? data));
   return data;
 }
 
@@ -1015,8 +1012,9 @@ export async function invokeSendPlaybook(playbookId: string, connectionId: strin
   const { data, error } = await supabase.functions.invoke("export-playbook", {
     body: { playbookId, connectionId },
   });
-  if (error) throw new Error(await functionErrorMessage(error, "Falha ao enviar o playbook"));
-  if (!data?.ok) throw new Error(JSON.stringify(data?.error ?? data));
+  // SendError carrega título, issues e `retryable` até o modal de envio.
+  if (error) throw new SendError(await describeInvokeError(error, "Falha ao enviar o playbook"));
+  if (!data?.ok) throw new SendError(humanizeSendError(data?.error ?? data));
   return data;
 }
 
@@ -1352,7 +1350,7 @@ export async function invokeAdjust<T = Record<string, unknown>>(body: Record<str
     const status = (error as { context?: Response }).context?.status ?? 0;
     throw new AdjustRequestError(await functionErrorMessage(error, "Falha ao ajustar o roleplay"), status);
   }
-  if (!data?.ok) throw new AdjustRequestError(JSON.stringify(data?.error ?? data), 0);
+  if (!data?.ok) throw new AdjustRequestError(describeFunctionError(data?.error ?? data), 0);
   return data as T;
 }
 
@@ -1382,7 +1380,7 @@ export async function listDestinationMethodologies(
     body: { connectionId, ...(methodologyId != null ? { methodologyId } : {}) },
   });
   if (error) throw new Error(await functionErrorMessage(error, "Falha ao listar as metodologias da conta"));
-  if (!data?.ok) throw new Error(JSON.stringify(data?.error ?? data));
+  if (!data?.ok) throw new Error(describeFunctionError(data?.error ?? data));
   return {
     items: (data.items ?? []) as Methodology[],
     steps: (data.steps ?? null) as MethodologyStepRef[] | null,

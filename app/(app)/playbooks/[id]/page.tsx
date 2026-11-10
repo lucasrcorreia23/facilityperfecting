@@ -12,7 +12,7 @@ import {
   SelectItem,
   addToast,
 } from "@heroui/react";
-import { PaperAirplaneIcon } from "@heroicons/react/24/outline";
+import { PaperAirplaneIcon, XCircleIcon } from "@heroicons/react/24/outline";
 import { Button } from "@/app/components/ui/button";
 import { PageHeader } from "@/app/components/ui/page-header";
 import { LoadingView } from "@/app/components/ui/loading-view";
@@ -22,6 +22,8 @@ import { PlanStatusBanner } from "@/app/components/trilhas/plan-status-banner";
 import { PlaybookEditor } from "@/app/components/playbooks/playbook-editor";
 import { managerSelectClassNames } from "@/app/lib/select-classnames";
 import { createClient } from "@/app/lib/supabase/client";
+import { classifyPlaybookFailure } from "@/app/lib/playbook-draft";
+import { humanizeSendError, type HumanizedError } from "@/app/lib/send-error";
 import {
   getPlaybookDraft,
   invokeGeneratePlaybook,
@@ -58,7 +60,7 @@ export default function PlaybookDetailPage() {
   const [pickerConn, setPickerConn] = useState("");
   const [sendModalOpen, setSendModalOpen] = useState(false);
   const [sendStatus, setSendStatus] = useState<SendStatus>("sending");
-  const [sendError, setSendError] = useState<string | null>(null);
+  const [sendError, setSendError] = useState<HumanizedError | null>(null);
 
   const refresh = useCallback(async () => {
     setPlaybook(await getPlaybookDraft(id));
@@ -100,6 +102,48 @@ export default function PlaybookDetailPage() {
     return () => clearInterval(timer);
   }, [generating, id, refresh]);
 
+  /**
+   * Regerar substitui a estrutura inteira. Com etapas na tela, pede confirmação:
+   * foi assim que um erro de ENVIO virou perda das etapas editadas.
+   */
+  function requestGeneration() {
+    const types = playbook?.playbook_call_types ?? [];
+    if (types.length === 0) {
+      void retryGeneration();
+      return;
+    }
+    const blocks = types.reduce((sum, ct) => sum + ct.playbook_call_blocks.length, 0);
+    const remoteId = playbook?.export_run?.perfecting_playbook_id;
+    setConfirm({
+      title: "Regerar o playbook do zero?",
+      message: (
+        <span className="flex flex-col gap-3">
+          <span>
+            Regerar <b>apaga as {types.length} etapa(s) e {blocks} subetapa(s)</b> que estão na
+            tela, com todas as edições feitas à mão, e estrutura o playbook de novo a partir do
+            material. Não dá para desfazer.
+          </span>
+          {remoteId != null && (
+            <span>
+              Este playbook já foi criado na conta (id {remoteId}) e <b>continua lá</b>: a versão
+              regerada é enviada como um playbook novo. Exclua o antigo na Perfecting antes de
+              reenviar — com ele lá, o envio é recusado por nome repetido.
+            </span>
+          )}
+        </span>
+      ),
+      confirmLabel: "Apagar e regerar",
+      onConfirm: () => {
+        void retryGeneration();
+      },
+    });
+  }
+
+  function openPicker() {
+    setPickerConn(playbook?.export_run?.connection_id ?? "");
+    setPickerOpen(true);
+  }
+
   async function retryGeneration() {
     setRetrying(true);
     try {
@@ -125,7 +169,7 @@ export default function PlaybookDetailPage() {
       setSendStatus("success");
       await refresh();
     } catch (err) {
-      setSendError(err instanceof Error ? err.message : String(err));
+      setSendError(humanizeSendError(err));
       setSendStatus("error");
       await refresh();
     }
@@ -168,8 +212,13 @@ export default function PlaybookDetailPage() {
   if (loading || !playbook) return <LoadingView label="Carregando playbook…" />;
 
   const callTypes = playbook.playbook_call_types;
-  const errorMessage =
-    typeof playbook.error_detail?.message === "string" ? playbook.error_detail.message : null;
+  // Erro de envio ≠ erro de geração: só o segundo oferece "Retomar geração".
+  const failure = classifyPlaybookFailure(playbook);
+  const sendFailure = failure?.kind === "send" ? humanizeSendError(failure.error) : null;
+  const errorMessage = failure?.kind === "generation" ? failure.message : null;
+  // Playbook antigo que ficou em "error" por causa de um envio: a estrutura está pronta.
+  const bannerStatus = sendFailure && playbook.status === "error" ? "ready" : playbook.status;
+  const busy = playbook.status === "generating" || playbook.status === "exporting";
   const canSend = callTypes.length > 0 && playbook.status !== "generating";
 
   return (
@@ -180,10 +229,7 @@ export default function PlaybookDetailPage() {
         description="Revise as etapas e subetapas antes de criar o playbook na conta do cliente."
         action={
           <Button
-            onPress={() => {
-              setPickerConn(playbook.export_run?.connection_id ?? "");
-              setPickerOpen(true);
-            }}
+            onPress={openPicker}
             isDisabled={!canSend}
             startContent={<PaperAirplaneIcon className="w-4 h-4" />}
           >
@@ -194,13 +240,53 @@ export default function PlaybookDetailPage() {
 
       <div className="flex flex-col gap-4">
         <PlanStatusBanner
-          status={playbook.status}
+          status={bannerStatus}
           errorMessage={errorMessage}
-          onRetry={retryGeneration}
+          onRetry={requestGeneration}
           retrying={retrying}
           readyLabel="Playbook estruturado. Revise as etapas abaixo antes de enviar para a conta."
           runningLabels={RUNNING_LABELS}
         />
+
+        {sendFailure && !busy && (
+          <div className="flex flex-col gap-3 rounded-sm border border-red-200 bg-red-50 px-4 py-3 sm:flex-row sm:items-start sm:justify-between">
+            <div className="flex min-w-0 items-start gap-2.5">
+              <XCircleIcon className="w-5 h-5 shrink-0 text-red-600" />
+              <div className="flex min-w-0 flex-col gap-1">
+                <p className="text-sm font-medium text-red-800">O envio falhou</p>
+                <p className="text-sm leading-relaxed text-red-700 break-words">
+                  {sendFailure.message}
+                </p>
+                {sendFailure.issues.length > 0 && (
+                  <ul className="flex list-disc flex-col gap-0.5 pl-5 text-sm leading-relaxed text-red-700">
+                    {sendFailure.issues.map((issue, i) => (
+                      <li key={i} className="break-words">
+                        {issue}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <p className="text-sm leading-relaxed text-red-700">
+                  As etapas abaixo continuam salvas. Ajuste o que for preciso e reenvie — o que já
+                  foi criado na conta não é duplicado.
+                </p>
+                {sendFailure.technical && (
+                  <details>
+                    <summary className="cursor-pointer text-xs font-medium text-red-700 hover:text-red-900">
+                      Detalhes técnicos
+                    </summary>
+                    <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-all rounded-sm border border-red-200 bg-white p-3 text-xs text-slate-600">
+                      {sendFailure.technical}
+                    </pre>
+                  </details>
+                )}
+              </div>
+            </div>
+            <Button variant="secondary" onPress={openPicker} className="shrink-0">
+              Reenviar
+            </Button>
+          </div>
+        )}
 
         {playbook.status === "exported" && (
           <div className="rounded-sm border border-green-200 bg-green-50 px-4 py-3 text-sm font-medium text-green-800">
@@ -270,7 +356,11 @@ export default function PlaybookDetailPage() {
       <SendStatusModal
         open={sendModalOpen}
         status={sendStatus}
-        errorMessage={sendError}
+        errorMessage={sendError?.message}
+        errorTitle={sendError?.title}
+        errorIssues={sendError?.issues}
+        errorDetails={sendError?.technical}
+        retryable={sendError?.retryable ?? true}
         onRetry={() => void runSend(pickerConn)}
         onClose={() => setSendModalOpen(false)}
         sendingLabel="Criando o playbook na conta de destino…"

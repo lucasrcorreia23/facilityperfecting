@@ -364,6 +364,14 @@ export interface PlaybookExportRun {
   call_types?: Record<string, number>;
   call_blocks?: Record<string, number>;
   finished_at?: string | null;
+  /**
+   * Erro do ÚLTIMO envio (cru, como a função gravou). Mora aqui e não em
+   * `error_detail`/`status: "error"`, que são da GERAÇÃO: um envio que falha não
+   * pode oferecer "Retomar geração" (regerar apaga as etapas). Limpo quando um
+   * envio começa.
+   */
+  error?: unknown;
+  failed_at?: string | null;
 }
 
 export interface PlaybookDraft {

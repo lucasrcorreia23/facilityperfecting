@@ -11,6 +11,8 @@ import {
   TrashIcon,
 } from "@heroicons/react/24/outline";
 import { Card } from "@/app/components/ui/card";
+import { ConfirmDialog, type ConfirmConfig } from "@/app/components/ui/confirm-dialog";
+import { blockHasContent } from "@/app/lib/playbook-draft";
 import { managerSelectClassNames, selectItemClassNames } from "@/app/lib/select-classnames";
 import {
   createPlaybookCallBlock,
@@ -231,6 +233,7 @@ function CallTypeEditor({
   methodologies,
   onMove,
   onDelete,
+  onConfirm,
   onChanged,
 }: {
   callType: PlaybookDraftCallTypeWithBlocks;
@@ -240,6 +243,7 @@ function CallTypeEditor({
   methodologies: Methodology[];
   onMove: (index: number, dir: -1 | 1) => void;
   onDelete: (callType: PlaybookDraftCallTypeWithBlocks) => void;
+  onConfirm: (config: ConfirmConfig) => void;
   onChanged: () => void;
 }) {
   const [name, setName] = useState(callType.name);
@@ -266,6 +270,27 @@ function CallTypeEditor({
     } catch (err) {
       toastError("Falha ao reordenar", err);
     }
+  }
+
+  /** Subetapa vazia sai direto; com conteúdo, pergunta antes — não há desfazer. */
+  function requestRemoveBlock(block: PlaybookDraftCallBlock) {
+    if (!blockHasContent(block)) {
+      void removeBlock(block);
+      return;
+    }
+    onConfirm({
+      title: "Excluir a subetapa?",
+      message: (
+        <>
+          A subetapa <b>{block.name}</b> será excluída com o objetivo, as perguntas e as
+          orientações escritas nela. Não dá para desfazer.
+        </>
+      ),
+      confirmLabel: "Excluir subetapa",
+      onConfirm: () => {
+        void removeBlock(block);
+      },
+    });
   }
 
   async function removeBlock(block: PlaybookDraftCallBlock) {
@@ -409,7 +434,7 @@ function CallTypeEditor({
             index={i}
             total={blocks.length}
             onMove={moveBlock}
-            onDelete={removeBlock}
+            onDelete={requestRemoveBlock}
             onChanged={onChanged}
           />
         ))}
@@ -452,6 +477,31 @@ export function PlaybookEditor({
     }
   }
 
+  const [confirm, setConfirm] = useState<ConfirmConfig | null>(null);
+
+  function requestRemoveCallType(callType: PlaybookDraftCallTypeWithBlocks) {
+    const blocks = callType.playbook_call_blocks.length;
+    setConfirm({
+      title: "Excluir a etapa?",
+      message: (
+        <>
+          A etapa <b>{callType.name}</b> será excluída
+          {blocks > 0 ? (
+            <>
+              {" "}
+              junto com {blocks === 1 ? <b>a subetapa</b> : <b>as {blocks} subetapas</b>} dela
+            </>
+          ) : null}
+          . Não dá para desfazer.
+        </>
+      ),
+      confirmLabel: "Excluir etapa",
+      onConfirm: () => {
+        void removeCallType(callType);
+      },
+    });
+  }
+
   async function removeCallType(callType: PlaybookDraftCallTypeWithBlocks) {
     try {
       await deletePlaybookCallType(callType.id);
@@ -485,7 +535,8 @@ export function PlaybookEditor({
           callContexts={callContexts}
           methodologies={methodologies}
           onMove={moveCallType}
-          onDelete={removeCallType}
+          onDelete={requestRemoveCallType}
+          onConfirm={setConfirm}
           onChanged={onChanged}
         />
       ))}
@@ -496,6 +547,7 @@ export function PlaybookEditor({
       >
         <PlusIcon className="w-4 h-4" /> Adicionar etapa
       </button>
+      <ConfirmDialog config={confirm} onClose={() => setConfirm(null)} />
     </div>
   );
 }

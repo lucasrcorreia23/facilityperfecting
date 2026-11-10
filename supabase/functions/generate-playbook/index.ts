@@ -170,6 +170,16 @@ async function persist(
       .in("id", existing.map((c: { id: string }) => c.id));
   }
 
+  // As etapas antigas morreram, e com elas as chaves de `export_run` (ids locais →
+  // ids na conta). Mantê-lo faria o reenvio "retomar" um run que não bate com nada:
+  // pularia a criação do playbook e recriaria TODAS as etapas dentro do playbook
+  // antigo, duplicando. Zera o run e a ponte junto da exclusão — aqui, e não no
+  // cliente, para valer em qualquer caminho de regeração e só quando a geração deu
+  // certo (se a IA falha, etapas e run antigos ficam intactos). O playbook que já
+  // existir na conta continua lá: a tela avisa antes de regerar.
+  await db.from("playbooks").update({ export_run: null }).eq("id", playbookId);
+  await db.from("playbook_perfecting_ids").delete().eq("playbook_id", playbookId);
+
   const callTypes = result.call_types ?? [];
   for (let i = 0; i < callTypes.length; i++) {
     const ct = callTypes[i];

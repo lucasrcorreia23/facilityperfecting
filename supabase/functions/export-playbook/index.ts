@@ -39,6 +39,9 @@ interface ExportRun {
   call_types?: Record<string, number>;
   call_blocks?: Record<string, number>;
   finished_at?: string | null;
+  /** Erro do último envio — fica AQUI, nunca em status/error_detail (que são da geração). */
+  error?: unknown;
+  failed_at?: string | null;
 }
 
 interface CallBlockRow {
@@ -67,6 +70,31 @@ function saveRun(playbookId: string, run: ExportRun, patch: Record<string, unkno
     .from("playbooks")
     .update({ export_run: run, ...patch })
     .eq("id", playbookId);
+}
+
+/**
+ * Falha de ENVIO nunca vira `status: "error"`: esse estado é da geração, e a tela
+ * oferece "Retomar geração" nele — que roda generate-playbook e apaga as etapas.
+ * O playbook volta a "ready" e o erro fica em `export_run.error`, mesclado ao run
+ * (os ids já criados continuam lá para o reenvio pular o que existe).
+ *
+ * Só mexe se o envio chegou a marcar "exporting": recusas anteriores a isso
+ * (404, 409, 422 da pré-validação) não tocam em nada.
+ */
+async function recordSendFailure(playbookId: string, detail: unknown): Promise<void> {
+  const { data: current } = await db
+    .from("playbooks")
+    .select("status, export_run")
+    .eq("id", playbookId)
+    .single();
+  if (!current || current.status !== "exporting") return;
+  const run: ExportRun = {
+    ...(current.export_run ?? {}),
+    error: detail,
+    failed_at: new Date().toISOString(),
+  };
+  const { error } = await saveRun(playbookId, run, { status: "ready", error_detail: null });
+  if (error) console.error("export-playbook: falha ao gravar o erro do envio:", error.message);
 }
 
 async function exportPlaybook(
@@ -124,6 +152,9 @@ async function exportPlaybook(
     : { connection_id: connectionId, call_types: {}, call_blocks: {} };
   run.call_types ??= {};
   run.call_blocks ??= {};
+  // Envio novo começa sem o erro do anterior (o spread de `previous` o traria junto).
+  delete run.error;
+  delete run.failed_at;
 
   await saveRun(playbookId, run, { status: "exporting", error_detail: null });
 
@@ -297,9 +328,7 @@ Deno.serve(async (req) => {
       e instanceof PerfectingError
         ? { status: e.status, detail: e.detail }
         : { message: String(e instanceof Error ? e.message : e) };
-    if (playbookId) {
-      await db.from("playbooks").update({ status: "error", error_detail: detail }).eq("id", playbookId);
-    }
+    if (playbookId) await recordSendFailure(playbookId, detail);
     return json({ ok: false, error: detail }, 500);
   }
 });
