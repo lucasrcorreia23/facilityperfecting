@@ -912,7 +912,8 @@ export async function listPlaybookDrafts(): Promise<PlaybookDraft[]> {
 export async function createPlaybookDraft(params: {
   name: string;
   inputText: string;
-  inputFiles: TrailInputFile[];
+  /** Arquivos do material e, opcionalmente, referências a rascunhos revisados. */
+  inputFiles: unknown[];
   promptOverride?: string | null;
 }): Promise<{ playbookId: string }> {
   const supabase = createClient();
@@ -963,6 +964,35 @@ export async function updatePlaybookDraft(
   const supabase = createClient();
   const { error } = await supabase.from("playbooks").update(patch).eq("id", id);
   if (error) throw error;
+}
+
+/**
+ * Grava em `input_files` de quais rascunhos vem o material revisado (ver
+ * `_shared/reviewed-draft-refs.ts`). Antes de gerar: a função lê daqui.
+ */
+export async function updatePlaybookInputFiles(id: string, inputFiles: unknown[]) {
+  const supabase = createClient();
+  const { error } = await supabase.from("playbooks").update({ input_files: inputFiles }).eq("id", id);
+  if (error) throw error;
+}
+
+/**
+ * O playbook local (autoria no Facility) que virou um playbook da conta, pela ponte
+ * do envio. null quando o playbook da conta não nasceu aqui ou foi regerado depois.
+ */
+export async function findLocalPlaybookId(
+  connectionId: string,
+  perfectingPlaybookId: number,
+): Promise<string | null> {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from("playbook_perfecting_ids")
+    .select("playbook_id")
+    .eq("connection_id", connectionId)
+    .eq("perfecting_playbook_id", perfectingPlaybookId)
+    .limit(1);
+  if (error) throw error;
+  return (data?.[0]?.playbook_id as string | undefined) ?? null;
 }
 
 export async function createPlaybookCallType(params: {

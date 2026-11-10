@@ -1,9 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { useParams } from "next/navigation";
+import { Suspense, useCallback, useEffect, useState } from "react";
+import { useParams, useSearchParams } from "next/navigation";
 import { Modal, ModalBody, ModalContent, ModalFooter, ModalHeader, addToast } from "@heroui/react";
-import { PaperAirplaneIcon, XCircleIcon } from "@heroicons/react/24/outline";
+import { ArrowPathIcon, PaperAirplaneIcon, XCircleIcon } from "@heroicons/react/24/outline";
 import { Button } from "@/app/components/ui/button";
 import { PageHeader } from "@/app/components/ui/page-header";
 import { EmptyState } from "@/app/components/ui/empty-state";
@@ -12,6 +12,7 @@ import { ConfirmDialog, type ConfirmConfig } from "@/app/components/ui/confirm-d
 import { SendStatusModal, type SendStatus } from "@/app/components/ui/send-status-modal";
 import { PlanStatusBanner } from "@/app/components/trilhas/plan-status-banner";
 import { PlaybookEditor } from "@/app/components/playbooks/playbook-editor";
+import { ReviewedDraftPicker, useLibraryDrafts } from "@/app/components/playbooks/reviewed-draft-picker";
 import { ConnectionPicker } from "@/app/components/ui/connection-picker";
 import { DestinationSummary } from "@/app/components/ui/destination-summary";
 import { SaveIndicator } from "@/app/components/ui/save-indicator";
@@ -22,6 +23,7 @@ import { createClient } from "@/app/lib/supabase/client";
 import { classifyPlaybookFailure, playbookEmptyState } from "@/app/lib/playbook-draft";
 import { humanizeSendError, type HumanizedError } from "@/app/lib/send-error";
 import { validatePlaybookForExport } from "@/supabase/functions/_shared/perfecting-limits";
+import { reviewedDraftRefs, withReviewedDrafts } from "@/supabase/functions/_shared/reviewed-draft-refs";
 import {
   describeFunctionError,
   getPlaybookDraft,
@@ -31,6 +33,7 @@ import {
   listMethodologies,
   pollPlaybookGeneration,
   pollSendPlaybook,
+  updatePlaybookInputFiles,
 } from "@/app/lib/db";
 import type {
   CallContextType,
@@ -43,9 +46,18 @@ const RUNNING_LABELS = {
   exporting: "Criando o playbook na conta de destino…",
 };
 
-export default function PlaybookDetailPage() {
+function PlaybookDetail() {
   const params = useParams<{ id: string }>();
   const id = params.id;
+  // `?rascunho=<id>`: veio da checagem de coerência da Criação — abre a regeração
+  // já com o rascunho de lá escolhido como material revisado.
+  const fromDraft = useSearchParams().get("rascunho");
+  const [regenOpen, setRegenOpen] = useState(Boolean(fromDraft));
+  /** null = ainda não mexeu: vale o que o playbook já usa (+ o rascunho de origem). */
+  const [regenIds, setRegenIds] = useState<string[] | null>(null);
+  // A Biblioteca só é lida quando a regeração é aberta pela primeira vez.
+  const [draftsWanted, setDraftsWanted] = useState(Boolean(fromDraft));
+  const { drafts, error: draftsError } = useLibraryDrafts(draftsWanted);
   const [playbook, setPlaybook] = useState<PlaybookDraftDetail | null>(null);
   const [callContexts, setCallContexts] = useState<CallContextType[]>([]);
   const [methodologies, setMethodologies] = useState<Methodology[]>([]);
@@ -143,41 +155,43 @@ export default function PlaybookDetailPage() {
   }, [exporting, id, refresh]);
 
   /**
-   * Regerar substitui a estrutura inteira. Com etapas na tela, pede confirmação:
-   * foi assim que um erro de ENVIO virou perda das etapas editadas.
+   * Toda geração passa por aqui: é onde se escolhe o material revisado e, com
+   * etapas na tela, onde se confirma que regerar as substitui (foi assim que um
+   * erro de ENVIO virou perda das etapas editadas).
    */
   function requestGeneration() {
-    const types = playbook?.playbook_call_types ?? [];
-    if (types.length === 0) {
-      void retryGeneration();
-      return;
+    setDraftsWanted(true);
+    setRegenOpen(true);
+  }
+
+  /** Grava de quais rascunhos vem o material revisado e dispara a geração. */
+  async function confirmGeneration(selectedIds: string[]) {
+    setRegenOpen(false);
+    setRetrying(true);
+    try {
+      // Sem a lista da Biblioteca não dá para montar as referências: mantém as que o
+      // playbook já tem, em vez de apagar a escolha anterior.
+      if (drafts && playbook) {
+        await updatePlaybookInputFiles(
+          id,
+          withReviewedDrafts(
+            playbook.input_files,
+            selectedIds.flatMap((draftId) => drafts.find((d) => d.id === draftId) ?? []),
+          ),
+        );
+      }
+      await invokeGeneratePlaybook(id);
+      setRegenIds(null);
+      await refresh();
+    } catch (err) {
+      addToast({
+        title: "Falha ao iniciar a estruturação",
+        description: err instanceof Error ? err.message : String(err),
+        color: "danger",
+      });
+    } finally {
+      setRetrying(false);
     }
-    const blocks = types.reduce((sum, ct) => sum + ct.playbook_call_blocks.length, 0);
-    const remoteId = playbook?.export_run?.perfecting_playbook_id;
-    setConfirm({
-      title: "Regerar o playbook do zero?",
-      message: (
-        <span className="flex flex-col gap-3">
-          <span>
-            Regerar <b>apaga as {types.length} etapa(s) e {blocks} subetapa(s)</b> que estão na
-            tela, com todas as edições feitas à mão, e estrutura o playbook de novo a partir do
-            material. Não dá para desfazer.
-          </span>
-          {remoteId != null && (
-            <span>
-              Este playbook já foi criado na conta (id {remoteId}) e <b>continua lá</b>: a versão
-              regerada é enviada como um playbook novo. Exclua o antigo na Perfecting antes de
-              reenviar — com ele lá, o envio é recusado por nome repetido.
-            </span>
-          )}
-        </span>
-      ),
-      confirmLabel: "Apagar e regerar",
-      tone: "danger",
-      onConfirm: () => {
-        void retryGeneration();
-      },
-    });
   }
 
   /**
@@ -202,22 +216,6 @@ export default function PlaybookDetailPage() {
       setPickerOpen(true);
     } finally {
       setOpeningPicker(false);
-    }
-  }
-
-  async function retryGeneration() {
-    setRetrying(true);
-    try {
-      await invokeGeneratePlaybook(id);
-      await refresh();
-    } catch (err) {
-      addToast({
-        title: "Falha ao reiniciar a estruturação",
-        description: err instanceof Error ? err.message : String(err),
-        color: "danger",
-      });
-    } finally {
-      setRetrying(false);
     }
   }
 
@@ -322,6 +320,20 @@ export default function PlaybookDetailPage() {
     })),
   });
   const canSend = callTypes.length > 0 && playbook.status !== "generating";
+  // Material revisado: o que o playbook já aponta e o que entrou na última geração.
+  const reviewedRefs = reviewedDraftRefs(playbook.input_files);
+  const reviewedUsed = reviewedRefs.filter((r) => r.used_at && !r.missing);
+  const reviewedInfo = (playbook.usage?.reviewed_material ?? null) as {
+    truncated?: string[];
+    missing?: string[];
+  } | null;
+  const regenSelection =
+    regenIds ??
+    Array.from(
+      new Set([...reviewedRefs.filter((r) => !r.missing).map((r) => r.draft_id), ...(fromDraft ? [fromDraft] : [])]),
+    );
+  const blockCount = callTypes.reduce((sum, ct) => sum + ct.playbook_call_blocks.length, 0);
+  const remotePlaybookId = playbook.export_run?.perfecting_playbook_id;
   // Slugs de tipo de ligação/metodologia que não existem na conta de destino.
   const sendWarnings = playbook.export_run?.perfecting_playbook_id != null
     ? playbook.export_run?.warnings ?? []
@@ -336,6 +348,17 @@ export default function PlaybookDetailPage() {
         action={
           <div className="flex flex-wrap items-center gap-3">
             <SaveIndicator tracker={saves} />
+            {callTypes.length > 0 && (
+              <Button
+                variant="secondary"
+                onPress={requestGeneration}
+                isDisabled={busy}
+                isLoading={retrying}
+                startContent={!retrying ? <ArrowPathIcon className="w-4 h-4" /> : undefined}
+              >
+                Regerar com IA
+              </Button>
+            )}
             <Button
               onPress={() => void openPicker()}
               isDisabled={!canSend}
@@ -357,6 +380,30 @@ export default function PlaybookDetailPage() {
           readyLabel="Playbook estruturado. Revise as etapas abaixo antes de enviar para a conta."
           runningLabels={RUNNING_LABELS}
         />
+
+        {reviewedRefs.length > 0 && !busy && (
+          <div className="flex flex-col gap-1 rounded-sm border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
+            <p className="break-words leading-relaxed">
+              <span className="font-medium text-slate-700">Material revisado:</span>{" "}
+              {reviewedUsed.length > 0
+                ? `a última estruturação usou ${reviewedUsed
+                    .map((r) => r.name.replace(/^Rascunho revisado: /, "“") + "”")
+                    .join(", ")}, além dos documentos.`
+                : "há rascunho escolhido, mas ele ainda não entrou numa estruturação."}
+            </p>
+            {(reviewedInfo?.missing?.length ?? 0) > 0 && (
+              <p className="break-words leading-relaxed text-amber-700">
+                Não encontrado na última estruturação (apagado da Biblioteca):{" "}
+                {reviewedInfo!.missing!.join(", ")}.
+              </p>
+            )}
+            {(reviewedInfo?.truncated?.length ?? 0) > 0 && (
+              <p className="break-words leading-relaxed text-amber-700">
+                Encurtado para caber: {reviewedInfo!.truncated!.join("; ")}.
+              </p>
+            )}
+          </div>
+        )}
 
         {sendFailure && !busy && (
           <div className="flex flex-col gap-3 rounded-sm border border-red-200 bg-red-50 px-4 py-3 sm:flex-row sm:items-start sm:justify-between">
@@ -449,7 +496,7 @@ export default function PlaybookDetailPage() {
                     Este playbook ainda não foi estruturado: a IA não leu o material para montar
                     as etapas.
                   </p>
-                  <Button onPress={retryGeneration} isLoading={retrying}>
+                  <Button onPress={requestGeneration} isLoading={retrying}>
                     Estruturar playbook
                   </Button>
                 </>
@@ -459,7 +506,7 @@ export default function PlaybookDetailPage() {
                     A estruturação falhou antes de criar as etapas — o motivo está no aviso acima.
                     O material enviado continua salvo.
                   </p>
-                  <Button variant="secondary" onPress={retryGeneration} isLoading={retrying}>
+                  <Button variant="secondary" onPress={requestGeneration} isLoading={retrying}>
                     Tentar estruturar de novo
                   </Button>
                 </>
@@ -469,7 +516,7 @@ export default function PlaybookDetailPage() {
                     Este playbook está sem etapas. Adicione à mão, logo abaixo, ou estruture de
                     novo a partir do material.
                   </p>
-                  <Button variant="secondary" onPress={retryGeneration} isLoading={retrying}>
+                  <Button variant="secondary" onPress={requestGeneration} isLoading={retrying}>
                     Estruturar de novo
                   </Button>
                 </>
@@ -527,6 +574,54 @@ export default function PlaybookDetailPage() {
         </ModalContent>
       </Modal>
 
+      <Modal isOpen={regenOpen} onOpenChange={setRegenOpen} radius="sm" size="2xl" scrollBehavior="inside">
+        <ModalContent>
+          <ModalHeader>
+            {callTypes.length > 0 ? "Regerar o playbook do zero?" : "Estruturar o playbook com IA"}
+          </ModalHeader>
+          <ModalBody>
+            <div className="flex flex-col gap-4 text-sm leading-relaxed text-slate-600">
+              {callTypes.length > 0 ? (
+                <p className="rounded-sm bg-red-50 px-3 py-2 text-red-800">
+                  Regerar <b>substitui as {callTypes.length} etapa(s) e {blockCount} subetapa(s)</b>{" "}
+                  que estão na tela, com todas as edições feitas à mão, e estrutura o playbook de
+                  novo. Não dá para desfazer.
+                </p>
+              ) : (
+                <p>A IA lê o material do playbook e monta as etapas e subetapas para você revisar.</p>
+              )}
+              {callTypes.length > 0 && remotePlaybookId != null && (
+                <p>
+                  Este playbook já foi criado na conta (id {remotePlaybookId}) e <b>continua lá</b>:
+                  a versão regerada é enviada como um playbook novo. Exclua o antigo na Perfecting
+                  antes de reenviar — com ele lá, o envio é recusado por nome repetido.
+                </p>
+              )}
+              <ReviewedDraftPicker
+                drafts={drafts}
+                error={draftsError}
+                value={regenSelection}
+                onChange={setRegenIds}
+                preferConnectionId={playbook.export_run?.connection_id ?? null}
+              />
+            </div>
+          </ModalBody>
+          <ModalFooter>
+            <Button variant="secondary" onPress={() => setRegenOpen(false)}>
+              Cancelar
+            </Button>
+            <Button
+              variant={callTypes.length > 0 ? "danger" : "primary"}
+              onPress={() => void confirmGeneration(regenSelection)}
+              // Sem a lista da Biblioteca a escolha não pode ser gravada: espera carregar.
+              isDisabled={busy || retrying || (drafts == null && !draftsError)}
+            >
+              {callTypes.length > 0 ? "Substituir etapas e regerar" : "Estruturar"}
+            </Button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
+
       <ConfirmDialog config={confirm} onClose={() => setConfirm(null)} />
 
       <SendStatusModal
@@ -544,5 +639,13 @@ export default function PlaybookDetailPage() {
         successHint="Agora dá para gerar os roleplays por ele na Criação."
       />
     </div>
+  );
+}
+
+export default function PlaybookDetailPage() {
+  return (
+    <Suspense fallback={<LoadingView label="Carregando playbook…" />}>
+      <PlaybookDetail />
+    </Suspense>
   );
 }

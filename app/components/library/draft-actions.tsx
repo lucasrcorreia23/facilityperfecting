@@ -22,6 +22,7 @@ import {
   EyeIcon,
   TrashIcon,
   AdjustmentsHorizontalIcon,
+  QueueListIcon,
 } from "@heroicons/react/24/outline";
 import { Button } from "@/app/components/ui/button";
 import { ConfirmDialog, type ConfirmConfig } from "@/app/components/ui/confirm-dialog";
@@ -123,6 +124,17 @@ export function DraftActions({
           >
             Calibrar roleplay
           </DropdownItem>
+          {draft.generation_output && draft.scenario?.generation_mode !== "debate" ? (
+            <DropdownItem
+              key="playbook"
+              className={MENU_ITEM_HOVER}
+              startContent={<QueueListIcon className="w-4 h-4" />}
+              href={`/playbooks/novo?rascunho=${draft.id}`}
+              description="Leva o material revisado e as respostas às lacunas"
+            >
+              Novo playbook com este rascunho
+            </DropdownItem>
+          ) : null}
           <DropdownItem
             key="new-scenario"
             className={MENU_ITEM_HOVER}

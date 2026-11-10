@@ -1,17 +1,24 @@
 "use client";
 
-import { useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Input, Textarea, addToast } from "@heroui/react";
 import { ArrowUpTrayIcon, SparklesIcon, XMarkIcon } from "@heroicons/react/24/outline";
 import { Card } from "@/app/components/ui/card";
 import { Button } from "@/app/components/ui/button";
 import { PageHeader } from "@/app/components/ui/page-header";
+import { LoadingView } from "@/app/components/ui/loading-view";
+import { ReviewedDraftPicker, useLibraryDrafts } from "@/app/components/playbooks/reviewed-draft-picker";
 import { createPlaybookDraft, invokeGeneratePlaybook, uploadAndExtract } from "@/app/lib/db";
 import type { TrailInputFile } from "@/app/lib/types";
+import { withReviewedDrafts } from "@/supabase/functions/_shared/reviewed-draft-refs";
 
-export default function NovoPlaybookPage() {
+function NovoPlaybook() {
   const router = useRouter();
+  // `?rascunho=<id>`: veio de um rascunho — ele já entra escolhido.
+  const fromDraft = useSearchParams().get("rascunho");
+  const { drafts, error: draftsError } = useLibraryDrafts();
+  const [reviewedIds, setReviewedIds] = useState<string[]>(fromDraft ? [fromDraft] : []);
   const [name, setName] = useState("");
   const [text, setText] = useState("");
   const [files, setFiles] = useState<TrailInputFile[]>([]);
@@ -78,7 +85,11 @@ export default function NovoPlaybookPage() {
       const { playbookId } = await createPlaybookDraft({
         name: name.trim(),
         inputText: text.trim(),
-        inputFiles: files,
+        // De quais rascunhos vem o material revisado: a função lê daqui ao gerar.
+        inputFiles: withReviewedDrafts(
+          files,
+          reviewedIds.flatMap((id) => drafts?.find((d) => d.id === id) ?? []),
+        ),
       });
       // A estruturação roda em background; a tela de detalhe acompanha o status.
       await invokeGeneratePlaybook(playbookId).catch((err) => {
@@ -197,6 +208,14 @@ export default function NovoPlaybookPage() {
           description="Quanto mais fiel o material, menos a IA precisa inventar estrutura."
         />
 
+        <ReviewedDraftPicker
+          drafts={drafts}
+          error={draftsError}
+          value={reviewedIds}
+          onChange={setReviewedIds}
+          isDisabled={submitting}
+        />
+
         <div className="flex justify-end">
           <Button
             onPress={submit}
@@ -209,5 +228,13 @@ export default function NovoPlaybookPage() {
         </div>
       </Card>
     </div>
+  );
+}
+
+export default function NovoPlaybookPage() {
+  return (
+    <Suspense fallback={<LoadingView />}>
+      <NovoPlaybook />
+    </Suspense>
   );
 }
