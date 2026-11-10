@@ -92,6 +92,8 @@ export function PlaybookCoherenceModal({
   onBack,
   onSendAnyway,
   onRecheck,
+  onRegeneratePlaybook,
+  regenerating,
 }: {
   state: CoherenceModalState | null;
   playbookName: string;
@@ -102,8 +104,16 @@ export function PlaybookCoherenceModal({
   onSendAnyway: () => void;
   /** Refaz a checagem: o playbook pode ter sido corrigido na conta. */
   onRecheck: () => void;
+  /**
+   * Atalho para quando o que precisa mudar é o playbook: salva o rascunho e abre a
+   * regeração do playbook com ele como material revisado. Ausente quando o playbook
+   * da conta não foi feito no Facility (não há o que regerar aqui).
+   */
+  onRegeneratePlaybook?: () => void;
+  regenerating?: boolean;
 }) {
   const result = state?.phase === "found" ? state.result : null;
+  const playbookFixes = result?.divergences.filter((d) => d.fixIn === "playbook").length ?? 0;
   return (
     <Modal
       isOpen={!!state}
@@ -162,6 +172,28 @@ export function PlaybookCoherenceModal({
                     Parte do conteúdo foi encurtada para caber na checagem e pode ter ficado sem
                     comparação: {result.truncated.join("; ")}.
                   </p>
+                )}
+                {playbookFixes > 0 && onRegeneratePlaybook && (
+                  <div className="flex flex-col gap-2 rounded-sm border border-slate-200 bg-slate-50 p-4">
+                    <p className="text-sm leading-relaxed text-slate-600">
+                      <span className="font-medium text-slate-800">
+                        {plural(playbookFixes, "divergência pede", "divergências pedem")} correção no
+                        playbook.
+                      </span>{" "}
+                      Em vez de corrigir subetapa por subetapa, dá para regerar o playbook com o
+                      material revisado deste rascunho. O rascunho é salvo na Biblioteca (nada é
+                      criado na conta) e a tela do playbook abre já com ele escolhido; depois de
+                      regerar e reenviar o playbook, envie o rascunho pela Biblioteca.
+                    </p>
+                    <Button
+                      variant="secondary"
+                      onPress={onRegeneratePlaybook}
+                      isLoading={regenerating}
+                      className="self-start"
+                    >
+                      Salvar rascunho e regerar o playbook
+                    </Button>
+                  </div>
                 )}
                 <p className="text-xs leading-relaxed text-slate-500">
                   A checagem é feita por IA e pode errar: confira os trechos antes de decidir.

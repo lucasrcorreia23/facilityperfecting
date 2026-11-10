@@ -55,6 +55,7 @@ import {
   checkPlaybookCoherence,
   createDraftFromText,
   describeFunctionError,
+  findLocalPlaybookId,
   getGeneratorInfo,
   invokeExport,
   getDefaultMethodologySlug,
@@ -370,6 +371,57 @@ export default function CriacaoPage() {
       active = false;
     };
   }, [connectionId, playbookId]);
+
+  // O playbook da conta foi feito no Facility? Só então a checagem de coerência pode
+  // oferecer "regerar o playbook com este rascunho". Sem resposta, o atalho não aparece.
+  const [localPlaybook, setLocalPlaybook] = useState<{ key: string; id: string | null } | null>(null);
+  const localPlaybookKey = `${connectionId}:${playbookId}`;
+  useEffect(() => {
+    if (!connectionId || !playbookId) return;
+    let active = true;
+    const key = `${connectionId}:${playbookId}`;
+    findLocalPlaybookId(connectionId, Number(playbookId))
+      .then((id) => {
+        if (active) setLocalPlaybook({ key, id });
+      })
+      .catch(() => {
+        /* sem a ponte só some o atalho */
+      });
+    return () => {
+      active = false;
+    };
+  }, [connectionId, playbookId]);
+  const localPlaybookId = localPlaybook?.key === localPlaybookKey ? localPlaybook.id : null;
+  const [openingPlaybook, setOpeningPlaybook] = useState(false);
+
+  /**
+   * Atalho da checagem de coerência: salva o rascunho na Biblioteca (nada vai para a
+   * conta) e abre a regeração do playbook local com ele como material revisado.
+   */
+  async function saveAndRegeneratePlaybook() {
+    if (!localPlaybookId || openingPlaybook) return;
+    setOpeningPlaybook(true);
+    try {
+      const payload = buildDraftPayload();
+      const sig = JSON.stringify(payload);
+      let draftId = sentDraftId;
+      if (!draftId || draftSigRef.current !== sig) {
+        draftId = (await createDraftFromText(payload)).draftId;
+        setSentDraftId(draftId);
+        draftSigRef.current = sig;
+      }
+      setLeftSafely(true);
+      closeCoherence();
+      router.push(`/playbooks/${localPlaybookId}?rascunho=${draftId}`);
+    } catch (err) {
+      addToast({
+        title: "Erro ao salvar o rascunho",
+        description: err instanceof Error ? err.message : String(err),
+        color: "danger",
+      });
+      setOpeningPlaybook(false);
+    }
+  }
 
   // Envio concluído com sucesso → mostra o estado por ~1,2s e vai à Biblioteca.
   useEffect(() => {
@@ -1780,6 +1832,8 @@ export default function CriacaoPage() {
           openPlaybookConfirm({ kind: "accepted", result });
         }}
         onRecheck={() => void runCoherenceCheck(true)}
+        onRegeneratePlaybook={localPlaybookId ? () => void saveAndRegeneratePlaybook() : undefined}
+        regenerating={openingPlaybook}
       />
 
       <ConfirmDialog config={confirm} onClose={() => setConfirm(null)} />
