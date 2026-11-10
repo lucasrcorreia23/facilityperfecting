@@ -103,6 +103,8 @@ export default function ProntidaoPage() {
   const [loading, setLoading] = useState(true);
   const [rowsLoading, setRowsLoading] = useState(false);
   const [roundBusy, setRoundBusy] = useState(false);
+  const [addingClient, setAddingClient] = useState(false);
+  const [addingRoleplay, setAddingRoleplay] = useState(false);
   const [confirm, setConfirm] = useState<ConfirmConfig | null>(null);
 
   // avaliação
@@ -213,9 +215,47 @@ export default function ProntidaoPage() {
     await loadRows(id);
   }
 
+  /** Novo round congela a comparação com o anterior — pergunta antes de criar. */
+  function askAddRound() {
+    if (!round || roundBusy) return;
+    const name = `Round ${rounds.length + 1}`;
+    setConfirm({
+      title: `Criar o ${name}?`,
+      message: (
+        <>
+          O <b>{name}</b> nasce com os <b>{rows.length} roleplay(s)</b> do {round.name}, sem
+          nenhuma avaliação — a equipe avalia tudo de novo. O {round.name} continua como está, e
+          a tela passa a mostrar o round novo.
+        </>
+      ),
+      confirmLabel: "Criar round",
+      onConfirm: () => void addRound(),
+    });
+  }
+
+  /** Fechar deixa o round somente leitura para todos; reabrir é direto. */
+  function askToggleRoundStatus() {
+    if (!round || roundBusy) return;
+    if (round.status !== "aberto") {
+      void toggleRoundStatus();
+      return;
+    }
+    setConfirm({
+      title: `Fechar o ${round.name}?`,
+      message: (
+        <>
+          Com o round fechado <b>ninguém mais avalia nem edita</b> os roleplays dele — fica
+          somente leitura para toda a equipe. Dá para reabrir depois.
+        </>
+      ),
+      confirmLabel: "Fechar round",
+      onConfirm: () => void toggleRoundStatus(),
+    });
+  }
+
   /** Cria um novo round clonando os roleplays do round atual (sem avaliações). */
   async function addRound() {
-    if (!round) return;
+    if (!round || roundBusy) return;
     setRoundBusy(true);
     try {
       const name = `Round ${rounds.length + 1}`;
@@ -238,7 +278,7 @@ export default function ProntidaoPage() {
 
   /** Alterna entre aberto/fechado (fechado = somente leitura na UI). */
   async function toggleRoundStatus() {
-    if (!round) return;
+    if (!round || roundBusy) return;
     const next = round.status === "aberto" ? "fechado" : "aberto";
     setRoundBusy(true);
     try {
@@ -445,7 +485,8 @@ export default function ProntidaoPage() {
 
   async function addClient() {
     const name = newClientName.trim();
-    if (!name) return;
+    if (!name || addingClient) return;
+    setAddingClient(true);
     try {
       const { id } = await createTrackingClient(name);
       const cs = await listTrackingClients();
@@ -459,12 +500,15 @@ export default function ProntidaoPage() {
         description: err instanceof Error ? err.message : String(err),
         color: "danger",
       });
+    } finally {
+      setAddingClient(false);
     }
   }
 
   async function addRoleplay() {
     const name = newRpName.trim();
-    if (!name) return;
+    if (!name || addingRoleplay) return;
+    setAddingRoleplay(true);
     try {
       const position = rows.reduce((max, r) => Math.max(max, r.position), -1) + 1;
       const row = await createReadiness({
@@ -484,6 +528,8 @@ export default function ProntidaoPage() {
         description: err instanceof Error ? err.message : String(err),
         color: "danger",
       });
+    } finally {
+      setAddingRoleplay(false);
     }
   }
 
@@ -569,7 +615,7 @@ export default function ProntidaoPage() {
         <div className="flex flex-col gap-6">
           {/* Toolbar de round — seleção da rodada + ações */}
           <div className="flex flex-wrap items-center gap-2 rounded-sm border border-slate-200 bg-slate-50 px-3 py-2">
-            <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+            <span className="text-xs font-semibold text-slate-500">
               Round
             </span>
             {rounds.length > 0 && (
@@ -605,7 +651,7 @@ export default function ProntidaoPage() {
               <Button
                 variant="secondary"
                 size="sm"
-                onPress={addRound}
+                onPress={askAddRound}
                 isDisabled={!round || roundBusy}
                 isLoading={roundBusy}
                 startContent={<PlusIcon className="h-4 w-4" />}
@@ -617,7 +663,7 @@ export default function ProntidaoPage() {
                 <Button
                   variant="secondary"
                   size="sm"
-                  onPress={toggleRoundStatus}
+                  onPress={askToggleRoundStatus}
                   isDisabled={roundBusy}
                   className="shrink-0 whitespace-nowrap"
                 >
@@ -647,7 +693,7 @@ export default function ProntidaoPage() {
             <Card className="overflow-x-auto">
               <table className="w-full">
                 <thead className="bg-slate-50 border-b border-slate-200">
-                  <tr className="text-xs font-semibold uppercase tracking-wider text-slate-600">
+                  <tr className="text-xs font-semiboldr text-slate-600">
                     <th className="px-4 py-2.5 text-left">Roleplay</th>
                     <th className="px-3 py-2.5 text-left">Qualidade</th>
                     <th className="px-3 py-2.5 text-left">Avaliações</th>
@@ -670,8 +716,8 @@ export default function ProntidaoPage() {
                         className="group border-b border-slate-100 align-middle text-sm text-slate-800"
                       >
                         <td className="px-4 py-3">
-                          <div className="flex items-center gap-2">
-                            <div className="min-w-0">
+                          <div className="flex items-center gap-1">
+                            <div className="mr-1 min-w-0">
                               <div className="font-medium" title={r.persona ?? r.name}>
                                 {(r.persona ?? r.name).split("—")[0].trim()}
                               </div>
@@ -681,7 +727,7 @@ export default function ProntidaoPage() {
                               type="button"
                               aria-label="Ver roteiro"
                               title="Ver roteiro do roleplay"
-                              className="shrink-0 text-slate-400 opacity-0 transition-opacity hover:text-blue-600 focus-visible:opacity-100 group-hover:opacity-100"
+                              className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-sm text-slate-400 transition-colors hover:bg-slate-100 sm:h-8 sm:w-8 hover:text-blue-600"
                               onClick={() => openScript(r)}
                             >
                               <DocumentTextIcon className="h-4 w-4" />
@@ -690,7 +736,7 @@ export default function ProntidaoPage() {
                               type="button"
                               aria-label="Editar roleplay"
                               title="Editar informações do roleplay"
-                              className="shrink-0 text-slate-400 opacity-0 transition-opacity hover:text-blue-600 focus-visible:opacity-100 group-hover:opacity-100"
+                              className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-sm text-slate-400 transition-colors hover:bg-slate-100 sm:h-8 sm:w-8 hover:text-blue-600"
                               onClick={() => openEdit(r)}
                             >
                               <PencilSquareIcon className="h-4 w-4" />
@@ -699,7 +745,7 @@ export default function ProntidaoPage() {
                               type="button"
                               aria-label="Excluir roleplay"
                               title="Excluir roleplay"
-                              className="shrink-0 text-slate-400 opacity-0 transition-opacity hover:text-red-600 focus-visible:opacity-100 group-hover:opacity-100"
+                              className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-sm text-slate-400 transition-colors hover:bg-slate-100 sm:h-8 sm:w-8 hover:bg-red-50 hover:text-red-600"
                               onClick={() =>
                                 setConfirm({
                                   title: "Excluir roleplay?",
@@ -710,6 +756,7 @@ export default function ProntidaoPage() {
                                     </>
                                   ),
                                   confirmLabel: "Excluir",
+                                  tone: "danger",
                                   onConfirm: () => void removeRow(r.id),
                                 })
                               }
@@ -724,12 +771,8 @@ export default function ProntidaoPage() {
                           </span>
                         </td>
                         <td className="px-3 py-3">
-                          <button
-                            type="button"
-                            onClick={() => openEval(r)}
-                            className="flex items-center gap-2 rounded-sm px-1 py-0.5 hover:bg-slate-50"
-                            title="Avaliar / ver consolidado"
-                          >
+                          {/* Só informa: quem abre a avaliação é o botão da coluna Ações. */}
+                          <div className="flex items-center gap-2">
                             {raterCount > 0 ? (
                               <span className="flex -space-x-1.5">
                                 {agg!.evaluatorIds.slice(0, 4).map((id) => {
@@ -749,7 +792,7 @@ export default function ProntidaoPage() {
                             <span className="text-xs text-slate-500">
                               {raterCount}/{REQUIRED_EVALUATIONS_PER_ROLEPLAY} avaliaram
                             </span>
-                          </button>
+                          </div>
                         </td>
                         <td className="px-3 py-3">
                           <Select
@@ -782,8 +825,9 @@ export default function ProntidaoPage() {
                               size="sm"
                               className="border-green-200 text-green-700 data-[hover=true]:bg-green-50"
                               onPress={() => openEval(r)}
+                              aria-label={`Ver a avaliação de ${r.name} (você já avaliou)`}
                             >
-                              Avaliado
+                              Avaliado · ver
                             </Button>
                           ) : (
                             <Button
@@ -835,7 +879,9 @@ export default function ProntidaoPage() {
             <Button variant="secondary" onPress={() => setNewClientOpen(false)}>
               Cancelar
             </Button>
-            <Button onPress={addClient}>Criar</Button>
+            <Button onPress={addClient} isLoading={addingClient} isDisabled={!newClientName.trim()}>
+              Criar
+            </Button>
           </ModalFooter>
         </ModalContent>
       </Modal>
@@ -869,7 +915,9 @@ export default function ProntidaoPage() {
             <Button variant="secondary" onPress={() => setNewRpOpen(false)}>
               Cancelar
             </Button>
-            <Button onPress={addRoleplay}>Adicionar</Button>
+            <Button onPress={addRoleplay} isLoading={addingRoleplay} isDisabled={!newRpName.trim()}>
+              Adicionar
+            </Button>
           </ModalFooter>
         </ModalContent>
       </Modal>
@@ -949,7 +997,7 @@ export default function ProntidaoPage() {
           {evalRow && (
             <>
               <ModalHeader className="flex flex-col items-start gap-0.5">
-                <span className="text-xs font-medium uppercase tracking-wide text-slate-400">
+                <span className="text-xs font-medium text-slate-400">
                   Avaliar roleplay
                 </span>
                 <span>{evalRow.persona ?? evalRow.name}</span>
@@ -1050,7 +1098,20 @@ export default function ProntidaoPage() {
                 ) ? (
                   <Button
                     variant="secondary"
-                    onPress={removeMyEval}
+                    onPress={() =>
+                      setConfirm({
+                        title: "Remover a sua avaliação?",
+                        message: (
+                          <>
+                            As notas e os comentários que você deu a este roleplay são apagados e
+                            ele volta a contar como não avaliado por você. Não dá para desfazer.
+                          </>
+                        ),
+                        confirmLabel: "Remover avaliação",
+                        tone: "danger",
+                        onConfirm: () => void removeMyEval(),
+                      })
+                    }
                     isDisabled={evalSaving || roundClosed}
                   >
                     Remover minha avaliação
@@ -1096,7 +1157,7 @@ export default function ProntidaoPage() {
             return (
               <>
                 <ModalHeader className="flex flex-col items-start gap-0.5">
-                  <span className="text-xs font-medium uppercase tracking-wide text-slate-400">
+                  <span className="text-xs font-medium text-slate-400">
                     Roteiro do vendedor
                   </span>
                   <span>{title}</span>
@@ -1196,7 +1257,7 @@ export default function ProntidaoPage() {
 function Kpi({ label, value }: { label: string; value: string }) {
   return (
     <Card className="flex flex-col gap-1 p-4">
-      <span className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</span>
+      <span className="text-xs font-medium text-slate-500">{label}</span>
       <span className="text-xl font-semibold tabular-nums text-slate-800">{value}</span>
     </Card>
   );
