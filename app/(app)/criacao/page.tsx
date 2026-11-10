@@ -34,6 +34,7 @@ import { ConnectionPicker } from "@/app/components/ui/connection-picker";
 import { DestinationSummary } from "@/app/components/ui/destination-summary";
 import { managerSelectClassNames } from "@/app/lib/select-classnames";
 import { useConnections } from "@/app/lib/use-connections";
+import { useUnsavedGuard } from "@/app/lib/use-unsaved-guard";
 import { isProduction } from "@/app/lib/connection-label";
 import { DossierEditor } from "@/app/components/creation/dossier-editor";
 import {
@@ -238,6 +239,15 @@ export default function CriacaoPage() {
   const coherenceRunRef = useRef(0);
 
   const isPlaybookMode = generationMode === "playbook";
+
+  /** Rascunho já gravado (salvo na Biblioteca ou enviado): sair não perde mais nada. */
+  const [leftSafely, setLeftSafely] = useState(false);
+  // Fechar a aba ou clicar no menu com material na tela perdia tudo sem aviso.
+  useUnsavedGuard(
+    Boolean(text.trim() || offerName.trim() || aiProcessed) &&
+      !leftSafely &&
+      sendStatus !== "success",
+  );
 
   /** O processamento usou as diretrizes de outra conta (ou de nenhuma). */
   const guidelinesStale = Boolean(generator) && (generator?.connection_id ?? "") !== connectionId;
@@ -636,6 +646,7 @@ export default function CriacaoPage() {
     setSaving(true);
     try {
       await createDraftFromText(buildDraftPayload());
+      setLeftSafely(true);
       addToast({ title: "Rascunho salvo", color: "success" });
       router.push("/biblioteca");
     } catch (err) {
@@ -1118,6 +1129,7 @@ export default function CriacaoPage() {
                       </>
                     ),
                     confirmLabel: "Resetar e reprocessar",
+                  tone: "danger",
                     onConfirm: () => handleProcess("reset"),
                   })
                 }
@@ -1526,6 +1538,7 @@ export default function CriacaoPage() {
                   </>
                 ),
                 confirmLabel: "Limpar tudo",
+                tone: "danger",
                 onConfirm: clearAll,
               })
             }

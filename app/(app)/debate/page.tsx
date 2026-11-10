@@ -16,6 +16,7 @@ import { ConnectionPicker } from "@/app/components/ui/connection-picker";
 import { DestinationSummary } from "@/app/components/ui/destination-summary";
 import { managerSelectClassNames } from "@/app/lib/select-classnames";
 import { useConnections } from "@/app/lib/use-connections";
+import { useUnsavedGuard } from "@/app/lib/use-unsaved-guard";
 import { isProduction } from "@/app/lib/connection-label";
 import {
   createDraftFromText,
@@ -87,6 +88,8 @@ export default function DebatePage() {
   const [sendStatus, setSendStatus] = useState<SendStatus>("sending");
   const [sendError, setSendError] = useState<string | null>(null);
   const [sentCaseSetup, setSentCaseSetup] = useState<number | null>(null);
+  /** Assinatura do debate que já foi enviado: editar depois volta a contar como não salvo. */
+  const [sentSig, setSentSig] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   /** Rascunho já gravado para este conteúdo: "Tentar de novo" reenvia o mesmo, sem duplicar. */
   const sentDraftRef = useRef<{ sig: string; id: string } | null>(null);
@@ -175,6 +178,14 @@ export default function DebatePage() {
   const methodology = methodologies.find((m) => String(m.id) === methodologyId) ?? null;
   const connection = connections?.find((c) => c.id === connectionId) ?? null;
 
+  // Fechar a aba ou sair pelo menu com o debate na tela perdia tudo: nada aqui é
+  // gravado antes do envio.
+  const draftSig = useMemo(() => (draft ? JSON.stringify(draft) : null), [draft]);
+  const hasContent = Boolean(
+    text.trim() || draft || anchors.obra.trim() || anchors.tema.trim() || anchors.mocao.trim(),
+  );
+  useUnsavedGuard(hasContent && !(sentSig !== null && sentSig === draftSig));
+
   async function runSend() {
     if (!draft || !methodology) return;
     setSendOpen(true);
@@ -205,6 +216,7 @@ export default function DebatePage() {
       if (res.failures.length > 0) throw new Error(res.failures.join("\n"));
       const caseSetupId = (res.results?.[0]?.caseSetupId ?? null) as number | null;
       setSentCaseSetup(caseSetupId);
+      setSentSig(JSON.stringify(draft));
       setSendStatus("success");
     } catch (e) {
       setSendError(e instanceof Error ? e.message : String(e));
