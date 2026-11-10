@@ -1827,6 +1827,25 @@ export async function createPlaybook(
   return data.id;
 }
 
+/**
+ * Se o playbook ainda existe na conta. Os ids de `export_run` e da ponte
+ * `playbook_perfecting_ids` vencem quando alguém apaga o playbook na Perfecting:
+ * retomar em cima deles dá 404 em toda etapa, e a ponte recusa o reenvio para sempre.
+ */
+export async function perfectingPlaybookExists(
+  env: PerfectingEnv,
+  token: string,
+  playbookId: number,
+): Promise<boolean> {
+  try {
+    await getJson(`${rp(env)}/playbook_${playbookId}`, token);
+    return true;
+  } catch (e) {
+    if (e instanceof PerfectingError && e.status === 404) return false;
+    throw e;
+  }
+}
+
 export interface PlaybookCallTypeInput {
   name: string;
   description: string; // obrigatório na API

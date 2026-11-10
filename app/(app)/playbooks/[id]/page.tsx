@@ -33,6 +33,7 @@ import {
   listConnections,
   listMethodologies,
   pollPlaybookGeneration,
+  pollSendPlaybook,
 } from "@/app/lib/db";
 import type {
   CallContextType,
@@ -102,6 +103,20 @@ export default function PlaybookDetailPage() {
     }, 20_000);
     return () => clearInterval(timer);
   }, [generating, id, refresh]);
+
+  // Idem para o envio: função encerrada no meio deixava o playbook em "Enviando…"
+  // para sempre. O poll devolve a "pronto" com o erro de envio, e o reenvio retoma.
+  const exporting = playbook?.status === "exporting";
+  useEffect(() => {
+    if (!exporting) return;
+    const timer = setInterval(() => {
+      void (async () => {
+        await pollSendPlaybook(id).catch(() => {});
+        await refresh();
+      })();
+    }, 20_000);
+    return () => clearInterval(timer);
+  }, [exporting, id, refresh]);
 
   /**
    * Regerar substitui a estrutura inteira. Com etapas na tela, pede confirmação:
@@ -230,6 +245,10 @@ export default function PlaybookDetailPage() {
     })),
   });
   const canSend = callTypes.length > 0 && playbook.status !== "generating";
+  // Slugs de tipo de ligação/metodologia que não existem na conta de destino.
+  const sendWarnings = playbook.export_run?.perfecting_playbook_id != null
+    ? playbook.export_run?.warnings ?? []
+    : [];
 
   return (
     <div className="flex flex-col gap-0">
@@ -321,6 +340,22 @@ export default function PlaybookDetailPage() {
           <div className="rounded-sm border border-green-200 bg-green-50 px-4 py-3 text-sm font-medium text-green-800">
             Playbook criado na conta (id {playbook.export_run?.perfecting_playbook_id}). Agora é só
             ir na Criação, escolher essa conta e gerar os roleplays pelo playbook.
+          </div>
+        )}
+
+        {sendWarnings.length > 0 && !busy && (
+          <div className="flex flex-col gap-1 rounded-sm border border-amber-200 bg-amber-50 px-4 py-3">
+            <p className="text-sm font-medium text-amber-900">
+              {sendWarnings.length === 1 ? "1 aviso do envio" : `${sendWarnings.length} avisos do envio`}{" "}
+              — confira na conta antes de gerar os roleplays.
+            </p>
+            <ul className="flex list-disc flex-col gap-0.5 pl-5 text-sm leading-relaxed text-amber-800">
+              {sendWarnings.map((warning, i) => (
+                <li key={i} className="break-words">
+                  {warning}
+                </li>
+              ))}
+            </ul>
           </div>
         )}
 

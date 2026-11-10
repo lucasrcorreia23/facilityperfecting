@@ -8,11 +8,19 @@ import {
   createPlaybookCallBlock,
   createPlaybookCallType,
   generatePlaybookCallTypeRubrics,
+  listCallContexts,
   listMethodologies,
   PerfectingError,
-  resolveCallContextTypeId,
+  perfectingPlaybookExists,
 } from "../_shared/perfecting.ts";
 import { exportIssuesMessage, validatePlaybookForExport } from "../_shared/perfecting-limits.ts";
+import { resolvePlaybookTaxonomy } from "../_shared/playbook-taxonomy.ts";
+import {
+  isStaleSend,
+  PLAYBOOK_SEND_STALE_MS,
+  SEND_IN_PROGRESS_MESSAGE,
+  staleSendError,
+} from "../_shared/send-staleness.ts";
 
 /**
  * Envia a DEFINIÇÃO do playbook (etapas + subetapas) para a conta de destino.
@@ -39,6 +47,10 @@ interface ExportRun {
   perfecting_playbook_id?: number;
   call_types?: Record<string, number>;
   call_blocks?: Record<string, number>;
+  /** Etapa local → metodologia já vinculada na conta (a retomada vincula as que faltam). */
+  call_type_methodologies?: Record<string, number>;
+  /** Slugs que não existem na conta de destino (a tela mostra). */
+  warnings?: string[];
   finished_at?: string | null;
   /** Erro do último envio — fica AQUI, nunca em status/error_detail (que são da geração). */
   error?: unknown;
@@ -74,6 +86,52 @@ function saveRun(playbookId: string, run: ExportRun, patch: Record<string, unkno
 }
 
 /**
+ * Grava o run depois de criar algo na conta. É o registro que faz o reenvio pular o
+ * que já existe: se ele se perde, o próximo envio duplica. Por isso a falha não é
+ * ignorada — tenta de novo uma vez e, se persistir, para o envio dizendo o que acabou
+ * de ser criado e não foi registrado.
+ */
+async function saveRunOrThrow(
+  playbookId: string,
+  run: ExportRun,
+  justCreated: string,
+  patch: Record<string, unknown> = {},
+): Promise<void> {
+  let { error } = await saveRun(playbookId, run, patch);
+  if (error) {
+    console.error(`export-playbook: falha ao gravar o run (${justCreated}):`, error.message);
+    ({ error } = await saveRun(playbookId, run, patch));
+  }
+  if (error) {
+    console.error(`export-playbook: run NÃO gravado (${justCreated}):`, error.message);
+    throw new PerfectingError(500, {
+      message:
+        `${justCreated} na conta, mas o registro local do envio falhou (${error.message}). ` +
+        "Não reenvie antes de conferir a conta: o reenvio criaria de novo o que já existe",
+      export_run: run,
+    });
+  }
+}
+
+/** Recusa que NÃO é falha do envio em curso: não pode passar pelo `recordSendFailure`. */
+class SendInProgressError extends PerfectingError {
+  constructor() {
+    super(409, SEND_IN_PROGRESS_MESSAGE);
+  }
+}
+
+/**
+ * Playbook preso em "exporting": a invocação foi encerrada (limite de tempo) antes de
+ * gravar sucesso ou erro. Volta para "ready" com o erro em `export_run.error` — os ids
+ * já criados ficam no run, e o reenvio continua de onde parou.
+ */
+async function releaseStaleSend(playbookId: string, run: ExportRun | null): Promise<void> {
+  const next: ExportRun = { ...(run ?? {}), error: staleSendError(), failed_at: new Date().toISOString() };
+  const { error } = await saveRun(playbookId, next, { status: "ready", error_detail: null });
+  if (error) console.error("export-playbook: falha ao destravar envio vencido:", error.message);
+}
+
+/**
  * Falha de ENVIO nunca vira `status: "error"`: esse estado é da geração, e a tela
  * oferece "Retomar geração" nele — que roda generate-playbook e apaga as etapas.
  * O playbook volta a "ready" e o erro fica em `export_run.error`, mesclado ao run
@@ -101,10 +159,10 @@ async function recordSendFailure(playbookId: string, detail: unknown): Promise<v
 async function exportPlaybook(
   playbookId: string,
   connectionId: string,
-): Promise<{ perfectingPlaybookId: number; callTypes: number; callBlocks: number }> {
+): Promise<{ perfectingPlaybookId: number; callTypes: number; callBlocks: number; warnings: string[] }> {
   const { data: playbook, error } = await db
     .from("playbooks")
-    .select("id, name, status, export_run")
+    .select("id, name, status, export_run, updated_at")
     .eq("id", playbookId)
     .single();
   if (error || !playbook) throw new PerfectingError(404, "playbook não encontrado");
@@ -146,14 +204,40 @@ async function exportPlaybook(
     });
   }
 
+  // Envio vivo: outra invocação está criando etapas agora. Entrar junto duplicaria.
+  // Preso além do prazo é execução morta — segue, retomando pelo run.
+  if (playbook.status === "exporting" && !isStaleSend(playbook.updated_at, Date.now(), PLAYBOOK_SEND_STALE_MS)) {
+    throw new SendInProgressError();
+  }
+
+  // Login, existência do playbook remoto e taxonomia ANTES de marcar "exporting" e de
+  // qualquer POST: são só leituras, e o que falhar aqui não deixa nada pela metade.
+  const { env, token } = await authenticateConnection(connection);
+
   // Retoma um envio anterior para esta MESMA conexão; para outra conta, começa do zero.
   const previous: ExportRun = playbook.export_run ?? {};
-  const resuming = previous.connection_id === connectionId;
+  let resuming = previous.connection_id === connectionId;
 
-  // export_run só guarda o último destino. Se esta conta já recebeu o playbook
-  // mas o run atual é de OUTRA conta, não dá para saber o que já existe lá —
-  // seguir criaria um playbook duplicado. Melhor recusar de forma explícita.
-  if (!resuming) {
+  const dropBridge = async () => {
+    const { error: delErr } = await db
+      .from("playbook_perfecting_ids")
+      .delete()
+      .eq("playbook_id", playbookId)
+      .eq("connection_id", connectionId);
+    if (delErr) console.error("export-playbook: falha ao apagar a ponte vencida:", delErr.message);
+  };
+
+  if (resuming && previous.perfecting_playbook_id != null) {
+    // O run aponta para um playbook que pode ter sido apagado na Perfecting: retomar em
+    // cima dele daria 404 em toda etapa. Some lá → zera run e ponte e recria do zero.
+    if (!(await perfectingPlaybookExists(env, token, previous.perfecting_playbook_id))) {
+      await dropBridge();
+      resuming = false;
+    }
+  } else if (!resuming) {
+    // export_run só guarda o último destino. Se esta conta já recebeu o playbook
+    // mas o run atual é de OUTRA conta, não dá para saber o que já existe lá —
+    // seguir criaria um playbook duplicado. Melhor recusar de forma explícita…
     const { data: bridge } = await db
       .from("playbook_perfecting_ids")
       .select("perfecting_playbook_id")
@@ -161,31 +245,50 @@ async function exportPlaybook(
       .eq("connection_id", connectionId)
       .maybeSingle();
     if (bridge?.perfecting_playbook_id) {
-      throw new PerfectingError(
-        409,
-        `este playbook já foi enviado para esta conta (playbook ${bridge.perfecting_playbook_id} lá). Exclua-o na Perfecting antes de reenviar, ou escolha outra conta.`,
-      );
+      // …desde que ele ainda exista. Ponte de playbook apagado lá recusava para sempre.
+      if (await perfectingPlaybookExists(env, token, bridge.perfecting_playbook_id)) {
+        throw new PerfectingError(
+          409,
+          `este playbook já foi enviado para esta conta (playbook ${bridge.perfecting_playbook_id} lá). Exclua-o na Perfecting antes de reenviar, ou escolha outra conta.`,
+        );
+      }
+      await dropBridge();
     }
   }
 
+  // Taxonomia resolvida UMA vez (antes era um GET por etapa, e slug que não existia na
+  // conta criava a etapa sem tipo de ligação em silêncio). Listagem que falha derruba o
+  // envio aqui, antes de escrever.
+  const [callContexts, methodologies] = await Promise.all([
+    listCallContexts(env, token),
+    listMethodologies(env, token),
+  ]);
+  const taxonomy = resolvePlaybookTaxonomy(callTypes as CallTypeRow[], callContexts, methodologies);
+
   const run: ExportRun = resuming
     ? { ...previous, finished_at: null }
-    : { connection_id: connectionId, call_types: {}, call_blocks: {} };
+    : { connection_id: connectionId, call_types: {}, call_blocks: {}, call_type_methodologies: {} };
   run.call_types ??= {};
   run.call_blocks ??= {};
+  run.call_type_methodologies ??= {};
+  run.warnings = taxonomy.warnings;
   // Envio novo começa sem o erro do anterior (o spread de `previous` o traria junto).
   delete run.error;
   delete run.failed_at;
 
-  await saveRun(playbookId, run, { status: "exporting", error_detail: null });
-
-  const { env, token } = await authenticateConnection(connection);
+  const { error: startErr } = await saveRun(playbookId, run, { status: "exporting", error_detail: null });
+  if (startErr) {
+    // Nada foi criado ainda: parar aqui é seguro, seguir sem registro não é.
+    throw new PerfectingError(500, `não foi possível registrar o início do envio: ${startErr.message}`);
+  }
 
   // 1) o playbook em si
   if (run.perfecting_playbook_id == null) {
     run.perfecting_playbook_id = await createPlaybook(env, token, playbook.name);
-    await saveRun(playbookId, run);
-    await db.from("playbook_perfecting_ids").upsert(
+    await saveRunOrThrow(playbookId, run, `playbook ${run.perfecting_playbook_id} criado`);
+    // A ponte só serve ao envio para OUTRA conta depois deste; o run acima já garante
+    // a retomada. Falha aqui não para o envio, mas não fica mais em silêncio.
+    const { error: bridgeErr } = await db.from("playbook_perfecting_ids").upsert(
       {
         playbook_id: playbookId,
         connection_id: connectionId,
@@ -193,42 +296,47 @@ async function exportPlaybook(
       },
       { onConflict: "playbook_id,connection_id" },
     );
+    if (bridgeErr) {
+      console.error("export-playbook: falha ao gravar a ponte:", bridgeErr.message);
+      run.warnings = [
+        ...(run.warnings ?? []),
+        `o vínculo deste playbook com a conta (playbook ${run.perfecting_playbook_id}) não foi gravado: se enviar para outra conta e depois voltar a esta, confira antes para não duplicar`,
+      ];
+    }
   }
   const remotePlaybookId = run.perfecting_playbook_id;
 
-  const methodologies = await listMethodologies(env, token);
   let createdCallTypes = 0;
   let createdCallBlocks = 0;
   // Cadeia linear pela ordem: cada etapa aponta para a anterior (a primeira fica sem).
   let previousRemoteCallTypeId: number | null = null;
 
   for (const ct of callTypes as CallTypeRow[]) {
+    const resolved = taxonomy.byCallType[ct.id];
     // 2) etapa
     let remoteCallTypeId = run.call_types[ct.id];
     if (remoteCallTypeId == null) {
-      const callContextTypeId = await resolveCallContextTypeId(env, token, ct.call_context_slug);
       remoteCallTypeId = await createPlaybookCallType(env, token, remotePlaybookId, {
         name: ct.name,
         description: ct.description ?? ct.name,
-        call_context_type_id: callContextTypeId ?? null,
+        call_context_type_id: resolved?.callContextTypeId ?? null,
         order: ct.position,
         precedent_call_type_id: previousRemoteCallTypeId,
       });
       run.call_types[ct.id] = remoteCallTypeId;
-      await saveRun(playbookId, run);
+      await saveRunOrThrow(playbookId, run, `etapa "${ct.name}" (${remoteCallTypeId}) criada`);
       createdCallTypes++;
+    }
 
-      // 3) metodologia da etapa — sem ela o motor pode pular a etapa depois
-      const methodology = methodologies.find((m) => m.slug === ct.methodology_slug);
-      if (methodology) {
-        await addPlaybookCallTypeMethodology(
-          env,
-          token,
-          remotePlaybookId,
-          remoteCallTypeId,
-          methodology.id,
-        );
-      }
+    // 3) metodologia da etapa — sem ela o motor pode pular a etapa depois. Fora do
+    // `if` acima de propósito: o envio que caiu entre criar a etapa e vincular a
+    // metodologia retomava pulando o vínculo. O POST é idempotente no backend
+    // (s37_playbook_crud Add: só insere se o par não existe).
+    const methodologyId = resolved?.methodologyId ?? null;
+    if (methodologyId != null && run.call_type_methodologies[ct.id] !== methodologyId) {
+      await addPlaybookCallTypeMethodology(env, token, remotePlaybookId, remoteCallTypeId, methodologyId);
+      run.call_type_methodologies[ct.id] = methodologyId;
+      await saveRunOrThrow(playbookId, run, `metodologia da etapa "${ct.name}" vinculada`);
     }
 
     // 4) subetapas
@@ -245,7 +353,7 @@ async function exportPlaybook(
         what_to_avoid: block.what_to_avoid ?? [],
       });
       run.call_blocks[block.id] = remoteBlockId;
-      await saveRun(playbookId, run);
+      await saveRunOrThrow(playbookId, run, `subetapa "${block.name}" (${remoteBlockId}) criada`);
       createdCallBlocks++;
     }
     previousRemoteCallTypeId = remoteCallTypeId;
@@ -274,12 +382,13 @@ async function exportPlaybook(
   }
 
   run.finished_at = new Date().toISOString();
-  await saveRun(playbookId, run, { status: "exported", error_detail: null });
+  await saveRunOrThrow(playbookId, run, "playbook enviado", { status: "exported", error_detail: null });
 
   return {
     perfectingPlaybookId: remotePlaybookId,
     callTypes: createdCallTypes,
     callBlocks: createdCallBlocks,
+    warnings: run.warnings ?? [],
   };
 }
 
@@ -293,8 +402,27 @@ Deno.serve(async (req) => {
     const body = await req.json().catch(() => ({}));
     playbookId = typeof body.playbookId === "string" ? body.playbookId : "";
     const connectionId = typeof body.connectionId === "string" ? body.connectionId : "";
-    if (!playbookId || !connectionId) {
+    if (!playbookId || (!connectionId && body.stage !== "poll")) {
       return json({ ok: false, error: "playbookId e connectionId são obrigatórios" }, 400);
+    }
+
+    // Consulta do envio em andamento. Só destrava o que venceu: a tela chama isto
+    // enquanto o playbook está "exporting" e nunca dispara um envio novo.
+    if (body.stage === "poll") {
+      const { data: current } = await db
+        .from("playbooks")
+        .select("status, export_run, updated_at")
+        .eq("id", playbookId)
+        .single();
+      if (!current) return json({ ok: false, error: "playbook não encontrado" }, 404);
+      if (current.status !== "exporting") {
+        return json({ ok: true, done: true, status: current.status });
+      }
+      if (isStaleSend(current.updated_at, Date.now(), PLAYBOOK_SEND_STALE_MS)) {
+        await releaseStaleSend(playbookId, current.export_run);
+        return json({ ok: true, done: true, status: "ready", released: true });
+      }
+      return json({ ok: true, done: false, status: current.status });
     }
 
     // Rubricas de UMA etapa (disparada pelo export, ou manualmente para um playbook já
@@ -349,6 +477,9 @@ Deno.serve(async (req) => {
       e instanceof PerfectingError
         ? { status: e.status, detail: e.detail }
         : { message: String(e instanceof Error ? e.message : e) };
+    // Envio em andamento: o playbook está "exporting" por causa da OUTRA invocação.
+    // Gravar falha aqui o devolveria a "ready" com o envio vivo ainda criando etapas.
+    if (e instanceof SendInProgressError) return json({ ok: false, error: detail }, 409);
     if (playbookId) await recordSendFailure(playbookId, detail);
     // Validação devolve 422 de verdade; o resto segue 500 (o detalhe vai no corpo).
     return json({ ok: false, error: detail }, e instanceof PerfectingError && e.status === 422 ? 422 : 500);

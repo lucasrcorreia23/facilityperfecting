@@ -1059,6 +1059,21 @@ export async function invokeSendPlaybook(playbookId: string, connectionId: strin
   return data;
 }
 
+/**
+ * Consulta o envio em andamento. Só destrava o que venceu (função encerrada no meio):
+ * o playbook volta a "pronto" com o erro de envio. Nunca dispara um envio.
+ */
+export async function pollSendPlaybook(
+  playbookId: string,
+): Promise<{ done?: boolean; status?: string; released?: boolean }> {
+  const supabase = createClient();
+  const { data, error } = await supabase.functions.invoke("export-playbook", {
+    body: { playbookId, stage: "poll" },
+  });
+  if (error) throw new Error(await functionErrorMessage(error, "Falha ao consultar o envio"));
+  return data ?? {};
+}
+
 // ── Trilhas (planos de trilhas de roleplay) ────────────────────────────────
 
 export async function listMethodologySources(): Promise<MethodologySource[]> {

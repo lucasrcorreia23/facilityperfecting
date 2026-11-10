@@ -190,3 +190,20 @@ describe("describeInvokeError", () => {
     expect(out.message).toContain("Failed to send a request");
   });
 });
+
+describe("envio destravado por tempo", () => {
+  it("408 com mensagem própria mostra a mensagem e deixa reenviar", () => {
+    const info = humanizeSendError({
+      status: 408,
+      detail: { message: "O envio não terminou: a função foi encerrada antes de responder." },
+    });
+    expect(info.title).toBe("Envio interrompido");
+    expect(info.message).toContain("não terminou");
+    expect(info.retryable).toBe(true);
+  });
+
+  it("408 cru continua sendo demora da Perfecting", () => {
+    const info = humanizeSendError({ status: 408, detail: "timeout" });
+    expect(info.title).toBe("Tempo limite excedido");
+  });
+});

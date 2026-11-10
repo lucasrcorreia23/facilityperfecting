@@ -363,6 +363,10 @@ export interface PlaybookExportRun {
   perfecting_playbook_id?: number;
   call_types?: Record<string, number>;
   call_blocks?: Record<string, number>;
+  /** Etapa local → metodologia já vinculada na conta. */
+  call_type_methodologies?: Record<string, number>;
+  /** O que o envio não conseguiu resolver na conta (tipo de ligação, metodologia). */
+  warnings?: string[];
   finished_at?: string | null;
   /**
    * Erro do ÚLTIMO envio (cru, como a função gravou). Mora aqui e não em
