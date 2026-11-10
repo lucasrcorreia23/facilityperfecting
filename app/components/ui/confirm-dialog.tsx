@@ -9,6 +9,8 @@ export interface ConfirmConfig {
   message: ReactNode;
   confirmLabel?: string;
   cancelLabel?: string;
+  /** `danger` pinta o botão de vermelho: exclusão e o que não tem desfazer. */
+  tone?: "primary" | "danger";
   onConfirm: () => void;
 }
 
@@ -36,13 +38,16 @@ export function ConfirmDialog({
           <>
             <ModalHeader>{config.title}</ModalHeader>
             <ModalBody>
-              <div className="text-sm leading-relaxed text-slate-600">{config.message}</div>
+              <div className="flex flex-col gap-3 text-sm leading-relaxed text-slate-600">
+                {config.message}
+              </div>
             </ModalBody>
             <ModalFooter>
               <Button variant="secondary" onPress={onClose}>
                 {config.cancelLabel ?? "Cancelar"}
               </Button>
               <Button
+                variant={config.tone === "danger" ? "danger" : "primary"}
                 onPress={() => {
                   const fn = config.onConfirm;
                   onClose();

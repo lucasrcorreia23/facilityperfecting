@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { ArrowLeftIcon } from "@heroicons/react/24/outline";
 
 const CLS =
-  "inline-flex items-center justify-center w-11 h-11 rounded-sm border border-slate-200 bg-white text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-800";
+  "inline-flex shrink-0 items-center justify-center w-11 h-11 rounded-sm border border-slate-200 bg-white text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-800";
 
 /** Botão de voltar 44×44 outline (padrão único). */
 export function BackButton({ href }: { href?: string }) {

@@ -17,10 +17,13 @@ export function PageHeader({
 }) {
   return (
     <div className="flex flex-col mb-6 sm:mb-8 gap-2 sm:flex-row sm:items-center sm:justify-between">
-      <div className="flex items-center gap-3">
+      <div className="flex min-w-0 items-center gap-3">
         {backHref && <BackButton href={backHref} />}
-        <div className="flex flex-col gap-1">
-          <h1 className="text-lg font-semibold text-slate-800">{title}</h1>
+        <div className="flex min-w-0 flex-col gap-1">
+          {/* Título vem de dado (nome de playbook, de plano): uma linha só, inteiro no title. */}
+          <h1 className="truncate text-lg font-semibold text-slate-800" title={title}>
+            {title}
+          </h1>
           {description && <p className="text-sm text-slate-500">{description}</p>}
         </div>
       </div>
