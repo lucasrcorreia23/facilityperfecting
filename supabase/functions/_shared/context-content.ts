@@ -6,6 +6,7 @@ import {
   listObjectionTypes,
   type PerfectingEnv,
 } from "./perfecting.ts";
+import { guardrailKey, guardrailRemoteName } from "./remote-names.ts";
 
 /**
  * Injeta no contexto da Perfecting as objeções e os guardrails extraídos do material
@@ -25,7 +26,14 @@ import {
  * Idempotente: casa objeções por título+nível e guardrails por nome com o que já existe
  * no contexto, então reenvio e
  * contexto reusado não duplicam. Nunca lança — conteúdo extra que falha não pode
- * derrubar um envio cujo roleplay já seria criado; devolve avisos para o chamador.
+ * derrubar um envio cujo roleplay já seria criado; devolve avisos para o chamador,
+ * que TEM de mostrá-los (regra do cliente que não entrou não pode ficar só no log).
+ *
+ * Nome de guardrail é único entre TODAS as contas (`guardrails.name unique`): o mesmo
+ * "Não dar desconto" de outro cliente devolvia 409 e a regra ficava de fora. O nome
+ * vai com o sufixo do contexto (o mesmo da tela de ajuste, que o esconde); a
+ * comparação com o que já existe ignora o sufixo, então guardrail antigo sem sufixo
+ * não é duplicado.
  */
 
 export interface ObjectionSeed {
@@ -85,6 +93,7 @@ export async function applyContextContent(
         listContextObjections(env, token, contextId),
       ]);
       const typeBySlug = new Map(types.map((t) => [norm(t.slug), t.id]));
+      const typeNameById = new Map(types.map((t) => [t.id, t.name]));
       // Chave título+nível: as linhas antigas sem nível (NULL) não bloqueiam as novas.
       const key = (title: string, levelId: number | null, persona: number | null = null) =>
         `${norm(title)}|${levelId}|${persona ?? ""}`;
@@ -98,10 +107,18 @@ export async function applyContextContent(
       for (const o of objections) {
         const title = o.titulo?.trim();
         if (!title) continue;
-        const typeId = typeBySlug.get(norm(o.tipo ?? "")) ?? fallbackTypeId;
+        const matchedTypeId = typeBySlug.get(norm(o.tipo ?? ""));
+        const typeId = matchedTypeId ?? fallbackTypeId;
         if (typeId == null) {
           out.warnings.push(`objeção "${title}": nenhum tipo de objeção disponível na API`);
           continue;
+        }
+        if (matchedTypeId == null) {
+          // O fallback salva a objeção, mas troca a classificação: avisa em vez de calar.
+          out.warnings.push(
+            `objeção "${title}": o tipo "${(o.tipo ?? "").trim() || "(vazio)"}" não existe na conta de destino — ` +
+              `foi criada como "${typeNameById.get(typeId) ?? typeId}"`,
+          );
         }
         for (const levelId of difficultyLevelIds) {
           if (seen.has(key(title, levelId, personaId))) {
@@ -133,21 +150,24 @@ export async function applyContextContent(
   if (guardrails.length > 0) {
     try {
       const existing = await listContextGuardrails(env, token, contextId);
-      const seen = new Set(existing.map((g) => norm(g.name)));
+      const seen = new Set(existing.map((g) => guardrailKey(g.name, contextId)));
       for (const g of guardrails) {
         const name = g.nome?.trim();
         const prompt = g.instrucao?.trim();
         if (!name || !prompt) continue;
-        if (seen.has(norm(name))) {
+        if (seen.has(guardrailKey(name, contextId))) {
           out.guardrails_skipped++;
           continue;
         }
         try {
-          await createContextGuardrail(env, token, contextId, { name, prompt });
-          seen.add(norm(name));
+          await createContextGuardrail(env, token, contextId, {
+            name: guardrailRemoteName(name, contextId),
+            prompt,
+          });
+          seen.add(guardrailKey(name, contextId));
           out.guardrails_created++;
         } catch (e) {
-          out.warnings.push(`guardrail "${name}" não criado: ${messageOf(e)}`);
+          out.warnings.push(`regra "${name}" não criada: ${messageOf(e)}`);
         }
       }
     } catch (e) {

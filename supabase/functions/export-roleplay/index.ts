@@ -224,14 +224,20 @@ async function exportDraft(draftId: string): Promise<{ caseSetupId: number }> {
   const methodologySlug =
     draft.scenario?.methodology_slug ?? settings?.default_methodology_slug ?? null;
   let methodologyId: number | undefined;
+  // Avisos do envio que não vêm do dossiê nem do status (taxonomia, regras, objeções).
+  const sendWarnings: string[] = [];
   if (methodologySlug) {
     try {
       methodologyId = await resolveMethodologyId(env, token, methodologySlug);
       if (methodologyId == null) {
         console.warn(`export-roleplay[metodologia]: slug "${methodologySlug}" não existe em ${env}`);
+        sendWarnings.push(
+          `a metodologia "${methodologySlug}" não existe na conta de destino: o roleplay foi criado sem ela (sem conteúdo por etapa)`,
+        );
       }
     } catch (e) {
       console.warn("export-roleplay[metodologia]: falha ao listar —", String(e));
+      sendWarnings.push(`metodologia não vinculada na criação (falha ao listar: ${String(e)})`);
     }
   }
 
@@ -287,6 +293,9 @@ async function exportDraft(draftId: string): Promise<{ caseSetupId: number }> {
       // quando a persona tem as próprias, então as genéricas do contexto não vazam.
       personaId,
     );
+    // Regra ou objeção do cliente que não entrou não pode ficar só no log: vai para
+    // os avisos do envio (detalhe do item na Biblioteca).
+    sendWarnings.push(...applied.warnings);
     if (applied.warnings.length > 0) {
       console.warn("export-roleplay[context_content]:", JSON.stringify(applied.warnings));
     }
@@ -405,12 +414,14 @@ async function exportDraft(draftId: string): Promise<{ caseSetupId: number }> {
   }
 
   const detail =
-    personaId != null || personaWarning || dossierWarnings.length > 0 || statusWarnings.length > 0
+    personaId != null || personaWarning || dossierWarnings.length > 0 || statusWarnings.length > 0 ||
+      sendWarnings.length > 0
       ? {
           ...(personaId != null && { persona_id: personaId }),
           ...(personaWarning && { persona_warning: personaWarning }),
           ...(dossierWarnings.length > 0 && { dossier_warnings: dossierWarnings }),
           ...(statusWarnings.length > 0 && { status_warning: statusWarnings[0] }),
+          ...(sendWarnings.length > 0 && { send_warnings: sendWarnings }),
         }
       : null;
   // 6) FECHAMENTO — o create só monta a casca do roleplay: rubricas, conteúdo por
@@ -429,8 +440,8 @@ async function exportDraft(draftId: string): Promise<{ caseSetupId: number }> {
     objections_seeded: seedObjections.length > 0,
     dossier,
     // Os do status também: é a lista que a Biblioteca mostra no detalhe do envio.
-    ...((dossierWarnings.length > 0 || statusWarnings.length > 0) && {
-      warnings: [...statusWarnings, ...dossierWarnings],
+    ...((dossierWarnings.length > 0 || statusWarnings.length > 0 || sendWarnings.length > 0) && {
+      warnings: [...statusWarnings, ...sendWarnings, ...dossierWarnings],
     }),
     stage: "queued",
     steps: {},
@@ -445,7 +456,9 @@ async function exportDraft(draftId: string): Promise<{ caseSetupId: number }> {
       perfecting_case_setup_id: caseSetupId,
       elevenlabs_agent_id,
       error_detail:
-        personaWarning || dossierWarnings.length > 0 || statusWarnings.length > 0 ? detail : null,
+        personaWarning || dossierWarnings.length > 0 || statusWarnings.length > 0 || sendWarnings.length > 0
+          ? detail
+          : null,
       completion_run: completionRun,
     })
     .eq("id", draftId);
