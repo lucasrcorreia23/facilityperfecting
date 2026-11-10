@@ -2203,6 +2203,18 @@ export async function createOfferPain(
   return data.id;
 }
 
+/** Empresas (persona companies) de um contexto — para reusar em vez de recriar. */
+export async function listPersonaCompanies(
+  env: PerfectingEnv,
+  token: string,
+  contextId: number,
+): Promise<Array<{ id: number; slug: string; name: string }>> {
+  const data = await getJson<unknown>(`${rp(env)}/persona_company/list?context_id=${contextId}`, token);
+  return records(data)
+    .filter((r) => typeof r.id === "number")
+    .map((r) => ({ id: r.id as number, slug: String(r.slug ?? ""), name: String(r.name ?? "") }));
+}
+
 export async function createPersonaCompany(
   env: PerfectingEnv,
   token: string,

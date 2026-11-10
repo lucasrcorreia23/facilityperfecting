@@ -22,6 +22,8 @@ import {
   PerfectingError,
   truncateForApi,
 } from "./perfecting.ts";
+import { ENTITY_TEXT_MAX } from "./perfecting-limits.ts";
+import { withNameMark } from "./remote-names.ts";
 
 export interface DestinationConnection {
   id: string;
@@ -104,6 +106,15 @@ export async function resolveOfferContext(
     // /offer/generate da Perfecting quebra com 500 genérico (ver truncateForApi).
     const description = truncateForApi(offer.general_description);
     const gen = await generateOffer(env, token, offer.offer_name, description);
+    // O create grava `gen.offer_name` (o nome que a IA devolveu) em coluna de 255. O
+    // generate não grava nada, então recusar aqui não deixa resto na conta.
+    const sentName = typeof gen.offer_name === "string" && gen.offer_name ? gen.offer_name : offer.offer_name;
+    if (sentName.length > ENTITY_TEXT_MAX) {
+      throw new PerfectingError(422, {
+        message: "O nome que a Perfecting gerou para a oferta passa do limite: envie de novo (o nome é gerado a cada envio)",
+        issues: [`nome da oferta com ${sentName.length} caracteres — o limite é ${ENTITY_TEXT_MAX}`],
+      });
+    }
     try {
       perfectingOfferId = await createOffer(
         env,
@@ -121,7 +132,8 @@ export async function resolveOfferContext(
       // `gen.offer_name` é sobrescrito explicitamente: o build do payload prioriza
       // esse campo (quando presente) sobre o `offerName` passado como argumento.
       if (!(e instanceof PerfectingError)) throw e;
-      const retryName = `${offer.offer_name} (${offer.id.slice(0, 6)})`;
+      // A marca é nossa: é ela que cabe, cortando a base se preciso.
+      const retryName = withNameMark(offer.offer_name, offer.id.slice(0, 6));
       perfectingOfferId = await createOffer(
         env,
         token,

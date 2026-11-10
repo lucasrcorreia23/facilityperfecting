@@ -13,6 +13,16 @@ vi.mock("./perfecting.ts", () => ({
   listMethodologySteps: vi.fn(),
   listOfferPains: vi.fn(),
   listOfferProducts: vi.fn(),
+  listPersonaCompanies: vi.fn(),
+  PerfectingError: class PerfectingError extends Error {
+    status: number;
+    detail: unknown;
+    constructor(status: number, detail: unknown) {
+      super(`Perfecting ${status}`);
+      this.status = status;
+      this.detail = detail;
+    }
+  },
   listStepKnowledgeItems: vi.fn(),
   patchCaseSetup: vi.fn(),
   patchStepKnowledge: vi.fn(),
@@ -33,6 +43,8 @@ import {
   applyDossierToCaseSetup,
   applyDossierToPersona,
   applyPortfolio,
+  assertBuyerTextReady,
+  createDossierPersona,
   dossierLeakWarnings,
   FACTS_IN_ALL_STEPS,
   hasDossier,
@@ -371,5 +383,76 @@ describe("dossierLeakWarnings", () => {
     d.persona.dores[0].revelacao = "superficie";
     d.conhecimento.previo = "Retorno da visita técnica de março, primeira conversa por telefone.";
     expect(dossierLeakWarnings(d)).toEqual([]);
+  });
+});
+
+describe("createDossierPersona — empresa da persona", () => {
+  const ids = { supported: false, productIds: new Map(), painIds: new Map(), warnings: [] };
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    mocked.generateDossierPersona.mockResolvedValue({ id: 77, name: "André" });
+    mocked.updatePersona.mockResolvedValue(undefined as never);
+  });
+
+  it("reusa a empresa que já existe no contexto em vez de colidir no slug", async () => {
+    mocked.listPersonaCompanies.mockResolvedValue([
+      { id: 9, slug: "cooperativa-vale-dourado-35", name: "Cooperativa Vale Dourado" },
+    ]);
+
+    const out = await createDossierPersona("hml", "t", 35, makeDossier(), ids);
+
+    expect(mocked.createPersonaCompany).not.toHaveBeenCalled();
+    expect(mocked.generateDossierPersona.mock.calls[0][2]).toMatchObject({ persona_company_id: 9 });
+    expect(out.warnings).toEqual([]);
+  });
+
+  it("cria com o slug do contexto quando não existe", async () => {
+    mocked.listPersonaCompanies.mockResolvedValue([]);
+    mocked.createPersonaCompany.mockResolvedValue(12);
+
+    await createDossierPersona("hml", "t", 35, makeDossier(), ids);
+
+    expect(mocked.createPersonaCompany.mock.calls[0][2]).toMatchObject({
+      slug: "cooperativa-vale-dourado-35",
+      name: "Cooperativa Vale Dourado",
+      context_id: 35,
+    });
+    expect(mocked.generateDossierPersona.mock.calls[0][2]).toMatchObject({ persona_company_id: 12 });
+  });
+
+  it("listagem que falha não impede a criação", async () => {
+    mocked.listPersonaCompanies.mockRejectedValue(new Error("fora"));
+    mocked.createPersonaCompany.mockResolvedValue(12);
+
+    await createDossierPersona("hml", "t", 35, makeDossier(), ids);
+
+    expect(mocked.createPersonaCompany).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("assertBuyerTextReady — limites de 255", () => {
+  const objection = (titulo: string) => ({ titulo, fala_exemplo: "Está caro.", detalhes: "", ceder_se: "Se parcelar." });
+
+  it("recusa com 422 legível o que estoura a coluna", () => {
+    let detail: { message?: string; issues?: string[] } = {};
+    try {
+      assertBuyerTextReady(null, [objection("t".repeat(300))], {
+        offerName: "Oferta",
+        guardrails: [{ nome: "g".repeat(250) }],
+      });
+    } catch (e) {
+      detail = (e as { detail: typeof detail }).detail;
+      expect((e as { status: number }).status).toBe(422);
+    }
+    expect(detail.message).toBe("rascunho com 2 problema(s): corrija no rascunho antes de enviar");
+    expect(detail.issues?.[0]).toContain("título com 300 caracteres — o limite é 255");
+    expect(detail.issues?.[1]).toContain("o limite é 235");
+  });
+
+  it("dentro do limite passa", () => {
+    expect(() =>
+      assertBuyerTextReady(null, [objection("Preço alto")], { offerName: "Oferta", offerUrl: "https://x.com" }),
+    ).not.toThrow();
   });
 });

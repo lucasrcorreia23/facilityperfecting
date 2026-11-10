@@ -132,9 +132,20 @@ async function exportDraft(draftId: string): Promise<{ caseSetupId: number }> {
 
   // Antes de qualquer escrita: texto do comprador fora de forma barra o envio (422),
   // para o roleplay nascer pronto em vez de ser corrigido depois (FIESC, 04/11/2026).
+  // O mesmo portão recusa o que estoura as colunas de 255 da Perfecting (lá vira um
+  // 500 genérico no meio do envio). Debate tem o próprio (`assertDebateReady`).
+  const isDebate = draft.scenario?.generation_mode === "debate";
   const buyerTextWarnings = assertBuyerTextReady(
     hasDossier(draft.scenario?.dossier) ? (draft.scenario.dossier as RoleplayDossier) : null,
     (draft.scenario?.objections ?? []) as ObjectionSeed[],
+    // No debate a oferta e as regras enviadas são as do rascunho de debate, não estas.
+    isDebate
+      ? undefined
+      : {
+          offerName: draft.offers?.offer_name,
+          offerUrl: draft.offers?.url,
+          guardrails: (draft.scenario?.guardrails ?? []) as GuardrailSeed[],
+        },
   );
 
   // Defaults globais (app_settings) — usados quando o draft não traz scenario.
@@ -159,7 +170,7 @@ async function exportDraft(draftId: string): Promise<{ caseSetupId: number }> {
 
   // Debate tem envio próprio (motor 3, tudo verbatim, sem fechamento): o caminho de
   // venda abaixo gravaria persona, prompt e conteúdo por etapa de comprador.
-  if (draft.scenario?.generation_mode === "debate") {
+  if (isDebate) {
     const result = await exportDebateDraft(env, token, draft, (step) => setJob({ step }));
     const detail = {
       persona_id: result.personaId,

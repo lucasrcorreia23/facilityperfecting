@@ -12,6 +12,7 @@ import {
   listMethodologySteps,
   listOfferPains,
   listOfferProducts,
+  listPersonaCompanies,
   listStepKnowledgeItems,
   patchCaseSetup,
   patchStepKnowledge,
@@ -35,6 +36,9 @@ import {
   objectionTexts,
   priorFactsOf,
 } from "./buyer-text-lint.ts";
+
+import { lengthIssues, type SaleLengthInput, saleLengthChecks } from "./perfecting-limits.ts";
+import { findReusableCompany, personaCompanySlug } from "./remote-names.ts";
 
 export { dossierBuyerTextIssues, priorFactsOf };
 
@@ -210,15 +214,6 @@ export function topicsToRecord(topics: DossierTopic[]): Record<string, string> {
   return out;
 }
 
-function slugify(value: string): string {
-  return value
-    .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
-
 export interface PortfolioIds {
   /** false = ambiente sem as rotas de portfólio; as dores vão em texto no prompt. */
   supported: boolean;
@@ -319,11 +314,21 @@ export async function createDossierPersona(
 ): Promise<{ personaId: number; warnings: string[] }> {
   const warnings: string[] = [];
   let companyId: number | null = null;
-  if (d.persona.empresa_nome.trim()) {
+  const companyName = d.persona.empresa_nome.trim();
+  if (companyName) {
     try {
-      companyId = await createPersonaCompany(env, token, {
-        slug: `${slugify(d.persona.empresa_nome)}-${contextId}`,
-        name: d.persona.empresa_nome.trim(),
+      // O slug é único entre todas as contas e leva o id do contexto; o contexto é
+      // reusado pela conexão, então o 2º roleplay da mesma empresa (ou um reenvio)
+      // colidia e a persona nascia sem empresa. Lista e reusa a que já existe.
+      const slug = personaCompanySlug(companyName, contextId);
+      const existing = findReusableCompany(
+        await listPersonaCompanies(env, token, contextId).catch(() => []),
+        companyName,
+        slug,
+      );
+      companyId = existing?.id ?? await createPersonaCompany(env, token, {
+        slug,
+        name: companyName,
         context_id: contextId,
         company_profile: d.persona.empresa_perfil,
       });
@@ -408,16 +413,28 @@ export async function applyDossierToPersona(
 export function assertBuyerTextReady(
   dossier: RoleplayDossier | null,
   objections: readonly ObjectionText[],
+  /**
+   * O que mais o envio grava em coluna de 255 (oferta, regras). Com isto o portão
+   * também recusa texto acima do limite da Perfecting, que lá vira 500 genérico no
+   * meio do envio. As objeções e o dossiê entram sozinhos.
+   */
+  lengths?: Pick<SaleLengthInput, "offerName" | "offerUrl" | "guardrails">,
 ): string[] {
   const issues = [
     ...(dossier ? dossierBuyerTextIssues(dossier) : []),
     ...findReservedTerms(objectionTexts(objections)),
   ];
   const errors = issues.filter((i) => i.nivel === "erro").map(describeBuyerTextIssue);
-  if (errors.length > 0) {
+  const tooLong = lengthIssues(
+    saleLengthChecks({ ...lengths, objections: objections as SaleLengthInput["objections"], dossier }),
+  );
+  if (errors.length > 0 || tooLong.length > 0) {
+    const total = errors.length + tooLong.length;
     throw new PerfectingError(422, {
-      message: `texto do comprador com ${errors.length} problema(s): corrija no rascunho antes de enviar`,
-      issues: errors,
+      message: tooLong.length === 0
+        ? `texto do comprador com ${errors.length} problema(s): corrija no rascunho antes de enviar`
+        : `rascunho com ${total} problema(s): corrija no rascunho antes de enviar`,
+      issues: [...errors, ...tooLong],
     });
   }
   return issues.map((i) => `texto do comprador: ${describeBuyerTextIssue(i)}`);

@@ -1,10 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
   CALL_TYPE_DESCRIPTION_MAX,
+  debateLengthChecks,
   duplicatedCallTypeNames,
+  ENTITY_TEXT_MAX,
   exportIssuesMessage,
+  GUARDRAIL_NAME_MAX,
+  lengthIssues,
+  lengthIssuesMessage,
   MAX_CALL_BLOCKS_PER_CALL_TYPE,
   PLAYBOOK_GENERATION_LIMITS_PROMPT,
+  saleLengthChecks,
   validatePlaybookForExport,
 } from "./perfecting-limits.ts";
 
@@ -140,5 +146,76 @@ describe("apoio", () => {
     expect(PLAYBOOK_GENERATION_LIMITS_PROMPT).toContain("no máximo 120 caracteres");
     expect(PLAYBOOK_GENERATION_LIMITS_PROMPT).toContain("no máximo 250 caracteres");
     expect(PLAYBOOK_GENERATION_LIMITS_PROMPT).toContain("No máximo 6 subetapas");
+  });
+});
+
+describe("limites de roleplay (colunas de 255)", () => {
+  it("nada estourando = sem pendência", () => {
+    expect(
+      lengthIssues(
+        saleLengthChecks({
+          offerName: "Oferta",
+          offerUrl: "https://exemplo.com",
+          objections: [{ titulo: "Preço alto" }],
+          guardrails: [{ nome: "Não dar desconto" }],
+        }),
+      ),
+    ).toEqual([]);
+  });
+
+  it("aponta o campo, o tamanho e quanto cortar", () => {
+    const issues = lengthIssues(
+      saleLengthChecks({
+        offerName: "o".repeat(260),
+        objections: [{ titulo: "t".repeat(256) }],
+      }),
+    );
+    expect(issues).toHaveLength(2);
+    expect(issues[0]).toBe("nome da oferta com 260 caracteres — o limite é 255 (corte 5)");
+    expect(issues[1]).toMatch(/^objeção ".{37}…": título com 256 caracteres/);
+  });
+
+  it("nome de regra reserva a folga do sufixo de unicidade", () => {
+    const nome = "r".repeat(GUARDRAIL_NAME_MAX + 1);
+    expect(lengthIssues(saleLengthChecks({ guardrails: [{ nome }] }))).toHaveLength(1);
+    expect(lengthIssues(saleLengthChecks({ guardrails: [{ nome: nome.slice(1) }] }))).toEqual([]);
+    expect(GUARDRAIL_NAME_MAX).toBe(ENTITY_TEXT_MAX - 20);
+  });
+
+  it("confere os campos do dossiê", () => {
+    const long = "x".repeat(300);
+    const issues = lengthIssues(
+      saleLengthChecks({
+        dossier: {
+          produtos: [{ nome: long }],
+          dores: [{ titulo: long }],
+          persona: { nome: long, cargo: long, area: long, empresa_nome: long },
+        },
+      }),
+    );
+    expect(issues).toHaveLength(6);
+  });
+
+  it("espaço nas pontas não conta", () => {
+    expect(lengthIssues([{ label: "x", value: ` ${"a".repeat(255)}  `, limit: 255 }])).toEqual([]);
+  });
+
+  it("debate: confere oponente, contra-argumentos, regras e o título por etapa", () => {
+    const d = {
+      oponente_nome: "n".repeat(250),
+      oponente_papel: "p".repeat(256),
+      objecoes: [{ titulo: "ok" }],
+      guardrails: [{ nome: "g".repeat(240) }],
+    };
+    const issues = lengthIssues(debateLengthChecks(d, ["Abertura"]));
+    expect(issues).toHaveLength(3);
+    expect(issues.join("\n")).toContain("papel da oponente");
+    expect(issues.join("\n")).toContain("regra");
+    expect(issues.join("\n")).toContain('etapa "Abertura"');
+  });
+
+  it("mensagem do 422 concorda em número", () => {
+    expect(lengthIssuesMessage(["a"])).toContain("1 texto ");
+    expect(lengthIssuesMessage(["a", "b"])).toContain("2 textos ");
   });
 });
