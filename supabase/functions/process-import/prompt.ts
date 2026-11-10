@@ -1,5 +1,6 @@
 import { buildSchema, PART_NOTES, SCHEMA_PARTS, type SchemaPart } from "./schema.ts";
 import { codeFingerprint } from "../_shared/generator-version.ts";
+import { GAP_ANSWERS_RULES } from "../_shared/gap-answers.ts";
 import { buildDebateSchema, DEBATE_PART_NOTES, DEBATE_PARTS, DEBATE_SYSTEM } from "./debate-prompt.ts";
 
 /**
@@ -86,7 +87,7 @@ REGRAS:
 
 /**
  * Impressão digital do que é fixo no gerador: prompt base, schema de todas as fatias,
- * notas de fatia e modelo. Slugs fictícios e sem data, porque taxonomias da
+ * notas de fatia, regra das respostas às lacunas e modelo. Slugs fictícios e sem data, porque taxonomias da
  * Perfecting e o dia mudam sem o gerador mudar.
  */
 export function generatorFingerprint(model: string): Promise<string> {
@@ -98,6 +99,7 @@ export function generatorFingerprint(model: string): Promise<string> {
     DEBATE_SYSTEM,
     JSON.stringify(DEBATE_PARTS.map((p) => buildDebateSchema(p, 3))),
     JSON.stringify(DEBATE_PART_NOTES),
+    GAP_ANSWERS_RULES,
     model,
   ]);
 }

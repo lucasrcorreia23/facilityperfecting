@@ -12,6 +12,7 @@ import { generatorFingerprint, SYSTEM_BASE } from "./prompt.ts";
 import { GENERATOR_VERSION, type GeneratorManifest } from "../_shared/generator-version.ts";
 import { guidelineRefs, loadGuidelines, renderGuidelinesBlock, selectGuidelines } from "../_shared/guidelines.ts";
 import { readAnthropicStream } from "../_shared/anthropic.ts";
+import { appendGapAnswers, buildGapAnswersBlock, GAP_ANSWERS_RULES } from "../_shared/gap-answers.ts";
 import {
   buildDebateSchema,
   DEBATE_PART_NOTES,
@@ -249,6 +250,13 @@ Deno.serve(async (req) => {
     });
     const guidelinesBlock = renderGuidelinesBlock(guidelines);
 
+    // Respostas do operador às lacunas de rodadas anteriores: entram depois do
+    // material, na mensagem de usuário — todas as fatias paralelas as leem (as
+    // lacunas só nascem numa delas) e não há chamada de IA a mais, então o
+    // orçamento de tempo da invocação é o mesmo de um processamento comum.
+    const gapAnswers = buildGapAnswersBlock(body.gap_answers);
+    const userText = appendGapAnswers(text, gapAnswers);
+
     // Taxonomias válidas da Perfecting, para o modelo escolher slugs reais.
     const prep = { timeoutMs: PREP_TIMEOUT_MS };
     let saToken: string;
@@ -321,9 +329,10 @@ Deno.serve(async (req) => {
           system: [
             { type: "text", text: system, cache_control: { type: "ephemeral" } },
             ...(guidelinesBlock ? [{ type: "text", text: guidelinesBlock }] : []),
+            ...(gapAnswers.count > 0 ? [{ type: "text", text: GAP_ANSWERS_RULES }] : []),
             ...(PART_NOTES[part] ? [{ type: "text", text: PART_NOTES[part] }] : []),
           ],
-          messages: [{ role: "user", content: text }],
+          messages: [{ role: "user", content: userText }],
         }),
       });
       // Erro de HTTP chega antes de o stream abrir: aí o corpo ainda é JSON.
@@ -389,6 +398,7 @@ Deno.serve(async (req) => {
       guidelines: guidelineRefs(guidelines),
       connection_id: connectionId,
       processed_at: new Date().toISOString(),
+      ...(gapAnswers.count > 0 && { gap_answers: gapAnswers.count }),
     };
     return json({
       ok: true,
@@ -396,6 +406,9 @@ Deno.serve(async (req) => {
       usage,
       mode,
       generator,
+      // Sempre presente: é por ele que a tela sabe que esta versão da função trata
+      // as respostas (uma versão antiga ignoraria o campo calada).
+      gap_answers: { count: gapAnswers.count, truncated: gapAnswers.truncated },
       ...(skipped.length > 0 && {
         warnings: [`${skipped.length} diretriz(es) ficaram de fora por passar do limite de tamanho: ${skipped.map((g) => g.title).join(", ")}`],
       }),

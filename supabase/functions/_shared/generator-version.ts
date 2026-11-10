@@ -20,8 +20,10 @@
  *      playbook, roleplay) fora de tudo que o comprador diz — FIESC Fase 3, 04/11.
  *  v7: modo debate (motor 3 da Perfecting): prompt e schema próprios, com obra,
  *      moção, lado e oponente fixados pelo usuário — 08/11.
+ *  v8: respostas do operador às lacunas (gap-answers.ts) entram no reprocessamento
+ *      como fonte de verdade que prevalece sobre o material e não são reabertas — 10/11.
  */
-export const GENERATOR_VERSION = "7";
+export const GENERATOR_VERSION = "8";
 
 /**
  * Versão do que o envio faz com o resultado (export-roleplay, implement-playbook,
@@ -48,6 +50,8 @@ export interface GeneratorManifest {
   /** A conta já escolhida no processamento (sem ela, só valem global e modo). */
   connection_id: string | null;
   processed_at: string;
+  /** Quantas respostas do operador às lacunas entraram neste processamento. */
+  gap_answers?: number;
 }
 
 /** SHA-256 em hex, 8 primeiros caracteres: curto para a tela, longo para não colidir. */
