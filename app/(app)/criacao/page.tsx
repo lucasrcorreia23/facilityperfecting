@@ -136,6 +136,33 @@ function readLegacyPrompt(): string {
   }
 }
 
+/** Uma etapa da tela, numerada: destino → material → conteúdo → cenário. */
+function Section({
+  step,
+  title,
+  hint,
+  className,
+  children,
+}: {
+  step: number;
+  title: string;
+  hint?: string;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <Card className={`flex flex-col gap-6 p-4 sm:p-5 ${className ?? ""}`}>
+      <div className="flex flex-col gap-1">
+        <h2 className="text-base font-medium text-slate-800">
+          <span className="text-slate-400">{step}.</span> {title}
+        </h2>
+        {hint && <p className="text-sm text-slate-500">{hint}</p>}
+      </div>
+      {children}
+    </Card>
+  );
+}
+
 export default function CriacaoPage() {
   const router = useRouter();
   const [tab, setTab] = useState("texto");
@@ -808,392 +835,54 @@ export default function CriacaoPage() {
         description="Tenha a criação de um roleplay em segundos."
       />
 
-      <Card className="flex flex-col gap-8 p-5">
-        <Tabs
-          selectedKey={tab}
-          onSelectionChange={(k) => setTab(String(k))}
-          radius="sm"
-          variant="bordered"
-          classNames={{ tabList: "rounded-sm", tab: "rounded-sm" }}
+      <div className="flex flex-col gap-4">
+        <Section
+          step={1}
+          title="Destino"
+          hint="Para qual conta o roleplay vai e como ele é gerado. Vem primeiro porque muda o que a IA faz com o material."
         >
-          <Tab
-            key="texto"
-            title={
-              <span className="flex items-center gap-2">
-                <DocumentTextIcon className="w-4 h-4" /> Texto
-              </span>
+          {/* Antes do modo: playbook é por organização, então depende do destino. */}
+          <Select
+            label={isPlaybookMode ? "Conta de destino" : "Conta de destino (opcional)"}
+            labelPlacement="outside-top"
+            placeholder="Definir depois, no envio"
+            selectedKeys={connectionId ? [connectionId] : []}
+            onSelectionChange={(keys) => handleConnectionChange(String(Array.from(keys)[0] ?? ""))}
+            radius="sm"
+            variant="bordered"
+            classNames={managerSelectClassNames}
+            description={
+              loadingPlaybooks
+                ? "Verificando se esta conta tem playbook…"
+                : connectionId && playbooks.length === 0
+                  ? "Esta conta não tem playbook — a criação segue por metodologia."
+                  : undefined
             }
-          />
-          <Tab
-            key="arquivo"
-            title={
-              <span className="flex items-center gap-2">
-                <ArrowUpTrayIcon className="w-4 h-4" /> Arquivo
-              </span>
-            }
-          />
-        </Tabs>
-
-        {tab === "arquivo" && (
-          <div className="flex flex-col gap-2">
-            <input
-              ref={fileInput}
-              type="file"
-              multiple
-              accept=".pdf,.docx,.md,.markdown,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/markdown"
-              className="hidden"
-              onChange={handleFile}
-            />
-            <button
-              type="button"
-              onClick={() => fileInput.current?.click()}
-              onDragOver={(e) => {
-                e.preventDefault();
-                if (!extracting) setDragging(true);
-              }}
-              onDragLeave={() => setDragging(false)}
-              onDrop={handleDrop}
-              disabled={extracting}
-              className={`flex min-h-[44px] flex-col items-center justify-center gap-1 rounded-sm border border-dashed px-4 py-8 text-sm transition-colors disabled:opacity-60 ${
-                dragging
-                  ? "border-blue-400 bg-blue-50 text-blue-700"
-                  : "border-slate-300 bg-slate-50 text-slate-600 hover:bg-slate-100"
-              }`}
-            >
-              <ArrowUpTrayIcon
-                className={`w-6 h-6 ${dragging ? "text-blue-500" : "text-slate-400"}`}
-              />
-              {extracting
-                ? extractMsg
-                : dragging
-                  ? "Solte os arquivos aqui"
-                  : fileNames.length
-                    ? `${fileNames.length} arquivo(s): ${fileNames.join(", ")}`
-                    : "Arraste PDFs/DOCX/MD aqui (vários de uma vez), ou clique para selecionar"}
-            </button>
-            {fileNames.length > 0 && !extracting && (
-              <button
-                type="button"
-                onClick={() =>
-                  setConfirm({
-                    title: "Remover arquivos importados?",
-                    message: (
-                      <>
-                        Os {fileNames.length} arquivo(s) importado(s) serão removidos da seleção. O
-                        texto já extraído permanece na caixa “Dados para o Roleplay” — use “Limpar”
-                        para apagar tudo.
-                      </>
-                    ),
-                    confirmLabel: "Remover",
-                    onConfirm: clearFiles,
-                  })
-                }
-                className="inline-flex items-center gap-1 self-start text-xs font-medium text-slate-500 transition-colors hover:text-red-600"
-              >
-                <XMarkIcon className="w-3.5 h-3.5" /> Remover arquivo(s)
-              </button>
-            )}
-          </div>
-        )}
-
-        <Textarea
-          label="Dados para o Roleplay"
-          labelPlacement="outside"
-          placeholder="Insira todas as informações de oferta, cenário, perfil do comprador e demais informações relevantes para o roleplay."
-          disableAutosize
-          value={text}
-          onValueChange={setText}
-          radius="sm"
-          variant="bordered"
-          classNames={{ input: "h-72 overflow-y-auto resize-y" }}
-        />
-
-        <div className="flex flex-col items-end gap-2 -mt-5 sm:flex-row sm:items-center sm:justify-end">
-          <p className="flex items-center gap-1.5 text-xs text-slate-500 sm:mr-auto">
-            <span>
-              {isPlaybookMode
-                ? "A IA estrutura o material: oferta, perfil do público (base das personas), objeções e regras. Cenário e rubricas são pulados — vêm das etapas do playbook."
-                : "A IA estrutura o material: oferta, perfil do público (base das personas), objeções, cenário e rubricas."}
-            </span>
-            <button
-              type="button"
-              onClick={openPromptViewer}
-              title="Ver o prompt base do gerador"
-              aria-label="Ver o prompt base do gerador"
-              className="shrink-0 rounded-sm p-0.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
-            >
-              <DocumentTextIcon className="w-4 h-4" />
-            </button>
-          </p>
-          {aiProcessed && (
-            <button
-              type="button"
-              onClick={() =>
-                setConfirm({
-                  title: "Resetar e reprocessar do zero?",
-                  message: (
-                    <>
-                      Isso vai <b>sobrescrever todos os blocos</b> (oferta, perfil, cenário) com uma
-                      nova extração da IA. <b>Suas edições manuais serão perdidas.</b> Consome
-                      créditos da Anthropic.
-                    </>
-                  ),
-                  confirmLabel: "Resetar e reprocessar",
-                  onConfirm: () => handleProcess("reset"),
-                })
-              }
-              disabled={processing || extracting || !text.trim()}
-              title="Reprocessar do zero (sobrescreve todas as suas edições)"
-              className="inline-flex items-center gap-1.5 rounded-sm px-3 py-2 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-100 disabled:opacity-50"
-            >
-              <ArrowPathIcon className="w-4 h-4" /> Resetar
-            </button>
-          )}
-          <Button
-            variant="secondary"
-            onPress={() =>
-              setConfirm(
-                aiProcessed
-                  ? {
-                      title: "Reprocessar com IA?",
-                      message: (
-                        <>
-                          A IA vai reler o material e <b>preencher apenas os campos vazios</b>,
-                          preservando o que você já editou. Consome créditos da Anthropic (centavos
-                          por processamento).
-                        </>
-                      ),
-                      confirmLabel: "Reprocessar",
-                      onConfirm: () => handleProcess("merge"),
-                    }
-                  : {
-                      title: "Processar com IA?",
-                      message: (
-                        <>
-                          A IA vai ler o material e preencher os blocos (oferta, perfil, cenário) e
-                          listar as informações faltantes. Consome créditos da Anthropic (centavos
-                          por processamento).
-                        </>
-                      ),
-                      confirmLabel: "Processar",
-                      onConfirm: () => handleProcess("reset"),
-                    },
-              )
-            }
-            isLoading={processing}
-            isDisabled={extracting || !text.trim()}
-            startContent={<SparklesIcon className="w-4 h-4" />}
           >
-            {aiProcessed ? "Reprocessar com IA" : "Processar com IA"}
-          </Button>
-        </div>
+            {connections.map((c) => (
+              <SelectItem key={c.id} textValue={`${c.org_name ?? `Org ${c.org_id}`} (${c.environment})`}>
+                {c.org_name ?? `Org ${c.org_id}`} ({c.environment})
+              </SelectItem>
+            ))}
+          </Select>
 
-        {legacyPrompt && (
-          <div className="flex flex-col gap-2 rounded-sm bg-amber-50 px-3 py-2 text-sm text-amber-800 sm:flex-row sm:items-center">
-            <span className="sm:mr-auto">
-              Seu prompt personalizado deste navegador deixou de valer: o gerador usa sempre o
-              prompt base, e o que a equipe quer acrescentar entra pelas{" "}
-              <Link href="/diretrizes" className="font-medium underline">
-                Diretrizes
-              </Link>
-              .
-            </span>
-            <div className="flex shrink-0 gap-2">
-              <Button variant="secondary" onPress={copyLegacyPrompt}>
-                Copiar meu prompt
-              </Button>
-              <Button variant="secondary" onPress={dismissLegacyPrompt}>
-                Descartar
-              </Button>
+          {playbooks.length > 0 && (
+            <div className="flex flex-col gap-3">
+              <p className="text-sm text-slate-700">Como gerar o roleplay</p>
+              <Tabs
+                selectedKey={generationMode}
+                onSelectionChange={(k) => setGenerationMode(String(k) as GenerationMode)}
+                radius="sm"
+                variant="bordered"
+                classNames={{ tabList: "rounded-sm", tab: "rounded-sm" }}
+              >
+                <Tab key="methodology" title="Por metodologia" />
+                <Tab key="playbook" title="Pelo playbook da conta" />
+              </Tabs>
             </div>
-          </div>
-        )}
+          )}
 
-        {generator ? (
-          <p className="text-xs text-slate-500">
-            Gerador {generatorVersionLabel(generator)} · diretrizes aplicadas: {guidelinesLabel(generator)}
-            {guidelinesStale && (
-              <span className="ml-1 text-amber-700">
-                — a conta de destino mudou depois do processamento; reprocesse para aplicar as
-                diretrizes da conta atual.
-              </span>
-            )}
-          </p>
-        ) : (
-          !connectionId && (
-            <p className="text-xs text-slate-500">
-              Sem conta de destino escolhida, o processamento usa só as diretrizes globais e do
-              modo. Escolha a conta antes para aplicar as dela.
-            </p>
-          )
-        )}
-
-        {gaps.length > 0 && (
-          <div className="flex flex-col gap-2 rounded-sm border border-slate-200 bg-slate-50 p-4">
-            <p className="text-sm font-medium text-slate-700">
-              Informações faltantes ({gaps.length})
-            </p>
-            <ul className="flex flex-col gap-1.5">
-              {gaps.map((g, i) => (
-                <li key={i} className="flex items-start gap-2 text-sm text-slate-600">
-                  <span
-                    className={`mt-0.5 inline-flex shrink-0 rounded-sm px-1.5 py-0.5 text-xs font-medium ${GAP_STYLES[g.severidade].cls}`}
-                  >
-                    {GAP_STYLES[g.severidade].label}
-                  </span>
-                  <span>
-                    <span className="text-slate-400">{g.grupo}:</span> {g.item}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-
-        {(objections.length > 0 || guardrails.length > 0) && (
-          <div className="flex flex-col gap-3 rounded-sm border border-slate-200 p-4">
-            <div>
-              <p className="text-sm font-medium text-slate-700">
-                Objeções e regras do comprador
-              </p>
-              <p className="text-xs text-slate-500">
-                {isPlaybookMode ? (
-                  <>
-                    As objeções vão só para as etapas em que o comprador as levantaria (a IA
-                    encaixa no envio); as regras valem para <b>todas</b> as etapas.
-                  </>
-                ) : (
-                  <>
-                    {dossier ? (
-                      <>
-                        Valem para <b>todo</b> o roleplay e só para este comprador. A Perfecting
-                        aceita até 3 objeções por nível.
-                      </>
-                    ) : (
-                      <>Vão para o contexto na Perfecting e valem para <b>todo</b> o roleplay.</>
-                    )}
-                  </>
-                )}{" "}
-                Revise antes de enviar: é conteúdo que vai direto para a conta do cliente.
-              </p>
-            </div>
-
-            <ObjectionListEditor items={objections} onChange={setObjections} />
-
-            {guardrails.length > 0 && (
-              <div className="flex flex-col gap-2">
-                <p className="text-sm font-medium text-slate-700">
-                  Regras de comportamento ({guardrails.length})
-                </p>
-                <GuardrailListEditor items={guardrails} onChange={setGuardrails} />
-              </div>
-            )}
-          </div>
-        )}
-
-        <Input
-          label="Nome da oferta"
-          labelPlacement="outside"
-          placeholder="Ex.: Plano Enterprise X"
-          value={offerName}
-          onValueChange={setOfferName}
-          radius="sm"
-          variant="bordered"
-        />
-
-        {aiProcessed && (
-          <Textarea
-            label="Descrição da oferta"
-            labelPlacement="outside"
-            placeholder="O que é vendido, para quem, diferenciais, preço e condições vigentes…"
-            disableAutosize
-            value={offerDescription}
-            onValueChange={setOfferDescription}
-            radius="sm"
-            variant="bordered"
-            description="Vai para a Perfecting no lugar do material cru. Deixe só o que o comprador pode saber da oferta — nada de método, roteiro ou CRM."
-            classNames={{ input: "h-40 overflow-y-auto resize-y" }}
-          />
-        )}
-
-        {aiProcessed && (
-          <Textarea
-            label="Perfil do comprador (buyer persona)"
-            labelPlacement="outside"
-            placeholder="Cargo, prioridades, consciência do problema, objeções…"
-            disableAutosize
-            value={perfil}
-            onValueChange={setPerfil}
-            radius="sm"
-            variant="bordered"
-            description="Alimenta a etapa de contexto/persona na Perfecting."
-            classNames={{ input: "h-72 overflow-y-auto resize-y" }}
-          />
-        )}
-
-        {/* Antes do modo: playbook é por organização, então depende do destino. */}
-        <Select
-          label={isPlaybookMode ? "Conta de destino" : "Conta de destino (opcional)"}
-          labelPlacement="outside-top"
-          placeholder="Definir depois, no envio"
-          selectedKeys={connectionId ? [connectionId] : []}
-          onSelectionChange={(keys) => handleConnectionChange(String(Array.from(keys)[0] ?? ""))}
-          radius="sm"
-          variant="bordered"
-          classNames={managerSelectClassNames}
-          description={
-            loadingPlaybooks
-              ? "Verificando se esta conta tem playbook…"
-              : connectionId && playbooks.length === 0
-                ? "Esta conta não tem playbook — a criação segue por metodologia."
-                : undefined
-          }
-        >
-          {connections.map((c) => (
-            <SelectItem key={c.id} textValue={`${c.org_name ?? `Org ${c.org_id}`} (${c.environment})`}>
-              {c.org_name ?? `Org ${c.org_id}`} ({c.environment})
-            </SelectItem>
-          ))}
-        </Select>
-
-        <Select
-          label="Status na conta"
-          labelPlacement="outside-top"
-          selectedKeys={[roleplayStatus]}
-          onSelectionChange={(keys) => setRoleplayStatus(String(Array.from(keys)[0] ?? NO_STATUS))}
-          radius="sm"
-          variant="bordered"
-          classNames={managerSelectClassNames}
-        >
-          {ROLE_PLAY_STATUSES.map((s) => (
-            <SelectItem
-              key={s.id == null ? NO_STATUS : String(s.id)}
-              textValue={`${s.label} — ${s.hint}`}
-              description={s.hint}
-            >
-              {s.label}
-            </SelectItem>
-          ))}
-        </Select>
-
-        {playbooks.length > 0 && (
-          <div className="flex flex-col gap-3">
-            <p className="text-sm text-slate-700">Como gerar o roleplay</p>
-            <Tabs
-              selectedKey={generationMode}
-              onSelectionChange={(k) => setGenerationMode(String(k) as GenerationMode)}
-              radius="sm"
-              variant="bordered"
-              classNames={{ tabList: "rounded-sm", tab: "rounded-sm" }}
-            >
-              <Tab key="methodology" title="Por metodologia" />
-              <Tab key="playbook" title="Pelo playbook da conta" />
-            </Tabs>
-          </div>
-        )}
-
-        {isPlaybookMode ? (
-          <div className="flex flex-col gap-3">
+          {isPlaybookMode && (
             <Select
               label="Playbook"
               labelPlacement="outside"
@@ -1215,179 +904,549 @@ export default function CriacaoPage() {
                 </SelectItem>
               ))}
             </Select>
-            <div className="flex flex-col gap-2 rounded-sm border border-slate-200 bg-slate-50 p-4">
-              <p className="text-sm font-medium text-slate-700">
-                {playbookCallTypes.length > 0
-                  ? `Serão criados ${playbookCallTypes.length} roleplay(s) — um por etapa do playbook`
-                  : "A jornada do playbook vira um roleplay por etapa"}
-              </p>
-              {playbookCallTypes.length > 0 && (
-                <ol className="flex flex-col gap-1 text-sm text-slate-600">
-                  {playbookCallTypes.map((ct, i) => (
-                    <li key={ct.id} className="flex items-center justify-between gap-3">
-                      <span>
-                        <span className="text-slate-400">{i + 1}.</span> {ct.name}
-                      </span>
-                      {Number(personaCount) > 1 && (
-                        <Checkbox
-                          size="sm"
-                          isSelected={fixedCallTypeIds.has(ct.id)}
-                          onValueChange={() => toggleFixedCallType(ct.id)}
-                          classNames={{ label: "text-xs text-slate-500" }}
-                        >
-                          persona fixa
-                        </Checkbox>
-                      )}
-                    </li>
-                  ))}
-                </ol>
-              )}
-              <p className="text-xs text-slate-500">
-                O tipo de chamada, as rubricas e o comportamento vêm de cada etapa do playbook. O
-                material acima é usado para a oferta e o contexto.
-              </p>
-              {Number(personaCount) > 1 && (
-                <p className="text-xs text-slate-500">
-                  Etapas sem marcação aceitam <b>qualquer uma das {personaCount} personas</b> — a
-                  escolha acontece na hora da call. As marcadas ficam travadas na persona principal
-                  (a primeira do contexto). Qual persona fica em cada etapa é ajustável depois, na
-                  Perfecting.
-                </p>
+          )}
+
+          <Select
+            label="Status na conta"
+            labelPlacement="outside-top"
+            selectedKeys={[roleplayStatus]}
+            onSelectionChange={(keys) => setRoleplayStatus(String(Array.from(keys)[0] ?? NO_STATUS))}
+            radius="sm"
+            variant="bordered"
+            classNames={managerSelectClassNames}
+          >
+            {ROLE_PLAY_STATUSES.map((s) => (
+              <SelectItem
+                key={s.id == null ? NO_STATUS : String(s.id)}
+                textValue={`${s.label} — ${s.hint}`}
+                description={s.hint}
+              >
+                {s.label}
+              </SelectItem>
+            ))}
+          </Select>
+        </Section>
+
+        <Section
+          step={2}
+          title="Material"
+          hint="O que o cliente mandou: cole o texto ou suba arquivos, e processe com IA."
+          className="gap-8"
+        >
+          <Tabs
+            selectedKey={tab}
+            onSelectionChange={(k) => setTab(String(k))}
+            radius="sm"
+            variant="bordered"
+            classNames={{ tabList: "rounded-sm", tab: "rounded-sm" }}
+          >
+            <Tab
+              key="texto"
+              title={
+                <span className="flex items-center gap-2">
+                  <DocumentTextIcon className="w-4 h-4" /> Texto
+                </span>
+              }
+            />
+            <Tab
+              key="arquivo"
+              title={
+                <span className="flex items-center gap-2">
+                  <ArrowUpTrayIcon className="w-4 h-4" /> Arquivo
+                </span>
+              }
+            />
+          </Tabs>
+
+          {tab === "arquivo" && (
+            <div className="flex flex-col gap-2">
+              <input
+                ref={fileInput}
+                type="file"
+                multiple
+                accept=".pdf,.docx,.md,.markdown,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/markdown"
+                className="hidden"
+                onChange={handleFile}
+              />
+              <button
+                type="button"
+                onClick={() => fileInput.current?.click()}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  if (!extracting) setDragging(true);
+                }}
+                onDragLeave={() => setDragging(false)}
+                onDrop={handleDrop}
+                disabled={extracting}
+                className={`flex min-h-[44px] flex-col items-center justify-center gap-1 rounded-sm border border-dashed px-4 py-8 text-sm transition-colors disabled:opacity-60 ${
+                  dragging
+                    ? "border-blue-400 bg-blue-50 text-blue-700"
+                    : "border-slate-300 bg-slate-50 text-slate-600 hover:bg-slate-100"
+                }`}
+              >
+                <ArrowUpTrayIcon
+                  className={`w-6 h-6 ${dragging ? "text-blue-500" : "text-slate-400"}`}
+                />
+                {extracting
+                  ? extractMsg
+                  : dragging
+                    ? "Solte os arquivos aqui"
+                    : fileNames.length
+                      ? `${fileNames.length} arquivo(s): ${fileNames.join(", ")}`
+                      : "Arraste PDFs/DOCX/MD aqui (vários de uma vez), ou clique para selecionar"}
+              </button>
+              {fileNames.length > 0 && !extracting && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    setConfirm({
+                      title: "Remover arquivos importados?",
+                      message: (
+                        <>
+                          Os {fileNames.length} arquivo(s) importado(s) serão removidos da seleção. O
+                          texto já extraído permanece na caixa “Dados para o Roleplay” — use “Limpar”
+                          para apagar tudo.
+                        </>
+                      ),
+                      confirmLabel: "Remover",
+                      onConfirm: clearFiles,
+                    })
+                  }
+                  className="inline-flex items-center gap-1 self-start text-xs font-medium text-slate-500 transition-colors hover:text-red-600"
+                >
+                  <XMarkIcon className="w-3.5 h-3.5" /> Remover arquivo(s)
+                </button>
               )}
             </div>
-            <Select
-              label="Quantas personas?"
-              labelPlacement="outside-top"
-              selectedKeys={[personaCount]}
-              onSelectionChange={(keys) => setPersonaCount(String(Array.from(keys)[0] ?? "1"))}
-              radius="sm"
-              variant="bordered"
-              classNames={managerSelectClassNames}
-              description={
-                Number(personaCount) > 1
-                  ? "O vendedor escolhe qual persona enfrentar na hora da call."
-                  : "Uma persona só, travada em todas as etapas — comportamento de sempre."
-              }
-            >
-              {PERSONA_COUNTS.map((n) => (
-                <SelectItem key={n} textValue={n}>
-                  {n}
-                </SelectItem>
-              ))}
-            </Select>
-            {Number(personaCount) > 1 && (
-              <Textarea
-                label="Instruções para as personas (opcional)"
-                labelPlacement="outside"
-                placeholder="Ex.: metade das personas mais cética, metade mais colaborativa"
-                value={personaInstructions}
-                onValueChange={setPersonaInstructions}
-                radius="sm"
-                variant="bordered"
-                minRows={2}
-              />
+          )}
+
+          <Textarea
+            label="Dados para o Roleplay"
+            labelPlacement="outside"
+            placeholder="Insira todas as informações de oferta, cenário, perfil do comprador e demais informações relevantes para o roleplay."
+            disableAutosize
+            value={text}
+            onValueChange={setText}
+            radius="sm"
+            variant="bordered"
+            classNames={{ input: "h-72 overflow-y-auto resize-y" }}
+          />
+
+          <div className="flex flex-col items-end gap-2 -mt-5 sm:flex-row sm:items-center sm:justify-end">
+            <p className="flex items-center gap-1.5 text-xs text-slate-500 sm:mr-auto">
+              <span>
+                {isPlaybookMode
+                  ? "A IA estrutura o material: oferta, perfil do público (base das personas), objeções e regras. Cenário e rubricas são pulados — vêm das etapas do playbook."
+                  : "A IA estrutura o material: oferta, perfil do público (base das personas), objeções, cenário e rubricas."}
+              </span>
+              <button
+                type="button"
+                onClick={openPromptViewer}
+                title="Ver o prompt base do gerador"
+                aria-label="Ver o prompt base do gerador"
+                className="shrink-0 rounded-sm p-0.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
+              >
+                <DocumentTextIcon className="w-4 h-4" />
+              </button>
+            </p>
+            {aiProcessed && (
+              <button
+                type="button"
+                onClick={() =>
+                  setConfirm({
+                    title: "Resetar e reprocessar do zero?",
+                    message: (
+                      <>
+                        Isso vai <b>sobrescrever todos os blocos</b> (oferta, perfil, cenário) com uma
+                        nova extração da IA. <b>Suas edições manuais serão perdidas.</b> Consome
+                        créditos da Anthropic.
+                      </>
+                    ),
+                    confirmLabel: "Resetar e reprocessar",
+                    onConfirm: () => handleProcess("reset"),
+                  })
+                }
+                disabled={processing || extracting || !text.trim()}
+                title="Reprocessar do zero (sobrescreve todas as suas edições)"
+                className="inline-flex items-center gap-1.5 rounded-sm px-3 py-2 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-100 disabled:opacity-50"
+              >
+                <ArrowPathIcon className="w-4 h-4" /> Resetar
+              </button>
             )}
+            <Button
+              variant="secondary"
+              onPress={() =>
+                setConfirm(
+                  aiProcessed
+                    ? {
+                        title: "Reprocessar com IA?",
+                        message: (
+                          <>
+                            A IA vai reler o material e <b>preencher apenas os campos vazios</b>,
+                            preservando o que você já editou. Consome créditos da Anthropic (centavos
+                            por processamento).
+                          </>
+                        ),
+                        confirmLabel: "Reprocessar",
+                        onConfirm: () => handleProcess("merge"),
+                      }
+                    : {
+                        title: "Processar com IA?",
+                        message: (
+                          <>
+                            A IA vai ler o material e preencher os blocos (oferta, perfil, cenário) e
+                            listar as informações faltantes. Consome créditos da Anthropic (centavos
+                            por processamento).
+                          </>
+                        ),
+                        confirmLabel: "Processar",
+                        onConfirm: () => handleProcess("reset"),
+                      },
+                )
+              }
+              isLoading={processing}
+              isDisabled={extracting || !text.trim()}
+              startContent={<SparklesIcon className="w-4 h-4" />}
+            >
+              {aiProcessed ? "Reprocessar com IA" : "Processar com IA"}
+            </Button>
           </div>
-        ) : (
-          <>
-            <Select
-              label="Tipo de chamada (call context)"
-              labelPlacement="outside"
-              placeholder={callContexts.length ? "Escolha o tipo de chamada" : "Carregando…"}
-              isDisabled={callContexts.length === 0}
-              selectedKeys={callContextSlug ? [callContextSlug] : []}
-              onSelectionChange={(keys) => setCallContextSlug(String(Array.from(keys)[0] ?? ""))}
-              radius="sm"
-              variant="bordered"
-              classNames={managerSelectClassNames}
-              isRequired
-            >
-              {callContexts.map((c) => (
-                <SelectItem key={c.slug} textValue={c.name}>
-                  {c.name} — {c.group}
-                </SelectItem>
-              ))}
-            </Select>
 
-            <Select
-              label="Metodologia"
-              labelPlacement="outside-top"
-              placeholder={
-                defaultMethodologySlug
-                  ? `Padrão de Configurações (${methodologies.find((m) => m.slug === defaultMethodologySlug)?.name ?? defaultMethodologySlug})`
-                  : "Padrão de Configurações (nenhuma definida)"
-              }
-              selectedKeys={methodologySlug ? [methodologySlug] : []}
-              onSelectionChange={(keys) => setMethodologySlug(String(Array.from(keys)[0] ?? ""))}
-              radius="sm"
-              variant="bordered"
-              classNames={managerSelectClassNames}
-              description={
-                isProspectingCall(callContextSlug)
-                  ? "Prospecção e triagem normalmente não seguem metodologia de descoberta, mas o conteúdo por etapa precisa de uma: escolha a mais leve."
-                  : undefined
-              }
-            >
-              {methodologies.map((m) => (
-                <SelectItem key={m.slug} textValue={m.name}>
-                  {m.name}
-                </SelectItem>
-              ))}
-            </Select>
+          {legacyPrompt && (
+            <div className="flex flex-col gap-2 rounded-sm bg-amber-50 px-3 py-2 text-sm text-amber-800 sm:flex-row sm:items-center">
+              <span className="sm:mr-auto">
+                Seu prompt personalizado deste navegador deixou de valer: o gerador usa sempre o
+                prompt base, e o que a equipe quer acrescentar entra pelas{" "}
+                <Link href="/diretrizes" className="font-medium underline">
+                  Diretrizes
+                </Link>
+                .
+              </span>
+              <div className="flex shrink-0 gap-2">
+                <Button variant="secondary" onPress={copyLegacyPrompt}>
+                  Copiar meu prompt
+                </Button>
+                <Button variant="secondary" onPress={dismissLegacyPrompt}>
+                  Descartar
+                </Button>
+              </div>
+            </div>
+          )}
 
-            <Select
-              label="Dificuldade"
-              labelPlacement="outside"
-              selectedKeys={[difficulty]}
-              onSelectionChange={(keys) => setDifficulty(String(Array.from(keys)[0] ?? "medium"))}
-              radius="sm"
-              variant="bordered"
-              classNames={managerSelectClassNames}
-            >
-              {DIFFICULTIES.map((d) => (
-                <SelectItem key={d.key}>{d.label}</SelectItem>
-              ))}
-            </Select>
-          </>
-        )}
+          {generator ? (
+            <p className="text-xs text-slate-500">
+              Gerador {generatorVersionLabel(generator)} · diretrizes aplicadas: {guidelinesLabel(generator)}
+              {guidelinesStale && (
+                <span className="ml-1 text-amber-700">
+                  — a conta de destino mudou depois do processamento; reprocesse para aplicar as
+                  diretrizes da conta atual.
+                </span>
+              )}
+            </p>
+          ) : (
+            !connectionId && (
+              <p className="text-xs text-slate-500">
+                Sem conta de destino escolhida, o processamento usa só as diretrizes globais e do
+                modo. Escolha a conta antes para aplicar as dela.
+              </p>
+            )
+          )}
+        </Section>
 
-        {aiProcessed && !isPlaybookMode && (
-          <>
+        <Section
+          step={3}
+          title="Oferta e comprador"
+          hint="O que a IA extraiu do material. Revise: é o conteúdo que vai para a conta."
+        >
+          {gaps.length > 0 && (
+            <div className="flex flex-col gap-2 rounded-sm border border-slate-200 bg-slate-50 p-4">
+              <p className="text-sm font-medium text-slate-700">
+                Informações faltantes ({gaps.length})
+              </p>
+              <ul className="flex flex-col gap-1.5">
+                {gaps.map((g, i) => (
+                  <li key={i} className="flex items-start gap-2 text-sm text-slate-600">
+                    <span
+                      className={`mt-0.5 inline-flex shrink-0 rounded-sm px-1.5 py-0.5 text-xs font-medium ${GAP_STYLES[g.severidade].cls}`}
+                    >
+                      {GAP_STYLES[g.severidade].label}
+                    </span>
+                    <span>
+                      <span className="text-slate-400">{g.grupo}:</span> {g.item}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {(objections.length > 0 || guardrails.length > 0) && (
+            <div className="flex flex-col gap-3 rounded-sm border border-slate-200 p-4">
+              <div>
+                <p className="text-sm font-medium text-slate-700">
+                  Objeções e regras do comprador
+                </p>
+                <p className="text-xs text-slate-500">
+                  {isPlaybookMode ? (
+                    <>
+                      As objeções vão só para as etapas em que o comprador as levantaria (a IA
+                      encaixa no envio); as regras valem para <b>todas</b> as etapas.
+                    </>
+                  ) : (
+                    <>
+                      {dossier ? (
+                        <>
+                          Valem para <b>todo</b> o roleplay e só para este comprador. A Perfecting
+                          aceita até 3 objeções por nível.
+                        </>
+                      ) : (
+                        <>Vão para o contexto na Perfecting e valem para <b>todo</b> o roleplay.</>
+                      )}
+                    </>
+                  )}{" "}
+                  Revise antes de enviar: é conteúdo que vai direto para a conta do cliente.
+                </p>
+              </div>
+
+              <ObjectionListEditor items={objections} onChange={setObjections} />
+
+              {guardrails.length > 0 && (
+                <div className="flex flex-col gap-2">
+                  <p className="text-sm font-medium text-slate-700">
+                    Regras de comportamento ({guardrails.length})
+                  </p>
+                  <GuardrailListEditor items={guardrails} onChange={setGuardrails} />
+                </div>
+              )}
+            </div>
+          )}
+
+          <Input
+            label="Nome da oferta"
+            labelPlacement="outside"
+            placeholder="Ex.: Plano Enterprise X"
+            value={offerName}
+            onValueChange={setOfferName}
+            radius="sm"
+            variant="bordered"
+          />
+
+          {aiProcessed && (
             <Textarea
-              label="Comportamento do cenário"
+              label="Descrição da oferta"
               labelPlacement="outside"
-              placeholder="Como a persona reage, testes de fogo/objeções, critério de fechamento…"
+              placeholder="O que é vendido, para quem, diferenciais, preço e condições vigentes…"
               disableAutosize
-              value={cenarioInstrucoes}
-              onValueChange={setCenarioInstrucoes}
+              value={offerDescription}
+              onValueChange={setOfferDescription}
               radius="sm"
               variant="bordered"
-              description="Define o comportamento do roleplay (instruções do case setup)."
+              description="Vai para a Perfecting no lugar do material cru. Deixe só o que o comprador pode saber da oferta — nada de método, roteiro ou CRM."
+              classNames={{ input: "h-40 overflow-y-auto resize-y" }}
+            />
+          )}
+
+          {aiProcessed && (
+            <Textarea
+              label="Perfil do comprador (buyer persona)"
+              labelPlacement="outside"
+              placeholder="Cargo, prioridades, consciência do problema, objeções…"
+              disableAutosize
+              value={perfil}
+              onValueChange={setPerfil}
+              radius="sm"
+              variant="bordered"
+              description="Alimenta a etapa de contexto/persona na Perfecting."
               classNames={{ input: "h-72 overflow-y-auto resize-y" }}
             />
-            <Input
-              label="Objetivo de treino"
-              labelPlacement="outside"
-              placeholder="Ex.: praticar abertura e qualificação por dor"
-              value={objetivo}
-              onValueChange={setObjetivo}
-              radius="sm"
-              variant="bordered"
-            />
-            <Input
-              label="Habilidades a treinar"
-              labelPlacement="outside"
-              placeholder="Ex.: rapport, contorno de objeções, fechamento"
-              value={habilidades}
-              onValueChange={setHabilidades}
-              radius="sm"
-              variant="bordered"
-            />
-            {dossier && (
-              <DossierEditor value={dossier} onChange={setDossier} onRemove={() => setDossier(null)} />
-            )}
-          </>
-        )}
+          )}
+        </Section>
+
+        <Section
+          step={4}
+          title={isPlaybookMode ? "Etapas e personas" : "Cenário"}
+          hint={
+            isPlaybookMode
+              ? "Um roleplay por etapa do playbook escolhido no destino."
+              : "Tipo de chamada, metodologia, dificuldade e comportamento do comprador."
+          }
+        >
+          {isPlaybookMode ? (
+            <div className="flex flex-col gap-3">
+              <div className="flex flex-col gap-2 rounded-sm border border-slate-200 bg-slate-50 p-4">
+                <p className="text-sm font-medium text-slate-700">
+                  {playbookCallTypes.length > 0
+                    ? `Serão criados ${playbookCallTypes.length} roleplay(s) — um por etapa do playbook`
+                    : "A jornada do playbook vira um roleplay por etapa"}
+                </p>
+                {playbookCallTypes.length > 0 && (
+                  <ol className="flex flex-col gap-1 text-sm text-slate-600">
+                    {playbookCallTypes.map((ct, i) => (
+                      <li key={ct.id} className="flex items-center justify-between gap-3">
+                        <span>
+                          <span className="text-slate-400">{i + 1}.</span> {ct.name}
+                        </span>
+                        {Number(personaCount) > 1 && (
+                          <Checkbox
+                            size="sm"
+                            isSelected={fixedCallTypeIds.has(ct.id)}
+                            onValueChange={() => toggleFixedCallType(ct.id)}
+                            classNames={{ label: "text-xs text-slate-500" }}
+                          >
+                            persona fixa
+                          </Checkbox>
+                        )}
+                      </li>
+                    ))}
+                  </ol>
+                )}
+                <p className="text-xs text-slate-500">
+                  O tipo de chamada, as rubricas e o comportamento vêm de cada etapa do playbook. O
+                  material acima é usado para a oferta e o contexto.
+                </p>
+                {Number(personaCount) > 1 && (
+                  <p className="text-xs text-slate-500">
+                    Etapas sem marcação aceitam <b>qualquer uma das {personaCount} personas</b> — a
+                    escolha acontece na hora da call. As marcadas ficam travadas na persona principal
+                    (a primeira do contexto). Qual persona fica em cada etapa é ajustável depois, na
+                    Perfecting.
+                  </p>
+                )}
+              </div>
+              <Select
+                label="Quantas personas?"
+                labelPlacement="outside-top"
+                selectedKeys={[personaCount]}
+                onSelectionChange={(keys) => setPersonaCount(String(Array.from(keys)[0] ?? "1"))}
+                radius="sm"
+                variant="bordered"
+                classNames={managerSelectClassNames}
+                description={
+                  Number(personaCount) > 1
+                    ? "O vendedor escolhe qual persona enfrentar na hora da call."
+                    : "Uma persona só, travada em todas as etapas — comportamento de sempre."
+                }
+              >
+                {PERSONA_COUNTS.map((n) => (
+                  <SelectItem key={n} textValue={n}>
+                    {n}
+                  </SelectItem>
+                ))}
+              </Select>
+              {Number(personaCount) > 1 && (
+                <Textarea
+                  label="Instruções para as personas (opcional)"
+                  labelPlacement="outside"
+                  placeholder="Ex.: metade das personas mais cética, metade mais colaborativa"
+                  value={personaInstructions}
+                  onValueChange={setPersonaInstructions}
+                  radius="sm"
+                  variant="bordered"
+                  minRows={2}
+                />
+              )}
+            </div>
+          ) : (
+            <>
+              <Select
+                label="Tipo de chamada (call context)"
+                labelPlacement="outside"
+                placeholder={callContexts.length ? "Escolha o tipo de chamada" : "Carregando…"}
+                isDisabled={callContexts.length === 0}
+                selectedKeys={callContextSlug ? [callContextSlug] : []}
+                onSelectionChange={(keys) => setCallContextSlug(String(Array.from(keys)[0] ?? ""))}
+                radius="sm"
+                variant="bordered"
+                classNames={managerSelectClassNames}
+                isRequired
+              >
+                {callContexts.map((c) => (
+                  <SelectItem key={c.slug} textValue={c.name}>
+                    {c.name} — {c.group}
+                  </SelectItem>
+                ))}
+              </Select>
+
+              <Select
+                label="Metodologia"
+                labelPlacement="outside-top"
+                placeholder={
+                  defaultMethodologySlug
+                    ? `Padrão de Configurações (${methodologies.find((m) => m.slug === defaultMethodologySlug)?.name ?? defaultMethodologySlug})`
+                    : "Padrão de Configurações (nenhuma definida)"
+                }
+                selectedKeys={methodologySlug ? [methodologySlug] : []}
+                onSelectionChange={(keys) => setMethodologySlug(String(Array.from(keys)[0] ?? ""))}
+                radius="sm"
+                variant="bordered"
+                classNames={managerSelectClassNames}
+                description={
+                  isProspectingCall(callContextSlug)
+                    ? "Prospecção e triagem normalmente não seguem metodologia de descoberta, mas o conteúdo por etapa precisa de uma: escolha a mais leve."
+                    : undefined
+                }
+              >
+                {methodologies.map((m) => (
+                  <SelectItem key={m.slug} textValue={m.name}>
+                    {m.name}
+                  </SelectItem>
+                ))}
+              </Select>
+
+              <Select
+                label="Dificuldade"
+                labelPlacement="outside"
+                selectedKeys={[difficulty]}
+                onSelectionChange={(keys) => setDifficulty(String(Array.from(keys)[0] ?? "medium"))}
+                radius="sm"
+                variant="bordered"
+                classNames={managerSelectClassNames}
+              >
+                {DIFFICULTIES.map((d) => (
+                  <SelectItem key={d.key}>{d.label}</SelectItem>
+                ))}
+              </Select>
+            </>
+          )}
+
+          {aiProcessed && !isPlaybookMode && (
+            <>
+              <Textarea
+                label="Comportamento do cenário"
+                labelPlacement="outside"
+                placeholder="Como a persona reage, testes de fogo/objeções, critério de fechamento…"
+                disableAutosize
+                value={cenarioInstrucoes}
+                onValueChange={setCenarioInstrucoes}
+                radius="sm"
+                variant="bordered"
+                description="Define o comportamento do roleplay (instruções do case setup)."
+                classNames={{ input: "h-72 overflow-y-auto resize-y" }}
+              />
+              <Input
+                label="Objetivo de treino"
+                labelPlacement="outside"
+                placeholder="Ex.: praticar abertura e qualificação por dor"
+                value={objetivo}
+                onValueChange={setObjetivo}
+                radius="sm"
+                variant="bordered"
+              />
+              <Input
+                label="Habilidades a treinar"
+                labelPlacement="outside"
+                placeholder="Ex.: rapport, contorno de objeções, fechamento"
+                value={habilidades}
+                onValueChange={setHabilidades}
+                radius="sm"
+                variant="bordered"
+              />
+              {dossier && (
+                <DossierEditor value={dossier} onChange={setDossier} onRemove={() => setDossier(null)} />
+              )}
+            </>
+          )}
+        </Section>
 
         {manualEdits && (
           <p className="text-right text-xs text-slate-500">
@@ -1453,7 +1512,7 @@ export default function CriacaoPage() {
             Enviar para destino
           </Button>
         </div>
-      </Card>
+      </div>
 
       <Modal isOpen={promptModalOpen} onOpenChange={setPromptModalOpen} radius="sm" size="3xl">
         <ModalContent>
