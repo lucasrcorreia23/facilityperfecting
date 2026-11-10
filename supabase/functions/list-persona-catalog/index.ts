@@ -20,8 +20,8 @@ const db = createClient(
  * `context_id` e a conexão saem do próprio rascunho (playbook_run.context_id), e
  * não do corpo: o catálogo é por contexto e quem manda é o que foi exportado.
  *
- * Catálogo indisponível NÃO é erro: `/persona/catalog` não existe na API de
- * produção (some junto com o resto do modo playbook). Devolve
+ * `/persona/catalog` existe em HML e em PROD (OpenAPI de PROD, 10/11/2026). Catálogo
+ * indisponível (404/405, backend antigo) continua não sendo erro: devolve
  * `{ ok: true, available: false }` e a UI esconde a seção, em vez de mostrar
  * falha para o usuário.
  */
@@ -63,7 +63,7 @@ Deno.serve(async (req) => {
       const items = await listCaseSetupPersonas(env, token, contextId);
       return json({ ok: true, available: true, items });
     } catch (e) {
-      // 404 = endpoint não existe naquele ambiente (prod). Degrada, não quebra.
+      // 404/405 = endpoint não existe naquele backend. Degrada, não quebra.
       const status = e instanceof PerfectingError ? e.status : 0;
       if (status === 404 || status === 405) {
         return json({ ok: true, available: false, items: [] });

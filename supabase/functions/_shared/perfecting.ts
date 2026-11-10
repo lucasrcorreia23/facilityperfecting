@@ -728,7 +728,6 @@ export async function generateContext(
   return postJsonGenerate(`${rp(env)}/context/generate`, token, {
     offer_id: offerId,
     aditional_instructions: additionalInstructions, // typo real da API
-    infer: true,
   });
 }
 
@@ -992,8 +991,9 @@ export async function openPersonaBatchStream(
 /**
  * Trava (personaId) ou destrava (null) a persona de um case_setup.
  *
- * ⚠️ `?generate_case_prompt=false` é OBRIGATÓRIO: com o default (true) a API
- * tenta regenerar o case_prompt na mesma chamada e quebra. O corpo é merge
+ * `?generate_case_prompt=false` vai sempre explícito. Em PROD o default do PUT já é
+ * `false` (OpenAPI de 10/11/2026); em backend mais antigo era `true`, e a API tentava
+ * regenerar o case_prompt na mesma chamada e quebrava. O corpo é merge
  * parcial — mandar só `{ persona_id }` não apaga nenhum outro campo do
  * case_setup. A API NÃO valida se a persona pertence ao contexto do
  * case_setup; é responsabilidade de quem chama.
@@ -1012,9 +1012,10 @@ export async function setCaseSetupPersona(
 }
 
 /**
- * Reescreve o `buyer_prior_knowledge` do case_setup. O PATCH não aceita o campo,
- * então vai pelo PUT (merge parcial, mesmo cuidado com `generate_case_prompt` de
- * `setCaseSetupPersona`). É o que a cola mostra em "O que {persona} já sabe" e o
+ * Reescreve o `buyer_prior_knowledge` do case_setup. Vai pelo PUT (merge parcial, mesmo
+ * cuidado com `generate_case_prompt` de `setCaseSetupPersona`); em PROD o PATCH também
+ * aceita o campo (OpenAPI de 10/11/2026), mas o PUT vale nos dois ambientes. É o que a
+ * cola mostra em "O que {persona} já sabe" e o
  * que o prompt do comprador usa quando a etapa não tem conhecimento próprio.
  */
 export async function setCaseSetupPriorKnowledge(
@@ -1049,8 +1050,8 @@ export interface CaseSetupPersonas {
  * genérico REPLICADO sob todas as personas do contexto; aqui a árvore é invertida
  * para `case_setup → personas`, que é o que a UI precisa.
  *
- * ⚠️ `/persona/catalog` não existe na API de produção — some junto com o resto do
- * modo playbook. Quem chama trata a falha como "sem catálogo", não como erro.
+ * `/persona/catalog` existe em HML e em PROD (OpenAPI de 10/11/2026). Quem chama ainda
+ * trata 404/405 como "sem catálogo", não como erro: custa nada e cobre backend antigo.
  */
 export async function listCaseSetupPersonas(
   env: PerfectingEnv,
@@ -1182,7 +1183,6 @@ export async function generateCaseSetup(
     ...(scenario.aditional_instructions && {
       aditional_instructions: scenario.aditional_instructions,
     }),
-    infer: true,
   });
 }
 
@@ -1285,7 +1285,11 @@ export function overlayVerbatimOnGenerated(
   return out;
 }
 
-/** Monta o payload do case_setup/create (contrato legado de produção). */
+/**
+ * Monta o payload do case_setup/create (contrato legado de produção). Só os campos do
+ * Input: `successful_sale_dialogues_examples`/`unsuccessful_…` não fazem parte dele
+ * (OpenAPI de PROD, 10/11/2026) e não são enviados.
+ */
 function buildProdCaseSetupCreate(
   g: Record<string, unknown>,
   contextId: number,
@@ -1321,8 +1325,6 @@ function buildProdCaseSetupCreate(
     persona_profile: g.persona_profile,
     persona_voice_id,
     persona_voice_model_id: g.persona_voice_model_id ?? null,
-    successful_sale_dialogues_examples: arr(g.successful_sale_dialogues_examples),
-    unsuccessful_sale_dialogues_examples: arr(g.unsuccessful_sale_dialogues_examples),
     ...(userGroupId != null ? { user_group_id: userGroupId } : {}),
   };
 }
@@ -1483,11 +1485,18 @@ export interface Playbook {
   id: number;
   name: string;
   playbook_status_id: number | null;
-  /** `roleplay` | `ride_along`. Ausente (backend sem o campo) = roleplay. */
+  /**
+   * `roleplay` | `ride_along`. PROD não publica o campo (`PlaybookModelPydanticSchema`
+   * do OpenAPI de 10/11/2026 não o tem; chega com o Field): ausente = roleplay.
+   */
   destination: string | null;
 }
 
-/** Playbook que gera roleplays. Os de Ride Along (Field) não têm o que implementar aqui. */
+/**
+ * Playbook que gera roleplays. Os de Ride Along (Field) não têm o que implementar aqui.
+ * Sem `destination` (PROD hoje) o playbook conta como de roleplay — não trocar o
+ * fallback: em PROD a lista ficaria vazia.
+ */
 export function isRoleplayPlaybook(p: { destination?: string | null }): boolean {
   const d = typeof p.destination === "string" ? p.destination.trim().toLowerCase() : "";
   return d === "" || d === "roleplay";
@@ -2160,7 +2169,7 @@ export async function openPlaybookImplementationStream(
   return res;
 }
 
-// ── Dores × portfólio (HML desde 2026-09-25; PROD ainda não tem as rotas) ──
+// ── Dores × portfólio (HML desde 2026-09-25; PROD tem as rotas — OpenAPI de 10/11/2026) ──
 // Produtos e dores ficam na OFERTA; a persona liga as dores dela (com a camada de
 // revelação) e a postura diante dos produtos. O comprador recebe só as dores e a
 // postura — nunca o nome do produto (isolamento feito pelo backend).
@@ -2683,8 +2692,8 @@ export async function createCaseSetupRaw(
 }
 
 /**
- * Merge parcial no case_setup pelo PUT (`?generate_case_prompt=false` é obrigatório:
- * o PUT não regenera mais o prompt). É por aqui que entram o motor e a persona.
+ * Merge parcial no case_setup pelo PUT (`?generate_case_prompt=false` vai explícito; em
+ * PROD já é o default do PUT, que não regenera o prompt). É por aqui que entram o motor e a persona.
  */
 export async function putCaseSetupFields(
   env: PerfectingEnv,

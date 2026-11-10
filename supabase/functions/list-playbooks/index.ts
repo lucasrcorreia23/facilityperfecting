@@ -42,6 +42,7 @@ Deno.serve(async (req) => {
 
     const { env, token } = await authenticateConnection(connection);
     // Só os de roleplay: playbook de Ride Along (Field) não gera roleplay nenhum.
+    // PROD ainda não publica `destination`; sem o campo, todo playbook é de roleplay.
     const playbooks = (await listPlaybooks(env, token)).filter(isRoleplayPlaybook);
     const callTypes =
       playbookId != null ? await listPlaybookCallTypes(env, token, playbookId) : null;

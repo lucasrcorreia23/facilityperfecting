@@ -178,7 +178,8 @@ export function personaPainDetail(p: DossierPersonaPain): string {
 }
 
 /**
- * As dores em texto, para o ambiente que ainda não tem as rotas de portfólio (PROD).
+ * As dores em texto, para o ambiente que não tem as rotas de portfólio (404). HML e
+ * PROD têm as rotas (OpenAPI de PROD, 10/11/2026); fica como degradação.
  * Sem nome de produto: o comprador não conhece o que o vendedor vende.
  */
 export function painsAsPromptText(d: RoleplayDossier): string {
