@@ -43,7 +43,7 @@ describe("buildReviewedMaterialBlock", () => {
     expect(block.text).toContain("1. [Oferta] Lacuna: Preço não informado\n   Resposta do operador: R$ 1.200/mês");
     expect(block.text).toContain("2. [Contexto] Lacuna: Concorrentes\n   Resposta do operador: NÃO SE APLICA");
     expect(block.truncated).toEqual([]);
-    expect(block.used).toEqual([{ draft_id: "d1", chars: expect.any(Number) }]);
+    expect(block.used).toEqual([{ draft_id: "d1", chars: expect.any(Number), title: "Plano Enterprise" }]);
     expect(appendReviewedMaterial(" documentos ", block)).toBe(`documentos\n\n${block.text}`);
   });
 

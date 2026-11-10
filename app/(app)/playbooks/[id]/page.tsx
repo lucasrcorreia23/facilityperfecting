@@ -322,7 +322,7 @@ function PlaybookDetail() {
   const canSend = callTypes.length > 0 && playbook.status !== "generating";
   // Material revisado: o que o playbook já aponta e o que entrou na última geração.
   const reviewedRefs = reviewedDraftRefs(playbook.input_files);
-  const reviewedUsed = reviewedRefs.filter((r) => r.used_at && !r.missing);
+  const reviewedUsed = reviewedRefs.filter((r) => r.used_at && r.chars > 0 && !r.missing);
   const reviewedInfo = (playbook.usage?.reviewed_material ?? null) as {
     truncated?: string[];
     missing?: string[];

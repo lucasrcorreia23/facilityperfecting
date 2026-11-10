@@ -59,7 +59,7 @@ export interface ReviewedMaterialBlock {
   /** O que foi cortado ou ficou de fora, em português, para a tela avisar. */
   truncated: string[];
   /** O que entrou, por rascunho — vira a rastreabilidade em `input_files`. */
-  used: Array<{ draft_id: string; chars: number }>;
+  used: Array<{ draft_id: string; chars: number; title: string }>;
 }
 
 function renderDraft(row: ReviewedDraftRow, index: number, cut: (what: string) => void): string {
@@ -157,7 +157,11 @@ export function buildReviewedMaterialBlock(rows: ReviewedDraftRow[]): ReviewedMa
     }
     total += rendered.length;
     parts.push(rendered);
-    used.push({ draft_id: row.id, chars: rendered.length });
+    used.push({
+      draft_id: row.id,
+      chars: rendered.length,
+      title: str(row.title) || str(row.offers?.offer_name) || "sem título",
+    });
   }
   if (parts.length === 0) return { text: "", truncated, used };
   const header =

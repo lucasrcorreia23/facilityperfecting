@@ -102,21 +102,30 @@ export function withReviewedDrafts(
 }
 
 /**
- * Depois de uma geração: carimba o que entrou (tamanho e hora) e marca o que não
- * foi encontrado. Não remove nada — a escolha é do operador.
+ * Depois de uma geração: carimba o que entrou (tamanho, hora e o título atual) e
+ * marca como ausente só o rascunho que não foi ENCONTRADO (apagado ou de outro
+ * dono). O que existia mas não entrou — sem conteúdo revisado, ou cortado pelo
+ * teto — fica com tamanho 0 e continua escolhido. Não remove nada: a escolha é do
+ * operador.
  */
 export function markReviewedDraftsUsed(
   inputFiles: unknown,
-  used: Array<{ draft_id: string; chars: number }>,
+  used: Array<{ draft_id: string; chars: number; title?: string | null }>,
+  missingIds: string[],
   now: string,
 ): unknown[] {
   if (!Array.isArray(inputFiles)) return [];
   const byId = new Map(used.map((u) => [u.draft_id, u]));
+  const missing = new Set(missingIds);
   return inputFiles.map((entry) => {
     if (!isRef(entry)) return entry;
-    const hit = byId.get(str(entry.draft_id));
+    const id = str(entry.draft_id);
+    const hit = byId.get(id);
     const rest: Record<string, unknown> = { ...entry };
     delete rest.missing;
-    return hit ? { ...rest, chars: hit.chars, used_at: now } : { ...rest, chars: 0, missing: true };
+    if (hit) {
+      return { ...rest, ...(str(hit.title) ? { name: reviewedDraftName(hit.title) } : {}), chars: hit.chars, used_at: now };
+    }
+    return { ...rest, chars: 0, ...(missing.has(id) ? { missing: true } : {}) };
   });
 }

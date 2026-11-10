@@ -271,9 +271,9 @@ async function persist(
 async function loadReviewedMaterial(
   inputFiles: unknown,
   ownerId: string | null,
-): Promise<ReviewedMaterialBlock & { missing: string[] }> {
+): Promise<ReviewedMaterialBlock & { missing: string[]; missingIds: string[] }> {
   const refs = reviewedDraftRefs(inputFiles);
-  if (refs.length === 0) return { text: "", truncated: [], used: [], missing: [] };
+  if (refs.length === 0) return { text: "", truncated: [], used: [], missing: [], missingIds: [] };
   const { data, error } = await db
     .from("roleplay_drafts")
     .select("id, title, scenario, generation_output, created_by, offers(offer_name, general_description, source_id), contexts(target_notes)")
@@ -301,15 +301,17 @@ async function loadReviewedMaterial(
   // Na ordem em que o operador escolheu.
   const rows: ReviewedDraftRow[] = [];
   const missing: string[] = [];
+  const missingIds: string[] = [];
   for (const ref of refs) {
     const d = byId.get(ref.draft_id);
     if (!d) {
       missing.push(ref.name);
+      missingIds.push(ref.draft_id);
       continue;
     }
     rows.push({ ...d, raw_text: d.offers?.source_id ? rawBySource.get(d.offers.source_id) ?? null : null });
   }
-  return { ...buildReviewedMaterialBlock(rows), missing };
+  return { ...buildReviewedMaterialBlock(rows), missing, missingIds };
 }
 
 async function run(playbookId: string): Promise<void> {
@@ -424,7 +426,12 @@ async function run(playbookId: string): Promise<void> {
       // Rastreabilidade: carimba em input_files o que entrou (tamanho e hora) e marca
       // o rascunho que não foi encontrado.
       ...(refs.length > 0 && {
-        input_files: markReviewedDraftsUsed(playbook.input_files, reviewed.used, new Date().toISOString()),
+        input_files: markReviewedDraftsUsed(
+          playbook.input_files,
+          reviewed.used,
+          reviewed.missingIds,
+          new Date().toISOString(),
+        ),
       }),
       // Só assume o nome sugerido se o usuário não escreveu um.
       ...(result.name && !playbook.name?.trim() ? { name: result.name } : {}),

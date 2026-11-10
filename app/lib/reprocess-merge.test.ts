@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describeMerge, mergeWithAnswers } from "./reprocess-merge";
+import { baselineAfterFill, describeMerge, mergeWithAnswers } from "./reprocess-merge";
 
 const objection = (titulo: string, detalhes = "d") => ({ titulo, tipo: "preco", fala_exemplo: "f", detalhes, ceder_se: "c" });
 
@@ -38,7 +38,7 @@ describe("mergeWithAnswers", () => {
       previousAi: { perfil: "Igual" },
       nextAi: { perfil: "Igual", cenario_instrucoes: "" },
     });
-    expect(r).toEqual({ values: {}, changes: [], suggestions: {} });
+    expect(r).toMatchObject({ values: {}, changes: [], suggestions: {} });
   });
 
   it("campo que a rodada anterior não gerou conta como editado", () => {
@@ -85,6 +85,49 @@ describe("mergeWithAnswers", () => {
     });
     expect(r.values).toEqual({ dossie: { persona: { prompt: "p2" } }, call_context_slug: "cold_call" });
     expect(r.suggestions).toEqual({ dificuldade: "easy" });
+  });
+});
+
+describe("base de comparação entre rodadas", () => {
+  it("a base anda com o que a IA escreveu e fica onde a edição manual foi preservada", () => {
+    const r = mergeWithAnswers({
+      current: { perfil: "Perfil da IA", oferta_descricao: "Reescrita à mão", objetivo: "" },
+      previousAi: { perfil: "Perfil da IA", oferta_descricao: "Descrição da IA" },
+      nextAi: { perfil: "Perfil v2", oferta_descricao: "Descrição v2", objetivo: "Objetivo v2" },
+    });
+    expect(r.baseline).toEqual({ perfil: "Perfil v2", oferta_descricao: "Descrição da IA", objetivo: "Objetivo v2" });
+  });
+
+  it("depois de 'Reprocessar com IA' (só vazios), campo intocado continua intocado", () => {
+    // Rodada 1 (reset): a IA escreve o perfil. Rodada 2 (merge): devolve outro texto,
+    // mas o perfil já estava preenchido e não muda. Rodada 3 (respostas): o perfil
+    // tem de ser atualizado — ninguém o editou.
+    const round1 = baselineAfterFill({ current: {}, previous: null, nextAi: { perfil: "Perfil v1" }, keepFilled: false });
+    const round2 = baselineAfterFill({
+      current: { perfil: "Perfil v1", objetivo: "" },
+      previous: round1,
+      nextAi: { perfil: "Perfil v1 reescrito", objetivo: "Objetivo" },
+      keepFilled: true,
+    });
+    expect(round2).toEqual({ perfil: "Perfil v1", objetivo: "Objetivo" });
+    const round3 = mergeWithAnswers({
+      current: { perfil: "Perfil v1", objetivo: "Objetivo" },
+      previousAi: round2,
+      nextAi: { perfil: "Perfil com resposta", objetivo: "Objetivo" },
+    });
+    expect(round3.values).toEqual({ perfil: "Perfil com resposta" });
+    expect(round3.changes.map((c) => c.outcome)).toEqual(["updated"]);
+  });
+
+  it("reset troca a base inteira do que a IA gerou; o que ela não gerou fica", () => {
+    expect(
+      baselineAfterFill({
+        current: { perfil: "Editado", cenario_instrucoes: "Cenário antigo" },
+        previous: { perfil: "v1", cenario_instrucoes: "Cenário antigo" },
+        nextAi: { perfil: "v2", cenario_instrucoes: "" },
+        keepFilled: false,
+      }),
+    ).toEqual({ perfil: "v2", cenario_instrucoes: "Cenário antigo" });
   });
 });
 

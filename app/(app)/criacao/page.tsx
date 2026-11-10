@@ -85,6 +85,7 @@ import { generatorVersionLabel, guidelinesLabel } from "@/app/lib/generator-labe
 import { buildSentSnapshot, changedItems, diffGeneration } from "@/supabase/functions/_shared/generation-diff";
 import { type GapAnswer, gapKey, mergeGapAnswers, openGaps } from "@/supabase/functions/_shared/gap-answers";
 import {
+  baselineAfterFill,
   describeMerge,
   type MergeChange,
   type MergeFieldKey,
@@ -229,6 +230,12 @@ export default function CriacaoPage() {
   const [gapInputs, setGapInputs] = useState<GapInputs>({});
   /** Resultado do último "Reprocessar com as respostas": o que mudou e o que ficou. */
   const [mergeReport, setMergeReport] = useState<{ changes: MergeChange[]; suggestions: MergeForm } | null>(null);
+  /**
+   * O que a IA escreveu em cada campo até agora — a base para saber o que foi
+   * editado à mão. Não é `aiOutput`: no "Reprocessar com IA" comum a resposta nova
+   * não entra nos campos já preenchidos.
+   */
+  const [aiBaseline, setAiBaseline] = useState<MergeForm | null>(null);
   /** Objeções/guardrails extraídos do material — vão para o contexto na Perfecting. */
   const [objections, setObjections] = useState<ObjectionSeed[]>([]);
   const [guardrails, setGuardrails] = useState<GuardrailSeed[]>([]);
@@ -397,19 +404,28 @@ export default function CriacaoPage() {
   /**
    * Atalho da checagem de coerência: salva o rascunho na Biblioteca (nada vai para a
    * conta) e abre a regeração do playbook local com ele como material revisado.
+   *
+   * O rascunho é salvo SEM conta e sem playbook: o playbook regerado entra na conta
+   * como um playbook novo, e a Biblioteca só pergunta conta e playbook no envio de
+   * rascunho sem destino. Salvo com o playbook de agora, ele seria enviado por cima
+   * do playbook antigo.
    */
   async function saveAndRegeneratePlaybook() {
     if (!localPlaybookId || openingPlaybook) return;
     setOpeningPlaybook(true);
     try {
       const payload = buildDraftPayload();
-      const sig = JSON.stringify(payload);
-      let draftId = sentDraftId;
-      if (!draftId || draftSigRef.current !== sig) {
-        draftId = (await createDraftFromText(payload)).draftId;
-        setSentDraftId(draftId);
-        draftSigRef.current = sig;
-      }
+      const { draftId } = await createDraftFromText({
+        ...payload,
+        connectionId: null,
+        scenario: {
+          ...payload.scenario,
+          playbook_id: null,
+          playbook_name: null,
+          // Ids de etapas do playbook antigo: não valem no regerado.
+          fixed_persona_call_type_ids: null,
+        },
+      });
       setLeftSafely(true);
       closeCoherence();
       router.push(`/playbooks/${localPlaybookId}?rascunho=${draftId}`);
@@ -520,6 +536,7 @@ export default function CriacaoPage() {
     setGapAnswers([]);
     setGapInputs({});
     setMergeReport(null);
+    setAiBaseline(null);
     setObjections([]);
     setGuardrails([]);
     setDossier(null);
@@ -582,6 +599,7 @@ export default function CriacaoPage() {
   function acceptAiVersion(key: MergeFieldKey) {
     if (!mergeReport || !(key in mergeReport.suggestions)) return;
     applyFormValues({ [key]: mergeReport.suggestions[key] });
+    setAiBaseline((prev) => ({ ...(prev ?? {}), [key]: mergeReport.suggestions[key] }));
     const suggestions = { ...mergeReport.suggestions };
     delete suggestions[key];
     setMergeReport({
@@ -630,18 +648,23 @@ export default function CriacaoPage() {
       for (const w of warnings) addToast({ title: "Aviso do processamento", description: w, color: "warning" });
       let mergeSummary: string | null = null;
       if (mode === "answers") {
-        // A comparação é com a saída ANTERIOR da IA: o que ainda é igual a ela não foi
-        // editado e pode ser atualizado; o resto fica, com a versão nova como sugestão.
+        // A comparação é com o que a IA escreveu antes em cada campo: o que ainda é
+        // igual não foi editado e pode ser atualizado; o resto fica, com a versão
+        // nova como sugestão.
         const merged = mergeWithAnswers({
           current: formRef.current,
-          previousAi: aiOutput ? aiForm(aiOutput) : null,
+          previousAi: aiBaseline,
           nextAi: aiForm(r),
         });
         applyFormValues(merged.values);
+        setAiBaseline(merged.baseline);
         setMergeReport({ changes: merged.changes, suggestions: merged.suggestions });
         mergeSummary = describeMerge(merged.changes);
       } else {
         setMergeReport(null);
+        setAiBaseline(
+          baselineAfterFill({ current: formRef.current, previous: aiBaseline, nextAi: aiForm(r), keepFilled: keep }),
+        );
         const fill = (cur: string, next: string) => (keep && cur.trim() ? cur : next || cur);
         // O material cru em "Dados para o Roleplay" fica salvo como fonte, mas não vai
         // para a Perfecting: ele mistura o lado do vendedor (método, CRM, roteiro), e o

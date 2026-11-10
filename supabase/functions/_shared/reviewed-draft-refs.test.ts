@@ -49,7 +49,7 @@ describe("referências a rascunhos em input_files", () => {
 
   it("carimba o que entrou na geração, marca o que sumiu e guarda o histórico", () => {
     const chosen = withReviewedDrafts([file], [{ id: "d1", title: "A" }, { id: "d2", title: "B" }]);
-    const after = markReviewedDraftsUsed(chosen, [{ draft_id: "d1", chars: 900 }], "2026-11-10T12:00:00Z");
+    const after = markReviewedDraftsUsed(chosen, [{ draft_id: "d1", chars: 900 }], ["d2"], "2026-11-10T12:00:00Z");
     expect(materialFiles(after)).toEqual([file]);
     const [a, b] = reviewedDraftRefs(after);
     expect(a).toMatchObject({ draft_id: "d1", chars: 900, used_at: "2026-11-10T12:00:00Z" });
@@ -63,7 +63,22 @@ describe("referências a rascunhos em input_files", () => {
       used_at: "2026-11-10T12:00:00Z",
     });
     // Rascunho que voltou a existir deixa de estar marcado como ausente.
-    const back = markReviewedDraftsUsed(after, [{ draft_id: "d2", chars: 10 }], "2026-11-11T00:00:00Z");
+    const back = markReviewedDraftsUsed(after, [{ draft_id: "d2", chars: 10 }], [], "2026-11-11T00:00:00Z");
     expect(reviewedDraftRefs(back).find((r) => r.draft_id === "d2")?.missing).toBeUndefined();
+  });
+
+  it("rascunho que existe mas não entrou (vazio ou cortado) não vira ausente", () => {
+    const chosen = withReviewedDrafts([], [{ id: "d1", title: "A" }, { id: "d2", title: "B" }]);
+    const after = markReviewedDraftsUsed(chosen, [{ draft_id: "d1", chars: 50 }], [], "2026-11-10T12:00:00Z");
+    const d2 = reviewedDraftRefs(after).find((r) => r.draft_id === "d2");
+    expect(d2).toMatchObject({ chars: 0, used_at: null });
+    expect(d2?.missing).toBeUndefined();
+  });
+
+  it("referência criada só com o id ganha o título do rascunho na geração", () => {
+    const chosen = withReviewedDrafts([], [{ id: "d1" }]);
+    expect(reviewedDraftRefs(chosen)[0].name).toBe("Rascunho revisado: sem título");
+    const after = markReviewedDraftsUsed(chosen, [{ draft_id: "d1", chars: 50, title: "Plano X" }], [], "2026-11-10T12:00:00Z");
+    expect(reviewedDraftRefs(after)[0].name).toBe("Rascunho revisado: Plano X");
   });
 });

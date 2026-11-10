@@ -88,7 +88,8 @@ function NovoPlaybook() {
         // De quais rascunhos vem o material revisado: a função lê daqui ao gerar.
         inputFiles: withReviewedDrafts(
           files,
-          reviewedIds.flatMap((id) => drafts?.find((d) => d.id === id) ?? []),
+          // Só o id basta: se a Biblioteca ainda não carregou, o título entra na geração.
+          reviewedIds.map((id) => drafts?.find((d) => d.id === id) ?? { id }),
         ),
       });
       // A estruturação roda em background; a tela de detalhe acompanha o status.

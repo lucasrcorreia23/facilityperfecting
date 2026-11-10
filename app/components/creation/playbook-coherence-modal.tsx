@@ -181,9 +181,10 @@ export function PlaybookCoherenceModal({
                         playbook.
                       </span>{" "}
                       Em vez de corrigir subetapa por subetapa, dá para regerar o playbook com o
-                      material revisado deste rascunho. O rascunho é salvo na Biblioteca (nada é
-                      criado na conta) e a tela do playbook abre já com ele escolhido; depois de
-                      regerar e reenviar o playbook, envie o rascunho pela Biblioteca.
+                      material revisado deste rascunho. O rascunho é salvo na Biblioteca{" "}
+                      <b>sem conta de destino</b> (nada é criado na conta) e a tela do playbook
+                      abre já com ele escolhido. Depois de regerar e reenviar o playbook, envie o
+                      rascunho pela Biblioteca, escolhendo a conta e o <b>playbook novo</b>.
                     </p>
                     <Button
                       variant="secondary"

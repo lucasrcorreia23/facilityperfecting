@@ -13,6 +13,11 @@
  * Campo que a rodada anterior não gerou (ex.: cenário, quando ela rodou no modo
  * playbook) não tem com o que comparar — conta como editado.
  *
+ * "O que a IA gerou antes" é a BASE: por campo, o último valor que a IA de fato
+ * escreveu no formulário. Não é a última resposta inteira da IA — no "Reprocessar
+ * com IA" comum (só preenche vazios) a resposta nova não entra nos campos já
+ * preenchidos, e compará-los com ela marcaria tudo como editado à mão.
+ *
  * Não reusa `diffGeneration`: ele filtra campos por modo e compara o que vai para a
  * conta (descrição vazia vira o material cru), não o que está no formulário.
  */
@@ -52,6 +57,8 @@ export interface MergeResult {
   changes: MergeChange[];
   /** Nova versão da IA dos campos preservados, para o operador aceitar se quiser. */
   suggestions: MergeForm;
+  /** A base para a próxima rodada: o que a IA escreveu em cada campo até aqui. */
+  baseline: MergeForm;
 }
 
 /** JSON com chaves ordenadas: igualdade estrutural sem depender da ordem das chaves. */
@@ -73,7 +80,7 @@ const isEmpty = (v: unknown) =>
 const same = (a: unknown, b: unknown) => (isEmpty(a) && isEmpty(b)) || stable(a) === stable(b);
 
 /**
- * `previousAi` = a saída da rodada anterior (o que o formulário recebeu da IA);
+ * `previousAi` = a base (o que a IA escreveu em cada campo até agora);
  * `nextAi` = a saída desta rodada. As três pontas nas mesmas chaves.
  */
 export function mergeWithAnswers(input: {
@@ -85,14 +92,20 @@ export function mergeWithAnswers(input: {
   const values: MergeForm = {};
   const suggestions: MergeForm = {};
   const changes: MergeChange[] = [];
+  const baseline: MergeForm = { ...(previousAi ?? {}) };
   for (const { key, label } of MERGE_FIELDS) {
     const next = nextAi[key];
     // A IA não gerou este campo nesta rodada (modo playbook pula cenário e dossiê).
     if (isEmpty(next)) continue;
     const cur = current[key];
-    if (same(cur, next)) continue;
+    if (same(cur, next)) {
+      // Já está como a IA escreveria: a partir daqui conta como texto dela.
+      baseline[key] = next;
+      continue;
+    }
     if (isEmpty(cur)) {
       values[key] = next;
+      baseline[key] = next;
       changes.push({ key, label, outcome: "filled" });
       continue;
     }
@@ -100,13 +113,35 @@ export function mergeWithAnswers(input: {
     const untouched = previousAi != null && !isEmpty(prev) && same(cur, prev);
     if (untouched) {
       values[key] = next;
+      baseline[key] = next;
       changes.push({ key, label, outcome: "updated" });
     } else {
       suggestions[key] = next;
       changes.push({ key, label, outcome: "preserved" });
     }
   }
-  return { values, changes, suggestions };
+  return { values, changes, suggestions, baseline };
+}
+
+/**
+ * A base depois de um processamento comum da tela: "reset" (a IA sobrescreve tudo
+ * o que gerou) ou "merge" (`keepFilled`: só entra onde o campo estava vazio).
+ * Espelha o que a tela faz com cada campo — onde a IA não escreveu, a base anterior
+ * continua valendo.
+ */
+export function baselineAfterFill(input: {
+  current: MergeForm;
+  previous: MergeForm | null | undefined;
+  nextAi: MergeForm;
+  keepFilled: boolean;
+}): MergeForm {
+  const baseline: MergeForm = { ...(input.previous ?? {}) };
+  for (const { key } of MERGE_FIELDS) {
+    const next = input.nextAi[key];
+    if (isEmpty(next)) continue;
+    if (!input.keepFilled || isEmpty(input.current[key])) baseline[key] = next;
+  }
+  return baseline;
 }
 
 const labels = (changes: MergeChange[], outcome: MergeOutcome) =>
