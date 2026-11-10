@@ -113,9 +113,18 @@ function stripBearer(token: unknown): string {
   return t.toLowerCase().startsWith("bearer ") ? t.slice(7).trim() : t.trim();
 }
 
-async function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
+/** Prazo próprio por chamada — para quem tem relógio apertado (ex.: process-import). */
+export interface RequestTimeoutOptions {
+  timeoutMs?: number;
+}
+
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutMs = FETCH_TIMEOUT_MS,
+): Promise<Response> {
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     return await fetch(url, { ...init, signal: ctrl.signal });
   } finally {
@@ -224,7 +233,10 @@ function patchJson<T = unknown>(url: string, token: string, body: unknown): Prom
 }
 
 // ── Auth ────────────────────────────────────────────────────────────────
-export async function loginSuperadmin(env: PerfectingEnv): Promise<string> {
+export async function loginSuperadmin(
+  env: PerfectingEnv,
+  opts: RequestTimeoutOptions = {},
+): Promise<string> {
   const { api, email, password } = getEnvConfig(env);
   if (!email || !password) {
     throw new PerfectingError(500, `credenciais Perfecting ausentes para ${env}`);
@@ -238,7 +250,7 @@ export async function loginSuperadmin(env: PerfectingEnv): Promise<string> {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: form.toString(),
-  });
+  }, opts.timeoutMs);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new PerfectingError(res.status, (data as { detail?: unknown })?.detail ?? data);
   return stripBearer((data as { access_token?: string }).access_token);
@@ -350,11 +362,12 @@ export function matchCallContextSlug(
 export async function listCallContexts(
   env: PerfectingEnv,
   token: string,
+  opts: RequestTimeoutOptions = {},
 ): Promise<CallContextType[]> {
   const res = await fetchWithTimeout(`${rp(env)}/call_contexts`, {
     method: "GET",
     headers: { Authorization: `Bearer ${token}` },
-  });
+  }, opts.timeoutMs);
   if (!res.ok) throw new PerfectingError(res.status, await res.text().catch(() => ""));
   const data = await res.json().catch(() => []);
   const out: CallContextType[] = [];
@@ -396,8 +409,9 @@ export interface ObjectionType {
 export async function listObjectionTypes(
   env: PerfectingEnv,
   token: string,
+  opts: RequestTimeoutOptions = {},
 ): Promise<ObjectionType[]> {
-  const data = await getJson<unknown>(`${rp(env)}/objection_types`, token);
+  const data = await getJson<unknown>(`${rp(env)}/objection_types`, token, opts.timeoutMs);
   const items = Array.isArray(data) ? data : [];
   return items
     .filter((o): o is Record<string, unknown> => Boolean(o) && typeof o === "object")
@@ -1426,11 +1440,11 @@ export interface PlaybookCallType {
   call_context_type_id: number | null;
 }
 
-async function getJson<T>(url: string, token: string): Promise<T> {
+async function getJson<T>(url: string, token: string, timeoutMs?: number): Promise<T> {
   const res = await fetchWithTimeout(url, {
     method: "GET",
     headers: { Authorization: `Bearer ${token}` },
-  });
+  }, timeoutMs);
   const raw = await res.text().catch(() => "");
   let data: unknown = null;
   if (raw) {

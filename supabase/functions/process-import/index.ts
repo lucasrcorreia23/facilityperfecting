@@ -1,6 +1,12 @@
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { corsHeaders, json } from "../_shared/cors.ts";
 import { requireUser } from "../_shared/auth.ts";
+import {
+  hasBudgetForPart,
+  PART_MAX_MS,
+  partDeadlineMs,
+  PREPARATION_TOO_SLOW_MESSAGE,
+} from "../_shared/invocation-deadline.ts";
 import { buildSchema, buildSystem, PART_NOTES, PARTS_FOR_MODE, type SchemaPart } from "./schema.ts";
 import { generatorFingerprint, SYSTEM_BASE } from "./prompt.ts";
 import { GENERATOR_VERSION, type GeneratorManifest } from "../_shared/generator-version.ts";
@@ -42,11 +48,33 @@ class PartError extends Error {
 const num = (v: unknown) => (typeof v === "number" ? v : 0);
 
 /**
- * Prazo de cada fatia. O teto da Edge Function é ~150s (plano Free); abortar antes
- * dele é o que permite devolver QUAL fatia estourou, em vez do "Failed to send a
- * request" genérico que o front recebe quando o gateway derruba a conexão.
+ * Prazo de cada fatia: no máximo PART_MAX_MS (120s), e nunca além do que sobra do
+ * relógio da INVOCAÇÃO (140s contados do início do handler — ver
+ * invocation-deadline.ts). O teto da Edge Function é ~150s; abortar antes dele é
+ * o que permite devolver QUAL fatia estourou, em vez do "non-2xx" genérico que o
+ * front recebe quando o Supabase mata a função. Contar só a partir do início da
+ * fatia ignorava o tempo já gasto na preparação (login e catálogos no HML).
+ *
+ * Devolve o prazo efetivo em ms, ou lança PartError se já não cabe uma fatia.
  */
-const PART_DEADLINE_MS = 138_000;
+function partDeadlineOrThrow(requestStartedAt: number): number {
+  const deadlineMs = partDeadlineMs({ requestStartedAt, now: Date.now() });
+  if (!hasBudgetForPart(deadlineMs)) {
+    console.warn(
+      `process-import: só ${Math.round(deadlineMs / 1000)}s de orçamento depois de ${
+        Math.round((Date.now() - requestStartedAt) / 1000)
+      }s de preparação — não chamou a IA`,
+    );
+    throw new PartError(PREPARATION_TOO_SLOW_MESSAGE);
+  }
+  return deadlineMs;
+}
+
+/**
+ * Teto das chamadas de preparação à Perfecting (login + catálogos) SÓ nesta função:
+ * o padrão do cliente é 180s, que sozinho já passa do teto da invocação.
+ */
+const PREP_TIMEOUT_MS = 15_000;
 
 const PART_LABELS: Record<SchemaPart, string> = {
   core: "oferta",
@@ -65,9 +93,13 @@ async function askStructured(
   schema: unknown,
   text: string,
   label: string,
+  requestStartedAt: number,
 ): Promise<{ parsed: Record<string, unknown>; usage: Record<string, unknown> | null | undefined }> {
+  const deadlineMs = partDeadlineOrThrow(requestStartedAt);
   const startedAt = Date.now();
-  const signal = AbortSignal.timeout(PART_DEADLINE_MS);
+  const signal = AbortSignal.timeout(deadlineMs);
+  const timedOut = () =>
+    new PartError(`A parte "${label}" passou do tempo (${Math.round(deadlineMs / 1000)}s). Tente de novo.`);
   let res: Response;
   try {
     res = await fetch(ANTHROPIC_URL, {
@@ -88,14 +120,18 @@ async function askStructured(
       }),
     });
   } catch (e) {
-    if (signal.aborted) throw new PartError(`A parte "${label}" passou do tempo. Tente de novo.`);
+    if (signal.aborted) throw timedOut();
     throw e;
   }
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
     throw new PartError({ status: res.status, detail: data?.error?.message ?? data?.error ?? data });
   }
-  const { text: generated, stopReason, usage } = await readAnthropicStream(res);
+  // O prazo também pode estourar no meio do stream, não só antes do primeiro byte.
+  const { text: generated, stopReason, usage } = await readAnthropicStream(res).catch((e) => {
+    if (signal.aborted) throw timedOut();
+    throw e;
+  });
   console.log(`process-import[${label}]: ${num(usage?.output_tokens)} tokens em ${Math.round((Date.now() - startedAt) / 1000)}s`);
   if (stopReason === "max_tokens") throw new PartError(`A parte "${label}" ficou grande demais. Reduza o material.`);
   try {
@@ -110,7 +146,11 @@ async function askStructured(
  * da tela; a IA preenche o resto em duas fatias paralelas. Devolve a saída crua das
  * fatias — quem monta o rascunho é `mergeDebateAiResult` no front.
  */
-async function processDebate(body: Record<string, unknown>, text: string): Promise<Response> {
+async function processDebate(
+  body: Record<string, unknown>,
+  text: string,
+  requestStartedAt: number,
+): Promise<Response> {
   const anchors = parseDebateAnchors(body.anchors);
   if (!anchors) return json({ ok: false, error: "âncoras do debate incompletas (obra, tema, moção, lado, nome, idade e gênero da oponente)" }, 400);
   const steps = Array.isArray(body.steps)
@@ -139,6 +179,7 @@ async function processDebate(body: Record<string, unknown>, text: string): Promi
           buildDebateSchema(part, steps.length),
           text,
           part,
+          requestStartedAt,
         )
       ),
     );
@@ -174,6 +215,8 @@ async function processDebate(body: Record<string, unknown>, text: string): Promi
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+  // Relógio da invocação: tudo o que vem depois (auth, preparação, IA) conta contra ele.
+  const requestStartedAt = Date.now();
   const denied = await requireUser(req);
   if (denied) return denied;
 
@@ -194,7 +237,7 @@ Deno.serve(async (req) => {
     }
     const text = typeof body.text === "string" ? body.text.trim() : "";
     if (!text) return json({ ok: false, error: "texto vazio" }, 400);
-    if (body.mode === "debate") return await processDebate(body, text);
+    if (body.mode === "debate") return await processDebate(body, text, requestStartedAt);
     // No modo playbook, cenário e rubricas vêm das etapas — não vale gerá-los.
     const mode = body.mode === "playbook" ? "playbook" : "methodology";
     // Sem conta escolhida, valem só as diretrizes globais e do modo.
@@ -207,8 +250,20 @@ Deno.serve(async (req) => {
     const guidelinesBlock = renderGuidelinesBlock(guidelines);
 
     // Taxonomias válidas da Perfecting, para o modelo escolher slugs reais.
-    const saToken = await loginSuperadmin("hml");
-    const contexts = await listCallContexts("hml", saToken);
+    const prep = { timeoutMs: PREP_TIMEOUT_MS };
+    let saToken: string;
+    let contexts: Awaited<ReturnType<typeof listCallContexts>>;
+    try {
+      saToken = await loginSuperadmin("hml", prep);
+      contexts = await listCallContexts("hml", saToken, prep);
+    } catch (e) {
+      // Estourou os 15s da preparação: responde já, em vez de gastar o resto do relógio.
+      if (e instanceof DOMException && e.name === "AbortError") {
+        console.warn("process-import: preparação (login/call_contexts no HML) passou de 15s");
+        return json({ ok: false, error: PREPARATION_TOO_SLOW_MESSAGE }, 504);
+      }
+      throw e;
+    }
     if (contexts.length === 0) {
       return json({ ok: false, error: "nenhum call_context disponível na Perfecting" }, 502);
     }
@@ -216,22 +271,24 @@ Deno.serve(async (req) => {
     // Tipos de objeção: sem eles o modelo não tem enum para `objecoes[].tipo`, então
     // a extração de objeções é desligada em vez de gerar slug inválido (o enum não
     // aceita array vazio, e uma objeção com tipo errado não é criável na API).
-    const objectionTypes = await listObjectionTypes("hml", saToken).catch(() => []);
+    const objectionTypes = await listObjectionTypes("hml", saToken, prep).catch(() => []);
     const objectionSlugs = objectionTypes.map((o) => o.slug);
 
     const system = buildSystem(contexts, objectionTypes, SYSTEM_BASE);
 
     /** Uma metade do schema, pedida à Anthropic. Ver buildSchema() sobre o porquê. */
     const askFor = async (part: SchemaPart) => {
+      const deadlineMs = partDeadlineOrThrow(requestStartedAt);
       const startedAt = Date.now();
-      const signal = AbortSignal.timeout(PART_DEADLINE_MS);
+      const signal = AbortSignal.timeout(deadlineMs);
       try {
         return await askForUntil(part, signal, startedAt);
       } catch (e) {
         if (signal.aborted) {
-          console.warn(`process-import[${part}]: passou de ${PART_DEADLINE_MS / 1000}s`);
+          const seconds = Math.round(deadlineMs / 1000);
+          console.warn(`process-import[${part}]: passou de ${seconds}s (teto por parte: ${PART_MAX_MS / 1000}s)`);
           throw new PartError(
-            `A parte "${PART_LABELS[part]}" passou do tempo (${Math.round(PART_DEADLINE_MS / 1000)}s). Nada foi descartado: tente de novo; se repetir, a parte precisa ser dividida.`,
+            `A parte "${PART_LABELS[part]}" passou do tempo (${seconds}s). Nada foi descartado: tente de novo; se repetir, a parte precisa ser dividida.`,
           );
         }
         throw e;
